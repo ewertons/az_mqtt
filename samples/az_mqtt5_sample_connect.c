@@ -89,9 +89,16 @@ static void on_suback(az_mqtt5_client* client, az_mqtt5_suback_data const* subac
 {
   (void)client;
   printf("[SUBACK] packet_id=%d reason_codes=[", suback->packet_id);
-  for (int32_t i = 0; i < suback->reason_code_count; i++)
+  if (suback->reason_codes != NULL)
   {
-    printf("%s0x%02X", i > 0 ? ", " : "", (unsigned)suback->reason_codes[i]);
+    for (int32_t i = 0; i < suback->reason_code_count; i++)
+    {
+      printf("%s0x%02X", i > 0 ? ", " : "", (unsigned)suback->reason_codes[i]);
+    }
+  }
+  else
+  {
+    printf("NULL");
   }
   printf("]\n");
 }

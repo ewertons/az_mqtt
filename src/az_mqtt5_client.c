@@ -105,12 +105,14 @@ static void _consume_recv(az_mqtt5_client* client, int32_t count)
 }
 
 // Read exactly one MQTT packet from the transport. Returns the body span and metadata.
+// The caller must call _consume_recv(client, *out_packet_size) AFTER processing the body.
 static az_result _read_packet(
     az_mqtt5_client* client,
     int32_t timeout_ms,
     az_mqtt5_packet_type* out_type,
     uint8_t* out_flags,
-    az_span* out_body)
+    az_span* out_body,
+    int32_t* out_packet_size)
 {
   // We need at least 2 bytes for the fixed header (type + min 1-byte VBI)
   az_result rc = _ensure_received(client, 2, timeout_ms);
@@ -163,8 +165,8 @@ static az_result _read_packet(
   // header_span now points past the fixed header to the body
   *out_body = az_span_slice(header_span, 0, decoded_remaining);
 
-  // Consume the packet from the receive buffer
-  _consume_recv(client, total_packet_size);
+  // Return packet size so caller can consume AFTER processing the body.
+  *out_packet_size = total_packet_size;
   client->last_receive_time_ms = _get_clock_ms();
 
   return AZ_OK;
@@ -488,8 +490,9 @@ AZ_NODISCARD az_result az_mqtt5_client_connect(az_mqtt5_client* client, int32_t 
   az_mqtt5_packet_type type;
   uint8_t flags;
   az_span body;
+  int32_t packet_size;
 
-  rc = _read_packet(client, timeout_ms, &type, &flags, &body);
+  rc = _read_packet(client, timeout_ms, &type, &flags, &body, &packet_size);
   if (az_result_failed(rc))
   {
     az_mqtt5_transport_close(client->options.transport);
@@ -499,12 +502,14 @@ AZ_NODISCARD az_result az_mqtt5_client_connect(az_mqtt5_client* client, int32_t 
 
   if (type != AZ_MQTT5_PACKET_TYPE_CONNACK)
   {
+    _consume_recv(client, packet_size);
     az_mqtt5_transport_close(client->options.transport);
     client->state = AZ_MQTT5_CLIENT_STATE_DISCONNECTED;
     return AZ_MQTT5_ERROR_PROTOCOL;
   }
 
   rc = _dispatch_packet(client, type, flags, body);
+  _consume_recv(client, packet_size);
   if (az_result_failed(rc))
   {
     az_mqtt5_transport_close(client->options.transport);
@@ -555,8 +560,9 @@ AZ_NODISCARD az_result az_mqtt5_client_process_loop(az_mqtt5_client* client, int
   az_mqtt5_packet_type type;
   uint8_t flags;
   az_span body;
+  int32_t packet_size;
 
-  az_result rc = _read_packet(client, timeout_ms, &type, &flags, &body);
+  az_result rc = _read_packet(client, timeout_ms, &type, &flags, &body, &packet_size);
   if (rc == AZ_MQTT5_ERROR_TIMEOUT)
   {
     return AZ_OK; // No data available, that's fine
@@ -566,7 +572,9 @@ AZ_NODISCARD az_result az_mqtt5_client_process_loop(az_mqtt5_client* client, int
     return rc;
   }
 
-  return _dispatch_packet(client, type, flags, body);
+  rc = _dispatch_packet(client, type, flags, body);
+  _consume_recv(client, packet_size);
+  return rc;
 }
 
 AZ_NODISCARD az_result az_mqtt5_client_publish(

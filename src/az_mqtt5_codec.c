@@ -1295,8 +1295,14 @@ AZ_NODISCARD az_result az_mqtt5_codec_decode_connack(az_span body, az_mqtt5_conn
 {
   _az_PRECONDITION_NOT_NULL(out);
 
+  // Save caller-provided buffers before clearing
+  az_mqtt5_user_property* user_properties = out->user_properties;
+  int32_t user_property_capacity = out->user_property_capacity;
+
   // Initialize defaults
   memset(out, 0, sizeof(*out));
+  out->user_properties = user_properties;
+  out->user_property_capacity = user_property_capacity;
   out->receive_maximum = 65535;
   out->maximum_qos = 2;
   out->retain_available = true;
@@ -1428,7 +1434,13 @@ az_mqtt5_codec_decode_publish(az_span body, uint8_t flags, az_mqtt5_publish_data
 {
   _az_PRECONDITION_NOT_NULL(out);
 
+  // Save caller-provided buffers before clearing
+  az_mqtt5_user_property* user_properties = out->user_properties;
+  int32_t* subscription_identifiers = out->subscription_identifiers;
+
   memset(out, 0, sizeof(*out));
+  out->user_properties = user_properties;
+  out->subscription_identifiers = subscription_identifiers;
 
   out->dup = (flags & 0x08) != 0;
   out->qos = (az_mqtt5_qos)((flags >> 1) & 0x03);
@@ -1521,7 +1533,13 @@ AZ_NODISCARD az_result az_mqtt5_codec_decode_ack(az_span body, az_mqtt5_ack_data
 {
   _az_PRECONDITION_NOT_NULL(out);
 
+  // Save caller-provided buffers before clearing
+  az_mqtt5_user_property* user_properties = out->user_properties;
+  int32_t user_property_capacity = out->user_property_capacity;
+
   memset(out, 0, sizeof(*out));
+  out->user_properties = user_properties;
+  out->user_property_capacity = user_property_capacity;
 
   az_result rc = _read_uint16(&body, &out->packet_id);
   if (az_result_failed(rc))
@@ -1613,7 +1631,17 @@ static az_result _decode_suback_common(az_span body, az_mqtt5_suback_data* out)
 {
   _az_PRECONDITION_NOT_NULL(out);
 
+  // Save caller-provided buffers before clearing
+  az_mqtt5_reason_code* reason_codes = out->reason_codes;
+  int32_t reason_code_capacity = out->reason_code_capacity;
+  az_mqtt5_user_property* user_properties = out->user_properties;
+  int32_t user_property_capacity = out->user_property_capacity;
+
   memset(out, 0, sizeof(*out));
+  out->reason_codes = reason_codes;
+  out->reason_code_capacity = reason_code_capacity;
+  out->user_properties = user_properties;
+  out->user_property_capacity = user_property_capacity;
 
   az_result rc = _read_uint16(&body, &out->packet_id);
   if (az_result_failed(rc))
@@ -1660,7 +1688,13 @@ AZ_NODISCARD az_result az_mqtt5_codec_decode_disconnect(az_span body, az_mqtt5_d
 {
   _az_PRECONDITION_NOT_NULL(out);
 
+  // Save caller-provided buffers before clearing
+  az_mqtt5_user_property* user_properties = out->user_properties;
+  int32_t user_property_capacity = out->user_property_capacity;
+
   memset(out, 0, sizeof(*out));
+  out->user_properties = user_properties;
+  out->user_property_capacity = user_property_capacity;
 
   // Short form: no reason code, no properties
   if (az_span_size(body) == 0)
@@ -1747,7 +1781,13 @@ AZ_NODISCARD az_result az_mqtt5_codec_decode_auth(az_span body, az_mqtt5_auth_da
 {
   _az_PRECONDITION_NOT_NULL(out);
 
+  // Save caller-provided buffers before clearing
+  az_mqtt5_user_property* user_properties = out->user_properties;
+  int32_t user_property_capacity = out->user_property_capacity;
+
   memset(out, 0, sizeof(*out));
+  out->user_properties = user_properties;
+  out->user_property_capacity = user_property_capacity;
 
   if (az_span_size(body) == 0)
   {
