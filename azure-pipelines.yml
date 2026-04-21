@@ -1,7 +1,7 @@
-# Copyright (c) mqtt5_client contributors. All rights reserved.
+# Copyright (c) az_mqtt5_client contributors. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# Azure DevOps CI pipeline – builds and tests mqtt5_client on Ubuntu 24.04 and
+# Azure DevOps CI pipeline – builds and tests az_mqtt5_client on Ubuntu 24.04 and
 # Windows latest.  Mosquitto is installed natively (no Docker required).
 #
 # Local usage (same steps the pipeline runs):
@@ -71,7 +71,7 @@ stages:
     - script: |
         cmake -B build \
           -DCMAKE_BUILD_TYPE=Release \
-          -DMQTT5_BUILD_SAMPLES=OFF
+          -DAZ_MQTT5_BUILD_SAMPLES=OFF
         cmake --build build --config Release --parallel
       displayName: Build
 
@@ -128,7 +128,7 @@ stages:
     - powershell: |
         cmake -B build `
           -G "Visual Studio 17 2022" -A x64 `
-          -DMQTT5_BUILD_SAMPLES=OFF
+          -DAZ_MQTT5_BUILD_SAMPLES=OFF
         cmake --build build --config Release --parallel
       displayName: Build
 

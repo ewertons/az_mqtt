@@ -1,4 +1,4 @@
-# Copyright (c) mqtt5_client contributors. All rights reserved.
+# Copyright (c) az_mqtt5_client contributors. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
 # Launches a Mosquitto MQTT 5 broker in Docker with:
@@ -17,7 +17,7 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $CertsDir = Join-Path $ScriptDir "broker\certs"
-$ContainerName = "mqtt5_test_broker"
+$ContainerName = "az_mqtt5_test_broker"
 
 function Generate-Certs {
   if (Test-Path (Join-Path $CertsDir "server.crt")) {

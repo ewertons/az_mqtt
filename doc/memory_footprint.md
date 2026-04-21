@@ -2,12 +2,12 @@
 
 Compiled with GCC 13.3, `-O3 -DNDEBUG`, x86-64, Ubuntu 24.04. No TLS (OpenSSL disabled).
 
-## mqtt5_client Library
+## az_mqtt5_client Library
 
 | Module | .text (code) | .rodata | .data | .bss | Total |
 |---|---:|---:|---:|---:|---:|
-| mqtt5_codec.c | 19,736 B | 292 B | 0 | 0 | 20,028 B |
-| mqtt5_client.c | 4,964 B | 64 B | 0 | 0 | 5,028 B |
+| az_mqtt5_codec.c | 19,736 B | 292 B | 0 | 0 | 20,028 B |
+| az_mqtt5_client.c | 4,964 B | 64 B | 0 | 0 | 5,028 B |
 | transport_posix.c | 1,324 B | 3 B | 0 | 0 | 1,327 B |
 | **Total** | **26,024 B** | **359 B** | **0** | **0** | **~26 KB** |
 
@@ -19,13 +19,13 @@ Compiled with GCC 13.3, `-O3 -DNDEBUG`, x86-64, Ubuntu 24.04. No TLS (OpenSSL di
 
 | Symbol | Size (bytes) | Module |
 |---|---:|---|
-| `mqtt5_codec_encode_connect` | 3,988 | codec |
-| `mqtt5_codec_decode_connack` | 1,893 | codec |
-| `mqtt5_codec_decode_publish` | 1,526 | codec |
-| `mqtt5_codec_encode_publish` | 1,829 | codec |
-| `mqtt5_client_process_loop` | 1,702 | client |
-| `mqtt5_client_connect` | 697 | client |
-| `mqtt5_client_publish` | 367 | client |
+| `az_mqtt5_codec_encode_connect` | 3,988 | codec |
+| `az_mqtt5_codec_decode_connack` | 1,893 | codec |
+| `az_mqtt5_codec_decode_publish` | 1,526 | codec |
+| `az_mqtt5_codec_encode_publish` | 1,829 | codec |
+| `az_mqtt5_client_process_loop` | 1,702 | client |
+| `az_mqtt5_client_connect` | 697 | client |
+| `az_mqtt5_client_publish` | 367 | client |
 
 ## Comparison with Paho MQTT C v1.3.13
 
@@ -33,7 +33,7 @@ Identical build conditions: GCC 13.3, `-O3 -DNDEBUG`, x86-64, Ubuntu 24.04, stat
 
 ### Summary
 
-| Metric | mqtt5_client | Paho MQTT C (sync) | Ratio |
+| Metric | az_mqtt5_client | Paho MQTT C (sync) | Ratio |
 |---|---:|---:|---|
 | .text (code) | 26,024 B | 149,372 B | **5.7x smaller** |
 | .data (initialized globals) | 0 B | 2,068 B | — |
@@ -75,7 +75,7 @@ Identical build conditions: GCC 13.3, `-O3 -DNDEBUG`, x86-64, Ubuntu 24.04, stat
 
 ### Key Differences
 
-- **Zero `.data` and `.bss`** — mqtt5_client has no mutable global state; all buffers are caller-provided via `az_span`. Paho uses 600+ KB of `.bss` for its StackTrace module alone.
-- **No dynamic allocations** — mqtt5_client operates entirely on caller-owned stack/static buffers. Paho relies on `malloc` through Heap.c, Tree.c, and LinkedList.c.
-- **No bundled infrastructure** — Paho ships persistence, threading, WebSocket, Base64/SHA1, heap tracking, and logging subsystems. mqtt5_client delegates these concerns to the caller and platform layer.
-- **Code density** — mqtt5_client's entire `.text` footprint (~26 KB) is smaller than Paho's single `MQTTClient.c` object (30 KB).
+- **Zero `.data` and `.bss`** — az_mqtt5_client has no mutable global state; all buffers are caller-provided via `az_span`. Paho uses 600+ KB of `.bss` for its StackTrace module alone.
+- **No dynamic allocations** — az_mqtt5_client operates entirely on caller-owned stack/static buffers. Paho relies on `malloc` through Heap.c, Tree.c, and LinkedList.c.
+- **No bundled infrastructure** — Paho ships persistence, threading, WebSocket, Base64/SHA1, heap tracking, and logging subsystems. az_mqtt5_client delegates these concerns to the caller and platform layer.
+- **Code density** — az_mqtt5_client's entire `.text` footprint (~26 KB) is smaller than Paho's single `MQTTClient.c` object (30 KB).

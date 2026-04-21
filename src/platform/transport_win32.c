@@ -1,8 +1,8 @@
-// Copyright (c) mqtt5_client contributors. All rights reserved.
+// Copyright (c) az_mqtt5_client contributors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-#include <mqtt5_client/mqtt5_transport.h>
-#include <mqtt5_client/mqtt5_types.h>
+#include <az_mqtt5/az_mqtt5_transport.h>
+#include <az_mqtt5/az_mqtt5_types.h>
 
 #include <azure/core/internal/az_precondition_internal.h>
 #include <azure/core/az_span.h>
@@ -17,7 +17,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
-#ifdef MQTT5_TLS_OPENSSL
+#ifdef AZ_MQTT5_TLS_OPENSSL
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #endif
@@ -26,17 +26,17 @@
 
 // ──────────────────────── Platform-specific transport ────────
 
-struct mqtt5_transport
+struct az_mqtt5_transport
 {
   SOCKET socket_fd;
-#ifdef MQTT5_TLS_OPENSSL
+#ifdef AZ_MQTT5_TLS_OPENSSL
   SSL_CTX* ssl_ctx;
   SSL* ssl;
 #endif
   bool connected;
 };
 
-AZ_NODISCARD int32_t mqtt5_transport_sizeof(void) { return (int32_t)sizeof(mqtt5_transport); }
+AZ_NODISCARD int32_t az_mqtt5_transport_sizeof(void) { return (int32_t)sizeof(az_mqtt5_transport); }
 
 static bool _wsa_inited = false;
 
@@ -47,14 +47,14 @@ static az_result _ensure_wsa(void)
     WSADATA wsa_data;
     if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0)
     {
-      return MQTT5_ERROR_TRANSPORT;
+      return AZ_MQTT5_ERROR_TRANSPORT;
     }
     _wsa_inited = true;
   }
   return AZ_OK;
 }
 
-AZ_NODISCARD az_result mqtt5_transport_init(mqtt5_transport* transport)
+AZ_NODISCARD az_result az_mqtt5_transport_init(az_mqtt5_transport* transport)
 {
   _az_PRECONDITION_NOT_NULL(transport);
 
@@ -65,7 +65,7 @@ AZ_NODISCARD az_result mqtt5_transport_init(mqtt5_transport* transport)
   }
 
   transport->socket_fd = INVALID_SOCKET;
-#ifdef MQTT5_TLS_OPENSSL
+#ifdef AZ_MQTT5_TLS_OPENSSL
   transport->ssl_ctx = NULL;
   transport->ssl = NULL;
 #endif
@@ -85,7 +85,7 @@ static az_result _span_to_cstr(az_span src, char* buf, int32_t buf_size)
   return AZ_OK;
 }
 
-static az_result _tcp_connect(mqtt5_transport* transport, az_span host, uint16_t port)
+static az_result _tcp_connect(az_mqtt5_transport* transport, az_span host, uint16_t port)
 {
   char host_str[256];
   az_result rc = _span_to_cstr(host, host_str, (int32_t)sizeof(host_str));
@@ -105,7 +105,7 @@ static az_result _tcp_connect(mqtt5_transport* transport, az_span host, uint16_t
   struct addrinfo* res = NULL;
   if (getaddrinfo(host_str, port_str, &hints, &res) != 0 || res == NULL)
   {
-    return MQTT5_ERROR_TRANSPORT;
+    return AZ_MQTT5_ERROR_TRANSPORT;
   }
 
   SOCKET fd = INVALID_SOCKET;
@@ -127,23 +127,23 @@ static az_result _tcp_connect(mqtt5_transport* transport, az_span host, uint16_t
 
   if (fd == INVALID_SOCKET)
   {
-    return MQTT5_ERROR_TRANSPORT;
+    return AZ_MQTT5_ERROR_TRANSPORT;
   }
 
   transport->socket_fd = fd;
   return AZ_OK;
 }
 
-#ifdef MQTT5_TLS_OPENSSL
+#ifdef AZ_MQTT5_TLS_OPENSSL
 static az_result _tls_setup(
-    mqtt5_transport* transport,
+    az_mqtt5_transport* transport,
     az_span host,
-    mqtt5_tls_options const* tls_options)
+    az_mqtt5_tls_options const* tls_options)
 {
   SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
   if (ctx == NULL)
   {
-    return MQTT5_ERROR_TRANSPORT;
+    return AZ_MQTT5_ERROR_TRANSPORT;
   }
 
   SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
@@ -160,7 +160,7 @@ static az_result _tls_setup(
     if (SSL_CTX_load_verify_locations(ctx, ca_path, NULL) != 1)
     {
       SSL_CTX_free(ctx);
-      return MQTT5_ERROR_TRANSPORT;
+      return AZ_MQTT5_ERROR_TRANSPORT;
     }
   }
   else
@@ -181,7 +181,7 @@ static az_result _tls_setup(
     if (SSL_CTX_use_certificate_chain_file(ctx, cert_path) != 1)
     {
       SSL_CTX_free(ctx);
-      return MQTT5_ERROR_TRANSPORT;
+      return AZ_MQTT5_ERROR_TRANSPORT;
     }
   }
 
@@ -198,7 +198,7 @@ static az_result _tls_setup(
     if (SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) != 1)
     {
       SSL_CTX_free(ctx);
-      return MQTT5_ERROR_TRANSPORT;
+      return AZ_MQTT5_ERROR_TRANSPORT;
     }
   }
 
@@ -208,7 +208,7 @@ static az_result _tls_setup(
   if (ssl == NULL)
   {
     SSL_CTX_free(ctx);
-    return MQTT5_ERROR_TRANSPORT;
+    return AZ_MQTT5_ERROR_TRANSPORT;
   }
 
   SSL_set_fd(ssl, (int)transport->socket_fd);
@@ -227,20 +227,20 @@ static az_result _tls_setup(
   {
     SSL_free(ssl);
     SSL_CTX_free(ctx);
-    return MQTT5_ERROR_TRANSPORT;
+    return AZ_MQTT5_ERROR_TRANSPORT;
   }
 
   transport->ssl_ctx = ctx;
   transport->ssl = ssl;
   return AZ_OK;
 }
-#endif // MQTT5_TLS_OPENSSL
+#endif // AZ_MQTT5_TLS_OPENSSL
 
-AZ_NODISCARD az_result mqtt5_transport_connect(
-    mqtt5_transport* transport,
+AZ_NODISCARD az_result az_mqtt5_transport_connect(
+    az_mqtt5_transport* transport,
     az_span host,
     uint16_t port,
-    mqtt5_tls_options const* tls_options)
+    az_mqtt5_tls_options const* tls_options)
 {
   _az_PRECONDITION_NOT_NULL(transport);
 
@@ -250,7 +250,7 @@ AZ_NODISCARD az_result mqtt5_transport_connect(
     return rc;
   }
 
-#ifdef MQTT5_TLS_OPENSSL
+#ifdef AZ_MQTT5_TLS_OPENSSL
   if (tls_options != NULL)
   {
     rc = _tls_setup(transport, host, tls_options);
@@ -269,7 +269,7 @@ AZ_NODISCARD az_result mqtt5_transport_connect(
   return AZ_OK;
 }
 
-AZ_NODISCARD az_result mqtt5_transport_send(mqtt5_transport* transport, az_span data)
+AZ_NODISCARD az_result az_mqtt5_transport_send(az_mqtt5_transport* transport, az_span data)
 {
   _az_PRECONDITION_NOT_NULL(transport);
 
@@ -279,7 +279,7 @@ AZ_NODISCARD az_result mqtt5_transport_send(mqtt5_transport* transport, az_span 
   while (remaining > 0)
   {
     int sent;
-#ifdef MQTT5_TLS_OPENSSL
+#ifdef AZ_MQTT5_TLS_OPENSSL
     if (transport->ssl != NULL)
     {
       sent = SSL_write(transport->ssl, ptr, remaining);
@@ -292,7 +292,7 @@ AZ_NODISCARD az_result mqtt5_transport_send(mqtt5_transport* transport, az_span 
 
     if (sent <= 0)
     {
-      return MQTT5_ERROR_TRANSPORT;
+      return AZ_MQTT5_ERROR_TRANSPORT;
     }
     ptr += sent;
     remaining -= sent;
@@ -301,8 +301,8 @@ AZ_NODISCARD az_result mqtt5_transport_send(mqtt5_transport* transport, az_span 
   return AZ_OK;
 }
 
-AZ_NODISCARD az_result mqtt5_transport_receive(
-    mqtt5_transport* transport,
+AZ_NODISCARD az_result az_mqtt5_transport_receive(
+    az_mqtt5_transport* transport,
     az_span buffer,
     int32_t timeout_ms,
     az_span* out_received)
@@ -312,7 +312,7 @@ AZ_NODISCARD az_result mqtt5_transport_receive(
 
   *out_received = AZ_SPAN_EMPTY;
 
-#ifdef MQTT5_TLS_OPENSSL
+#ifdef AZ_MQTT5_TLS_OPENSSL
   // Check for pending SSL data first
   if (transport->ssl != NULL && SSL_pending(transport->ssl) > 0)
   {
@@ -343,7 +343,7 @@ AZ_NODISCARD az_result mqtt5_transport_receive(
   int sel = select(0 /* ignored on Windows */, &read_fds, NULL, NULL, tv_ptr);
   if (sel < 0)
   {
-    return MQTT5_ERROR_TRANSPORT;
+    return AZ_MQTT5_ERROR_TRANSPORT;
   }
   if (sel == 0)
   {
@@ -351,7 +351,7 @@ AZ_NODISCARD az_result mqtt5_transport_receive(
   }
 
   int n;
-#ifdef MQTT5_TLS_OPENSSL
+#ifdef AZ_MQTT5_TLS_OPENSSL
   if (transport->ssl != NULL)
   {
     n = SSL_read(transport->ssl, az_span_ptr(buffer), az_span_size(buffer));
@@ -364,25 +364,25 @@ AZ_NODISCARD az_result mqtt5_transport_receive(
 
   if (n < 0)
   {
-    return MQTT5_ERROR_TRANSPORT;
+    return AZ_MQTT5_ERROR_TRANSPORT;
   }
   if (n == 0)
   {
     transport->connected = false;
-    return MQTT5_ERROR_TRANSPORT;
+    return AZ_MQTT5_ERROR_TRANSPORT;
   }
 
   *out_received = az_span_slice(buffer, 0, n);
   return AZ_OK;
 }
 
-void mqtt5_transport_close(mqtt5_transport* transport)
+void az_mqtt5_transport_close(az_mqtt5_transport* transport)
 {
   if (transport == NULL)
   {
     return;
   }
-#ifdef MQTT5_TLS_OPENSSL
+#ifdef AZ_MQTT5_TLS_OPENSSL
   if (transport->ssl != NULL)
   {
     SSL_shutdown(transport->ssl);

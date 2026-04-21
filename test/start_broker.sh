@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) mqtt5_client contributors. All rights reserved.
+# Copyright (c) az_mqtt5_client contributors. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
 # Launches a Mosquitto MQTT 5 broker in Docker with:
@@ -14,7 +14,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CERTS_DIR="${SCRIPT_DIR}/broker/certs"
-CONTAINER_NAME="mqtt5_test_broker"
+CONTAINER_NAME="az_mqtt5_test_broker"
 
 generate_certs() {
   if [ -f "${CERTS_DIR}/server.crt" ]; then

@@ -1,4 +1,4 @@
-# Copyright (c) mqtt5_client contributors. All rights reserved.
+# Copyright (c) az_mqtt5_client contributors. All rights reserved.
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.14)
@@ -25,19 +25,19 @@ set(BUILD_SHARED_LIBS ${_saved_BUILD_SHARED_LIBS} CACHE BOOL "" FORCE)
 
 # ── Integration test: connect/disconnect ─────────────────────
 
-add_executable(mqtt5_test_connect
+add_executable(az_mqtt5_test_connect
   test_connect.c
 )
 
-target_include_directories(mqtt5_test_connect
+target_include_directories(az_mqtt5_test_connect
   PRIVATE
     ${cmocka_SOURCE_DIR}/include
 )
 
-target_link_libraries(mqtt5_test_connect
+target_link_libraries(az_mqtt5_test_connect
   PRIVATE
-    mqtt5::client
+    az_mqtt5::client
     cmocka
 )
 
-add_test(NAME mqtt5_test_connect COMMAND mqtt5_test_connect)
+add_test(NAME az_mqtt5_test_connect COMMAND az_mqtt5_test_connect)
