@@ -262,7 +262,7 @@ int main(int argc, char* argv[])
 
     // Process incoming (receive our own messages + pubacks)
     // Drain a few iterations to keep buffers flowing
-    if (g_pub_sent % 100 == 0)
+    if (g_pub_sent % 10 == 0)
     {
       for (int i = 0; i < 5; i++)
       {
@@ -273,8 +273,8 @@ int main(int argc, char* argv[])
 
   // Drain remaining receives
   fprintf(stderr, "[az_mqtt5] draining remaining messages...\n");
-  double drain_deadline = _now_sec() + 5.0;
-  while (_now_sec() < drain_deadline)
+  double drain_deadline = _now_sec() + 10.0;
+  while (_now_sec() < drain_deadline && g_pub_received < g_pub_sent)
   {
     rc = az_mqtt5_client_process_loop(&client, 100);
     if (az_result_failed(rc))

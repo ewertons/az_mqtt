@@ -39,7 +39,12 @@ Write-Host ""
 
 # -- 4. Run azure_mqtt (Rust) --
 Write-Host ">>> Step 4/6: Run azure_mqtt (Rust)"
-& "$ScriptDir\run_azure_mqtt.ps1"
+$rustBin = Join-Path $ScriptDir "perf_azure_mqtt\target\release\perf_azure_mqtt.exe"
+if (Test-Path $rustBin) {
+    & "$ScriptDir\run_azure_mqtt.ps1"
+} else {
+    Write-Host "  SKIP: perf_azure_mqtt not built (Rust/cargo not installed)."
+}
 Write-Host ""
 
 # -- 5. Compare --

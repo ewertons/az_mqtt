@@ -1,0 +1,27 @@
+{
+  "azure_mqtt_rust": null,
+  "az_mqtt5": {
+    "client": "az_mqtt5",
+    "host": "localhost",
+    "port": 1883,
+    "payload_bytes": 128,
+    "qos": 1,
+    "messages_sent": 10000,
+    "messages_received": 1070,
+    "pubacks_received": 10000,
+    "elapsed_sec": 5.247,
+    "send_rate_msg_sec": 1905.9,
+    "recv_rate_msg_sec": 203.9,
+    "user_cpu_sec": 0.0,
+    "sys_cpu_sec": 0.188,
+    "total_cpu_sec": 0.188,
+    "peak_rss_bytes": 7061504
+  },
+  "timestamp": "20260422_122355",
+  "footprint": {
+    "azure_mqtt_rust_binary_bytes": null,
+    "az_mqtt5_binary_bytes": 39936,
+    "paho_mqtt_c_binary_bytes": null
+  },
+  "paho_mqtt_c": null
+}

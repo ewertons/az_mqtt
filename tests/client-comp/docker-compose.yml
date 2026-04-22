@@ -1,5 +1,3 @@
-version: "3.8"
-
 # Performance-test infrastructure.
 # Usage:
 #   docker compose up -d          # start broker + metrics
@@ -9,7 +7,7 @@ version: "3.8"
 services:
   # ── MQTT broker ──────────────────────────────────────────────
   emqx:
-    image: emqx/emqx:5-elixir
+    image: emqx/emqx:5
     hostname: emqx
     container_name: perf-emqx
     environment:

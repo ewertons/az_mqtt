@@ -15,11 +15,12 @@ foreach ($cmd in @("cmake", "docker")) {
 }
 Write-Host "  cmake and docker found."
 
-if (-not (Get-Command "cargo" -ErrorAction SilentlyContinue)) {
-    Write-Error "cargo (Rust) is required but not found in PATH. Install from https://rustup.rs"
-    exit 1
+$HasCargo = [bool](Get-Command "cargo" -ErrorAction SilentlyContinue)
+if ($HasCargo) {
+    Write-Host "  cargo found."
+} else {
+    Write-Host "  WARNING: cargo (Rust) not found – azure_mqtt perf test will be skipped."
 }
-Write-Host "  cargo found."
 
 # vcpkg-based Paho install hint
 if (-not $env:VCPKG_ROOT) {
@@ -41,15 +42,18 @@ Write-Host "=== [3/5] Cloning and building azure_mqtt (Rust) perf binary ==="
 $RustPerfDir   = Join-Path $ScriptDir "perf_azure_mqtt"
 $AzureMqttSrc  = Join-Path $RustPerfDir "azure_mqtt_src"
 
-if (-not (Test-Path (Join-Path $AzureMqttSrc ".git"))) {
-    Write-Host "Cloning https://github.com/Azure/mqtt-client..."
-    & git clone --depth 1 https://github.com/Azure/mqtt-client $AzureMqttSrc
+if ($HasCargo) {
+    if (-not (Test-Path (Join-Path $AzureMqttSrc ".git"))) {
+        Write-Host "Cloning https://github.com/Azure/mqtt-client..."
+        & git clone --depth 1 https://github.com/Azure/mqtt-client $AzureMqttSrc
+    } else {
+        Write-Host "azure_mqtt source already present, pulling latest..."
+        & git -C $AzureMqttSrc pull --ff-only 2>$null
+    }
+    & cargo build --release --manifest-path (Join-Path $RustPerfDir "Cargo.toml")
 } else {
-    Write-Host "azure_mqtt source already present, pulling latest..."
-    & git -C $AzureMqttSrc pull --ff-only 2>$null
+    Write-Host "  SKIP: cargo not available."
 }
-
-& cargo build --release --manifest-path (Join-Path $RustPerfDir "Cargo.toml")
 
 Write-Host "=== [4/5] Starting infrastructure (EMQX + Prometheus + Grafana + cAdvisor) ==="
 & docker compose -f (Join-Path $ScriptDir "docker-compose.yml") up -d
