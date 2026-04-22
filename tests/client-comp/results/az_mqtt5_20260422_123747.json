@@ -1,0 +1,17 @@
+{
+  "client": "az_mqtt5",
+  "host": "localhost",
+  "port": 1883,
+  "payload_bytes": 128,
+  "qos": 1,
+  "messages_sent": 10000,
+  "messages_received": 1247,
+  "pubacks_received": 10000,
+  "elapsed_sec": 10.696,
+  "send_rate_msg_sec": 934.9,
+  "recv_rate_msg_sec": 116.6,
+  "user_cpu_sec": 0.000,
+  "sys_cpu_sec": 0.312,
+  "total_cpu_sec": 0.312,
+  "peak_rss_bytes": 6729728
+}

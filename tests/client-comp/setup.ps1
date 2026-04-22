@@ -19,7 +19,7 @@ $HasCargo = [bool](Get-Command "cargo" -ErrorAction SilentlyContinue)
 if ($HasCargo) {
     Write-Host "  cargo found."
 } else {
-    Write-Host "  WARNING: cargo (Rust) not found – azure_mqtt perf test will be skipped."
+    Write-Host "  WARNING: cargo (Rust) not found - azure_mqtt perf test will be skipped."
 }
 
 # vcpkg-based Paho install hint
@@ -55,7 +55,7 @@ if ($HasCargo) {
     Write-Host "  SKIP: cargo not available."
 }
 
-Write-Host "=== [4/5] Starting infrastructure (EMQX + Prometheus + Grafana + cAdvisor) ==="
+Write-Host "=== [4/5] Starting infrastructure (EMQX broker) ==="
 & docker compose -f (Join-Path $ScriptDir "docker-compose.yml") up -d
 
 Write-Host "Waiting for EMQX to become healthy..."
@@ -73,10 +73,7 @@ New-Item -ItemType Directory -Force -Path $ResultsDir | Out-Null
 Write-Host "=== [5/5] Setup complete ==="
 Write-Host "  C Binaries  : $BuildDir\Release\perf_az_mqtt5.exe   $BuildDir\Release\perf_paho.exe"
 Write-Host "  Rust Binary : $RustPerfDir\target\release\perf_azure_mqtt.exe"
-Write-Host "  Results     : $ResultsDir\"
+Write-Host "  Results     : $ResultsDir"
 Write-Host "  EMQX        : mqtt://localhost:1883  dashboard http://localhost:18083"
-Write-Host "  Prometheus  : http://localhost:9090"
-Write-Host "  Grafana     : http://localhost:3000  (admin/admin)"
 Write-Host ""
 Write-Host "Next: run  .\run_az_mqtt5.ps1  .\run_paho.ps1  .\run_azure_mqtt.ps1"
-Write-Host "Next: run  .\run_az_mqtt5.ps1  and  .\run_paho.ps1"
