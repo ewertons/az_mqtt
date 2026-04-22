@@ -6,6 +6,18 @@ edition = "2024"
 [dependencies]
 azure_mqtt = { path = "azure_mqtt_src" }
 bytes = "1"
+libc = "0.2"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+openssl = { version = "0.10", features = ["vendored"] }
+
+# Production release profile: minimize binary size
+[profile.release]
+opt-level = "z"        # optimize for size
+lto = true             # cross-crate link-time optimization
+codegen-units = 1      # single codegen unit => better inlining / DCE
+strip = "symbols"      # strip symbol tables from final ELF
+panic = "abort"        # drop panic unwinding machinery
+debug = false
+incremental = false

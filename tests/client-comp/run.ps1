@@ -1,4 +1,5 @@
-<# run.ps1 – One-shot script: setup, run all three clients, compare, teardown.
+<# run.ps1 – One-shot script: setup, run all three clients sequentially, compare, teardown.
+   All clients run in Ubuntu 24.04 Docker containers for fair comparison.
 
    Usage:
      .\run.ps1                       # defaults
@@ -14,11 +15,12 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
 Write-Host "================================================================"
 Write-Host "          MQTT Client Comparison - Full Pipeline"
+Write-Host "          (all clients in Ubuntu 24.04 containers)"
 Write-Host "================================================================"
 Write-Host ""
 
 # -- 1. Setup --
-Write-Host ">>> Step 1/6: Setup (build + infrastructure)"
+Write-Host ">>> Step 1/6: Setup (build Docker images + start broker)"
 & "$ScriptDir\setup.ps1"
 Write-Host ""
 
@@ -29,22 +31,12 @@ Write-Host ""
 
 # -- 3. Run Paho MQTT C --
 Write-Host ">>> Step 3/6: Run Paho MQTT C"
-$pahoBin = Join-Path $ScriptDir "build\Release\perf_paho.exe"
-if (Test-Path $pahoBin) {
-    & "$ScriptDir\run_paho.ps1"
-} else {
-    Write-Host "  SKIP: perf_paho not built (paho-mqtt not installed via vcpkg)."
-}
+& "$ScriptDir\run_paho.ps1"
 Write-Host ""
 
 # -- 4. Run azure_mqtt (Rust) --
 Write-Host ">>> Step 4/6: Run azure_mqtt (Rust)"
-$rustBin = Join-Path $ScriptDir "perf_azure_mqtt\target\release\perf_azure_mqtt.exe"
-if (Test-Path $rustBin) {
-    & "$ScriptDir\run_azure_mqtt.ps1"
-} else {
-    Write-Host "  SKIP: perf_azure_mqtt not built (Rust/cargo not installed)."
-}
+& "$ScriptDir\run_azure_mqtt.ps1"
 Write-Host ""
 
 # -- 5. Compare --

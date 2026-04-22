@@ -1,6 +1,6 @@
 # Performance-test infrastructure.
 # Usage:
-#   docker compose up -d          # start broker + metrics
+#   docker compose up -d          # start broker
 #   <run perf tests>
 #   docker compose down -v        # tear down
 
@@ -24,3 +24,30 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+
+  # ── az_mqtt5 (C) perf binary ─────────────────────────────────
+  perf-az-mqtt5:
+    build:
+      context: ../..
+      dockerfile: tests/client-comp/Dockerfile.az_mqtt5
+    image: perf-az-mqtt5:latest
+    container_name: perf-az-mqtt5
+    profiles: ["build-only"]
+
+  # ── Paho MQTT C perf binary ──────────────────────────────────
+  perf-paho:
+    build:
+      context: ../..
+      dockerfile: tests/client-comp/Dockerfile.paho
+    image: perf-paho:latest
+    container_name: perf-paho
+    profiles: ["build-only"]
+
+  # ── azure_mqtt (Rust) perf binary ────────────────────────────
+  perf-rust:
+    build:
+      context: .
+      dockerfile: Dockerfile.rust
+    image: perf-azure-mqtt:latest
+    container_name: perf-rust
+    profiles: ["build-only"]

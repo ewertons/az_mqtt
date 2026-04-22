@@ -24,30 +24,64 @@ if(UNIX)
 endif()
 
 # ── Paho MQTT C perf binary ──────────────────────────────────
-# Paho must be installed or available via pkg-config / find_package.
+# Auto-fetch Paho MQTT C from GitHub if not already installed.
+include(FetchContent)
+
 find_package(eclipse-paho-mqtt-c QUIET)
 if(eclipse-paho-mqtt-c_FOUND)
+  message(STATUS "Found system Paho MQTT C")
   add_executable(perf_paho perf_paho.c)
   target_link_libraries(perf_paho PRIVATE eclipse-paho-mqtt-c::paho-mqtt3c)
-  if(UNIX)
-    target_link_libraries(perf_paho PRIVATE rt)
-  endif()
 else()
-  # Fallback: try raw library name (system install)
-  find_library(PAHO_MQTT3C paho-mqtt3c)
-  if(PAHO_MQTT3C)
-    add_executable(perf_paho perf_paho.c)
-    target_link_libraries(perf_paho PRIVATE ${PAHO_MQTT3C})
-    # Find the header
-    find_path(PAHO_INCLUDE MQTTClient.h)
-    if(PAHO_INCLUDE)
-      target_include_directories(perf_paho PRIVATE ${PAHO_INCLUDE})
-    endif()
-    if(UNIX)
-      target_link_libraries(perf_paho PRIVATE rt)
-    endif()
-  else()
-    message(WARNING "Paho MQTT C not found – perf_paho will NOT be built.\n"
-                    "Install with: apt install libpaho-mqtt-dev  OR  vcpkg install paho-mqtt")
-  endif()
+  message(STATUS "Paho MQTT C not found locally – fetching from GitHub...")
+  set(PAHO_WITH_SSL FALSE CACHE BOOL "" FORCE)
+  set(PAHO_BUILD_SHARED FALSE CACHE BOOL "" FORCE)
+  set(PAHO_BUILD_STATIC TRUE CACHE BOOL "" FORCE)
+  set(PAHO_ENABLE_TESTING FALSE CACHE BOOL "" FORCE)
+  set(PAHO_BUILD_SAMPLES FALSE CACHE BOOL "" FORCE)
+  set(PAHO_BUILD_DOCUMENTATION FALSE CACHE BOOL "" FORCE)
+  set(PAHO_HIGH_PERFORMANCE TRUE CACHE BOOL "" FORCE)
+
+  FetchContent_Declare(
+    paho_mqtt_c
+    GIT_REPOSITORY https://github.com/eclipse-paho/paho.mqtt.c.git
+    GIT_TAG        v1.3.14
+    GIT_SHALLOW    TRUE
+  )
+  FetchContent_MakeAvailable(paho_mqtt_c)
+
+  add_executable(perf_paho perf_paho.c)
+  target_link_libraries(perf_paho PRIVATE paho-mqtt3a-static)
+  target_include_directories(perf_paho PRIVATE ${paho_mqtt_c_SOURCE_DIR}/src)
+endif()
+
+if(UNIX)
+  target_link_libraries(perf_paho PRIVATE rt)
+endif()
+
+# ── Production/size optimization for perf binaries ────────────
+# Apply only in Release mode. Goal: minimize on-disk ELF size.
+#   -Os                  : optimize for size
+#   -ffunction-sections  : place each function in its own section
+#   -fdata-sections      : place each data object in its own section
+#   -Wl,--gc-sections    : strip unreferenced sections at link time
+#   -Wl,-s               : strip all symbol table + relocation info from output
+#   -fno-unwind-tables   : drop .eh_frame (no C++ / no backtraces)
+#   -fno-asynchronous-unwind-tables
+if(CMAKE_BUILD_TYPE STREQUAL "Release" AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID MATCHES "Clang"))
+  set(_perf_size_flags
+      -Os
+      -ffunction-sections
+      -fdata-sections
+      -fno-unwind-tables
+      -fno-asynchronous-unwind-tables
+  )
+  set(_perf_size_link_flags
+      -Wl,--gc-sections
+      -Wl,-s
+  )
+  foreach(_tgt perf_az_mqtt5 perf_paho)
+    target_compile_options(${_tgt} PRIVATE ${_perf_size_flags})
+    target_link_options(${_tgt} PRIVATE ${_perf_size_link_flags})
+  endforeach()
 endif()

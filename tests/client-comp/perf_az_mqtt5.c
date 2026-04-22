@@ -31,6 +31,9 @@
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <unistd.h>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 #endif
 
 // ─────────────── tunables ────────────────────────────────────
@@ -71,7 +74,39 @@ typedef struct
   double user_cpu_sec;
   double sys_cpu_sec;
   int64_t peak_rss_bytes;
+  int64_t current_rss_bytes; // VmRSS at snapshot time (Linux only)
+  int64_t heap_bytes;        // malloc in-use bytes (mallinfo2.uordblks, Linux glibc only)
 } resource_snapshot;
+
+#ifndef _WIN32
+static int64_t _read_vmrss_bytes(void)
+{
+  FILE* f = fopen("/proc/self/status", "r");
+  if (!f) return 0;
+  char line[256];
+  int64_t kb = 0;
+  while (fgets(line, sizeof(line), f))
+  {
+    if (strncmp(line, "VmRSS:", 6) == 0)
+    {
+      (void)sscanf(line + 6, "%lld", (long long*)&kb);
+      break;
+    }
+  }
+  fclose(f);
+  return kb * 1024;
+}
+
+static int64_t _read_heap_bytes(void)
+{
+#ifdef __GLIBC__
+  struct mallinfo2 mi = mallinfo2();
+  return (int64_t)mi.uordblks;
+#else
+  return 0;
+#endif
+}
+#endif
 
 static double _now_sec(void)
 {
@@ -113,6 +148,12 @@ static resource_snapshot _snap(void)
   s.user_cpu_sec = (double)ru.ru_utime.tv_sec + (double)ru.ru_utime.tv_usec / 1e6;
   s.sys_cpu_sec = (double)ru.ru_stime.tv_sec + (double)ru.ru_stime.tv_usec / 1e6;
   s.peak_rss_bytes = (int64_t)ru.ru_maxrss * 1024; // Linux reports kB
+  s.current_rss_bytes = _read_vmrss_bytes();
+  s.heap_bytes = _read_heap_bytes();
+#endif
+#ifdef _WIN32
+  s.current_rss_bytes = 0;
+  s.heap_bytes = 0;
 #endif
   return s;
 }
@@ -159,6 +200,9 @@ int main(int argc, char* argv[])
   {
     s_payload[i] = (uint8_t)('A' + (i % 26));
   }
+
+  // Baseline resource snapshot BEFORE any MQTT/network work.
+  resource_snapshot snap_baseline = _snap();
 
   // ── init transport ──
   az_mqtt5_transport* transport = (az_mqtt5_transport*)s_transport_buf;
@@ -271,14 +315,37 @@ int main(int argc, char* argv[])
     }
   }
 
-  // Drain remaining receives
+  // Drain remaining receives.
+  // Use a no-progress watchdog: keep draining as long as we are making
+  // progress (received count keeps increasing). Stop if no new messages
+  // arrive for `idle_budget` seconds, or after a hard `max_drain` cap.
   fprintf(stderr, "[az_mqtt5] draining remaining messages...\n");
-  double drain_deadline = _now_sec() + 10.0;
-  while (_now_sec() < drain_deadline && g_pub_received < g_pub_sent)
+  const double idle_budget = 3.0;
+  const double max_drain = 120.0;
+  double drain_start = _now_sec();
+  double last_progress = drain_start;
+  int64_t last_received = g_pub_received;
+  while (g_pub_received < g_pub_sent)
   {
+    double now = _now_sec();
+    if (now - drain_start > max_drain)
+    {
+      fprintf(stderr, "[az_mqtt5] drain hit max %.1fs cap\n", max_drain);
+      break;
+    }
+    if (now - last_progress > idle_budget)
+    {
+      fprintf(stderr, "[az_mqtt5] drain idle %.1fs, stopping\n", idle_budget);
+      break;
+    }
     rc = az_mqtt5_client_process_loop(&client, 100);
     if (az_result_failed(rc))
       break;
+    if (g_pub_received > last_received)
+    {
+      last_received = g_pub_received;
+      last_progress = _now_sec();
+    }
   }
 
   resource_snapshot snap_end = _snap();
@@ -306,7 +373,14 @@ int main(int argc, char* argv[])
   printf("  \"user_cpu_sec\": %.3f,\n", user_cpu);
   printf("  \"sys_cpu_sec\": %.3f,\n", sys_cpu);
   printf("  \"total_cpu_sec\": %.3f,\n", user_cpu + sys_cpu);
-  printf("  \"peak_rss_bytes\": %lld\n", (long long)snap_end.peak_rss_bytes);
+  printf("  \"peak_rss_bytes\": %lld,\n", (long long)snap_end.peak_rss_bytes);
+  printf("  \"rss_baseline_bytes\": %lld,\n", (long long)snap_baseline.current_rss_bytes);
+  printf("  \"rss_delta_bytes\": %lld,\n",
+      (long long)(snap_end.peak_rss_bytes - snap_baseline.current_rss_bytes));
+  printf("  \"heap_baseline_bytes\": %lld,\n", (long long)snap_baseline.heap_bytes);
+  printf("  \"heap_peak_bytes\": %lld,\n", (long long)snap_end.heap_bytes);
+  printf("  \"heap_delta_bytes\": %lld\n",
+      (long long)(snap_end.heap_bytes - snap_baseline.heap_bytes));
   printf("}\n");
 
   return 0;

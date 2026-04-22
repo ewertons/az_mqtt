@@ -1,61 +1,41 @@
-<# setup.ps1 – Install dependencies, build perf binaries, and start infrastructure.
-   Run from the tests\perf-comp\ directory. #>
+<# setup.ps1 – Build Docker images for all perf binaries and start infrastructure.
+   Run from the tests\client-comp\ directory. #>
 
 $ErrorActionPreference = "Stop"
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $ResultsDir = Join-Path $ScriptDir "results"
-$BuildDir   = Join-Path $ScriptDir "build"
 
-Write-Host "=== [1/5] Checking prerequisites ==="
-foreach ($cmd in @("cmake", "docker")) {
+Write-Host "=== [1/4] Checking prerequisites ==="
+foreach ($cmd in @("docker")) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
         Write-Error "$cmd is required but not found in PATH."
         exit 1
     }
 }
-Write-Host "  cmake and docker found."
+Write-Host "  docker found."
 
-$HasCargo = [bool](Get-Command "cargo" -ErrorAction SilentlyContinue)
-if ($HasCargo) {
-    Write-Host "  cargo found."
-} else {
-    Write-Host "  WARNING: cargo (Rust) not found - azure_mqtt perf test will be skipped."
-}
+Write-Host "=== [2/4] Building C perf Docker images ==="
+& docker compose -f (Join-Path $ScriptDir "docker-compose.yml") build perf-az-mqtt5
+Write-Host "  Docker image perf-az-mqtt5:latest built."
+& docker compose -f (Join-Path $ScriptDir "docker-compose.yml") build perf-paho
+Write-Host "  Docker image perf-paho:latest built."
 
-# vcpkg-based Paho install hint
-if (-not $env:VCPKG_ROOT) {
-    Write-Host "  TIP: set VCPKG_ROOT and run:  vcpkg install paho-mqtt:x64-windows"
-}
-
-Write-Host "=== [2/5] Building C perf binaries ==="
-New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
-
-$cmakeArgs = @("-S", $ScriptDir, "-B", $BuildDir, "-DCMAKE_BUILD_TYPE=Release")
-if ($env:VCPKG_ROOT) {
-    $toolchain = Join-Path $env:VCPKG_ROOT "scripts\buildsystems\vcpkg.cmake"
-    $cmakeArgs += "-DCMAKE_TOOLCHAIN_FILE=$toolchain"
-}
-& cmake @cmakeArgs
-& cmake --build $BuildDir --config Release
-
-Write-Host "=== [3/5] Cloning and building azure_mqtt (Rust) perf binary ==="
+Write-Host "=== [3/4] Building azure_mqtt (Rust) Docker image ==="
 $RustPerfDir   = Join-Path $ScriptDir "perf_azure_mqtt"
 $AzureMqttSrc  = Join-Path $RustPerfDir "azure_mqtt_src"
 
-if ($HasCargo) {
-    if (-not (Test-Path (Join-Path $AzureMqttSrc ".git"))) {
-        Write-Host "Cloning https://github.com/Azure/mqtt-client..."
-        & git clone --depth 1 https://github.com/Azure/mqtt-client $AzureMqttSrc
-    } else {
-        Write-Host "azure_mqtt source already present, pulling latest..."
-        & git -C $AzureMqttSrc pull --ff-only 2>$null
-    }
-    & cargo build --release --manifest-path (Join-Path $RustPerfDir "Cargo.toml")
+# Ensure azure_mqtt source is cloned (needed as Docker build context)
+if (-not (Test-Path (Join-Path $AzureMqttSrc ".git"))) {
+    Write-Host "Cloning https://github.com/Azure/mqtt-client..."
+    & git clone --depth 1 https://github.com/Azure/mqtt-client $AzureMqttSrc
 } else {
-    Write-Host "  SKIP: cargo not available."
+    Write-Host "azure_mqtt source already present."
 }
 
-Write-Host "=== [4/5] Starting infrastructure (EMQX broker) ==="
+& docker compose -f (Join-Path $ScriptDir "docker-compose.yml") build perf-rust
+Write-Host "  Docker image perf-azure-mqtt:latest built."
+
+Write-Host "=== [4/4] Starting infrastructure (EMQX broker) ==="
 & docker compose -f (Join-Path $ScriptDir "docker-compose.yml") up -d
 
 Write-Host "Waiting for EMQX to become healthy..."
@@ -70,10 +50,9 @@ for ($i = 0; $i -lt 30; $i++) {
 
 New-Item -ItemType Directory -Force -Path $ResultsDir | Out-Null
 
-Write-Host "=== [5/5] Setup complete ==="
-Write-Host "  C Binaries  : $BuildDir\Release\perf_az_mqtt5.exe   $BuildDir\Release\perf_paho.exe"
-Write-Host "  Rust Binary : $RustPerfDir\target\release\perf_azure_mqtt.exe"
+Write-Host "=== Setup complete ==="
+Write-Host "  Images      : perf-az-mqtt5:latest  perf-paho:latest  perf-azure-mqtt:latest"
 Write-Host "  Results     : $ResultsDir"
 Write-Host "  EMQX        : mqtt://localhost:1883  dashboard http://localhost:18083"
 Write-Host ""
-Write-Host "Next: run  .\run_az_mqtt5.ps1  .\run_paho.ps1  .\run_azure_mqtt.ps1"
+Write-Host "Next: run  .\run.ps1"

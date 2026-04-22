@@ -1,0 +1,42 @@
+# Dockerfile.rust – Build and run the azure_mqtt (Rust) perf test on Ubuntu 24.04.
+# Two-stage: build stage compiles the binary, runtime stage is Ubuntu 24.04.
+#
+# Requires: perf_azure_mqtt/azure_mqtt_src/ to be cloned locally first.
+#   git clone --depth 1 https://github.com/Azure/mqtt-client perf_azure_mqtt/azure_mqtt_src
+
+# ── Build stage ───────────────────────────────────────────────
+FROM ubuntu:24.04 AS builder
+
+# Install Rust toolchain + build deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl build-essential pkg-config libssl-dev ca-certificates \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+WORKDIR /build
+
+# Copy Cargo manifest first for layer caching
+COPY perf_azure_mqtt/Cargo.toml perf_azure_mqtt/Cargo.lock ./
+
+# Copy the azure_mqtt source (must be pre-cloned on host)
+COPY perf_azure_mqtt/azure_mqtt_src/ ./azure_mqtt_src/
+
+# Copy the perf test source
+COPY perf_azure_mqtt/src/ ./src/
+
+# Build release binary
+RUN cargo build --release
+
+# ── Runtime stage ─────────────────────────────────────────────
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates libssl3t64 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/perf_azure_mqtt /usr/local/bin/perf_azure_mqtt
+
+ENTRYPOINT ["perf_azure_mqtt"]
+CMD ["localhost", "1883", "10000", "128", "30"]

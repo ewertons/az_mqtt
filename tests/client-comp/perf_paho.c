@@ -1,21 +1,18 @@
 /**
  * @file perf_paho.c
- * @brief Performance test using Eclipse Paho MQTT C (MQTTClient synchronous API).
+ * @brief Performance test using Eclipse Paho MQTT C (MQTTAsync non-blocking API).
  *
  * Same workload as perf_az_mqtt5.c: connect, subscribe to own topic, publish
  * N messages at QoS 1, count sends/receives, report JSON.
  *
  * Build (Linux):
- *   gcc -O2 -o perf_paho perf_paho.c -lpaho-mqtt3c -lrt
- *
- * Build (Windows / vcpkg):
- *   cl /O2 perf_paho.c paho-mqtt3c.lib ws2_32.lib
+ *   gcc -O2 -o perf_paho perf_paho.c -lpaho-mqtt3a -lrt
  *
  * Usage:
  *   perf_paho [host] [port] [msg_count] [payload_bytes] [duration_sec]
  */
 
-#include <MQTTClient.h>
+#include <MQTTAsync.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,12 +27,19 @@
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <unistd.h>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 #endif
 
 #define MAX_PAYLOAD_SIZE 8192
 
 static char s_payload[MAX_PAYLOAD_SIZE];
 static volatile int64_t g_pub_received = 0;
+static volatile int64_t g_pubacks_received = 0;
+static volatile int g_connected = 0;
+static volatile int g_subscribed = 0;
+static volatile int g_connect_failed = 0;
 
 // ─────────────── resource helpers ────────────────────────────
 
@@ -45,7 +49,39 @@ typedef struct
   double user_cpu_sec;
   double sys_cpu_sec;
   int64_t peak_rss_bytes;
+  int64_t current_rss_bytes;
+  int64_t heap_bytes;
 } resource_snapshot;
+
+#ifndef _WIN32
+static int64_t _read_vmrss_bytes(void)
+{
+  FILE* f = fopen("/proc/self/status", "r");
+  if (!f) return 0;
+  char line[256];
+  int64_t kb = 0;
+  while (fgets(line, sizeof(line), f))
+  {
+    if (strncmp(line, "VmRSS:", 6) == 0)
+    {
+      (void)sscanf(line + 6, "%lld", (long long*)&kb);
+      break;
+    }
+  }
+  fclose(f);
+  return kb * 1024;
+}
+
+static int64_t _read_heap_bytes(void)
+{
+#ifdef __GLIBC__
+  struct mallinfo2 mi = mallinfo2();
+  return (int64_t)mi.uordblks;
+#else
+  return 0;
+#endif
+}
+#endif
 
 static double _now_sec(void)
 {
@@ -83,20 +119,63 @@ static resource_snapshot _snap(void)
   s.user_cpu_sec = (double)ru.ru_utime.tv_sec + (double)ru.ru_utime.tv_usec / 1e6;
   s.sys_cpu_sec = (double)ru.ru_stime.tv_sec + (double)ru.ru_stime.tv_usec / 1e6;
   s.peak_rss_bytes = (int64_t)ru.ru_maxrss * 1024;
+  s.current_rss_bytes = _read_vmrss_bytes();
+  s.heap_bytes = _read_heap_bytes();
+#endif
+#ifdef _WIN32
+  s.current_rss_bytes = 0;
+  s.heap_bytes = 0;
 #endif
   return s;
 }
 
-// ─────────────── Paho callback ───────────────────────────────
+// ─────────────── Paho async callbacks ────────────────────────
 
-static int on_message(void* context, char* topicName, int topicLen, MQTTClient_message* message)
+static int on_message(void* context, char* topicName, int topicLen, MQTTAsync_message* message)
 {
   (void)context;
   (void)topicLen;
   g_pub_received++;
-  MQTTClient_freeMessage(&message);
-  MQTTClient_free(topicName);
-  return 1; // tell Paho we consumed it
+  MQTTAsync_freeMessage(&message);
+  MQTTAsync_free(topicName);
+  return 1;
+}
+
+static void on_connect(void* context, MQTTAsync_successData* response)
+{
+  (void)context;
+  (void)response;
+  g_connected = 1;
+}
+
+static void on_connect_failure(void* context, MQTTAsync_failureData* response)
+{
+  (void)context;
+  fprintf(stderr, "connect failed: %d\n", response ? response->code : -1);
+  g_connect_failed = 1;
+}
+
+static void on_subscribe(void* context, MQTTAsync_successData* response)
+{
+  (void)context;
+  (void)response;
+  g_subscribed = 1;
+}
+
+static void on_send(void* context, MQTTAsync_successData* response)
+{
+  (void)context;
+  (void)response;
+  g_pubacks_received++;
+}
+
+static void _sleep_ms(int ms)
+{
+#ifdef _WIN32
+  Sleep((DWORD)ms);
+#else
+  usleep(ms * 1000);
+#endif
 }
 
 // ─────────────── main ────────────────────────────────────────
@@ -125,86 +204,140 @@ int main(int argc, char* argv[])
     s_payload[i] = (char)('A' + (i % 26));
   }
 
-  // Build URI
+  // Baseline resource snapshot BEFORE any MQTT/network work.
+  resource_snapshot snap_baseline = _snap();
+
   char uri[512];
   snprintf(uri, sizeof(uri), "tcp://%s:%d", host, port);
 
-  MQTTClient client;
-  int rc = MQTTClient_create(&client, uri, "perf-paho-c",
+  MQTTAsync client;
+  int rc = MQTTAsync_create(&client, uri, "perf-paho-c",
       MQTTCLIENT_PERSISTENCE_NONE, NULL);
-  if (rc != MQTTCLIENT_SUCCESS)
+  if (rc != MQTTASYNC_SUCCESS)
   {
-    fprintf(stderr, "MQTTClient_create failed: %d\n", rc);
+    fprintf(stderr, "MQTTAsync_create failed: %d\n", rc);
     return 1;
   }
 
-  MQTTClient_setCallbacks(client, NULL, NULL, on_message, NULL);
+  MQTTAsync_setCallbacks(client, NULL, NULL, on_message, NULL);
 
-  MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
+  // Connect
+  MQTTAsync_connectOptions conn_opts = MQTTAsync_connectOptions_initializer;
   conn_opts.keepAliveInterval = 60;
   conn_opts.cleansession = 1;
-  conn_opts.MQTTVersion = MQTTVERSION_5;
+  conn_opts.onSuccess = on_connect;
+  conn_opts.onFailure = on_connect_failure;
 
-  rc = MQTTClient_connect(client, &conn_opts);
-  if (rc != MQTTCLIENT_SUCCESS)
+  rc = MQTTAsync_connect(client, &conn_opts);
+  if (rc != MQTTASYNC_SUCCESS)
   {
-    fprintf(stderr, "connect failed: %d\n", rc);
-    MQTTClient_destroy(&client);
+    fprintf(stderr, "MQTTAsync_connect call failed: %d\n", rc);
+    MQTTAsync_destroy(&client);
+    return 1;
+  }
+
+  // Wait for connect callback
+  double wait_end = _now_sec() + 10.0;
+  while (!g_connected && !g_connect_failed && _now_sec() < wait_end)
+  {
+    _sleep_ms(10);
+  }
+  if (!g_connected)
+  {
+    fprintf(stderr, "connect timed out or failed\n");
+    MQTTAsync_destroy(&client);
     return 1;
   }
   fprintf(stderr, "[paho] connected\n");
 
   // Subscribe
-  rc = MQTTClient_subscribe(client, "perf/paho/#", 1);
-  if (rc != MQTTCLIENT_SUCCESS)
+  MQTTAsync_responseOptions sub_opts = MQTTAsync_responseOptions_initializer;
+  sub_opts.onSuccess = on_subscribe;
+  rc = MQTTAsync_subscribe(client, "perf/paho/#", 1, &sub_opts);
+  if (rc != MQTTASYNC_SUCCESS)
   {
-    fprintf(stderr, "subscribe failed: %d\n", rc);
-    MQTTClient_disconnect(client, 1000);
-    MQTTClient_destroy(&client);
+    fprintf(stderr, "subscribe call failed: %d\n", rc);
+    MQTTAsync_disconnect(client, NULL);
+    MQTTAsync_destroy(&client);
     return 1;
   }
 
-  // Publish loop
+  wait_end = _now_sec() + 10.0;
+  while (!g_subscribed && _now_sec() < wait_end)
+  {
+    _sleep_ms(10);
+  }
+
+  // Publish loop (non-blocking)
   resource_snapshot snap_start = _snap();
   double deadline = _now_sec() + (double)duration_sec;
 
   int64_t pub_sent = 0;
-  MQTTClient_deliveryToken token;
+  MQTTAsync_message pubmsg = MQTTAsync_message_initializer;
+  pubmsg.payload = s_payload;
+  pubmsg.payloadlen = payload_bytes;
+  pubmsg.qos = 1;
+  pubmsg.retained = 0;
 
   while (pub_sent < msg_count && _now_sec() < deadline)
   {
-    rc = MQTTClient_publish(client, "perf/paho/data",
-        payload_bytes, s_payload, 1 /*qos*/, 0 /*retain*/, &token);
-    if (rc == MQTTCLIENT_SUCCESS)
+    MQTTAsync_responseOptions send_opts = MQTTAsync_responseOptions_initializer;
+    send_opts.onSuccess = on_send;
+
+    rc = MQTTAsync_sendMessage(client, "perf/paho/data", &pubmsg, &send_opts);
+    if (rc == MQTTASYNC_SUCCESS)
     {
       pub_sent++;
     }
+    else if (rc == MQTTASYNC_MAX_BUFFERED_MESSAGES)
+    {
+      // Back-pressure: wait briefly and retry
+      _sleep_ms(1);
+    }
     else
     {
-      fprintf(stderr, "[paho] publish err: %d at msg %lld\n", rc, (long long)pub_sent);
-    }
-
-    // Yield periodically so receive callback can fire
-    if (pub_sent % 100 == 0)
-    {
-      MQTTClient_yield();
+      fprintf(stderr, "[paho] send err: %d at msg %lld\n", rc, (long long)pub_sent);
     }
   }
 
-  // Drain remaining
+  // Drain: wait for PUBACKs and incoming messages.
+  // No-progress watchdog: continue as long as either pubacks or inbound
+  // messages are still arriving. Stop if neither counter advances for
+  // `idle_budget` seconds, or after a hard `max_drain` cap.
   fprintf(stderr, "[paho] draining remaining messages...\n");
-  double drain_deadline = _now_sec() + 5.0;
-  while (_now_sec() < drain_deadline)
+  const double idle_budget = 3.0;
+  const double max_drain = 120.0;
+  double drain_start = _now_sec();
+  double last_progress = drain_start;
+  int64_t last_received = g_pub_received;
+  int64_t last_pubacks = g_pubacks_received;
+  while (g_pub_received < pub_sent || g_pubacks_received < pub_sent)
   {
-    MQTTClient_yield();
+    double now = _now_sec();
+    if (now - drain_start > max_drain)
+    {
+      fprintf(stderr, "[paho] drain hit max %.1fs cap\n", max_drain);
+      break;
+    }
+    if (now - last_progress > idle_budget)
+    {
+      fprintf(stderr, "[paho] drain idle %.1fs, stopping\n", idle_budget);
+      break;
+    }
+    _sleep_ms(10);
+    if (g_pub_received > last_received || g_pubacks_received > last_pubacks)
+    {
+      last_received = g_pub_received;
+      last_pubacks = g_pubacks_received;
+      last_progress = _now_sec();
+    }
   }
 
   resource_snapshot snap_end = _snap();
 
-  MQTTClient_disconnect(client, 1000);
-  MQTTClient_destroy(&client);
+  MQTTAsync_disconnect(client, NULL);
+  MQTTAsync_destroy(&client);
 
-  // JSON report
   double elapsed = snap_end.wall_sec - snap_start.wall_sec;
   double user_cpu = snap_end.user_cpu_sec - snap_start.user_cpu_sec;
   double sys_cpu = snap_end.sys_cpu_sec - snap_start.sys_cpu_sec;
@@ -217,14 +350,21 @@ int main(int argc, char* argv[])
   printf("  \"qos\": 1,\n");
   printf("  \"messages_sent\": %lld,\n", (long long)pub_sent);
   printf("  \"messages_received\": %lld,\n", (long long)g_pub_received);
-  printf("  \"pubacks_received\": 0,\n");
+  printf("  \"pubacks_received\": %lld,\n", (long long)g_pubacks_received);
   printf("  \"elapsed_sec\": %.3f,\n", elapsed);
   printf("  \"send_rate_msg_sec\": %.1f,\n", elapsed > 0 ? (double)pub_sent / elapsed : 0);
   printf("  \"recv_rate_msg_sec\": %.1f,\n", elapsed > 0 ? (double)g_pub_received / elapsed : 0);
   printf("  \"user_cpu_sec\": %.3f,\n", user_cpu);
   printf("  \"sys_cpu_sec\": %.3f,\n", sys_cpu);
   printf("  \"total_cpu_sec\": %.3f,\n", user_cpu + sys_cpu);
-  printf("  \"peak_rss_bytes\": %lld\n", (long long)snap_end.peak_rss_bytes);
+  printf("  \"peak_rss_bytes\": %lld,\n", (long long)snap_end.peak_rss_bytes);
+  printf("  \"rss_baseline_bytes\": %lld,\n", (long long)snap_baseline.current_rss_bytes);
+  printf("  \"rss_delta_bytes\": %lld,\n",
+      (long long)(snap_end.peak_rss_bytes - snap_baseline.current_rss_bytes));
+  printf("  \"heap_baseline_bytes\": %lld,\n", (long long)snap_baseline.heap_bytes);
+  printf("  \"heap_peak_bytes\": %lld,\n", (long long)snap_end.heap_bytes);
+  printf("  \"heap_delta_bytes\": %lld\n",
+      (long long)(snap_end.heap_bytes - snap_baseline.heap_bytes));
   printf("}\n");
 
   return 0;
