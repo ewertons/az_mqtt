@@ -11,7 +11,7 @@ if(NOT TARGET az_mqtt5::client)
   if(DEFINED AZ_MQTT5_ROOT)
     add_subdirectory(${AZ_MQTT5_ROOT} ${CMAKE_BINARY_DIR}/_az_mqtt5 EXCLUDE_FROM_ALL)
   else()
-    # Assume we are inside the project tree at test/perf-conf/
+    # Assume we are inside the project tree at tests/client-comp/
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../.. ${CMAKE_BINARY_DIR}/_az_mqtt5 EXCLUDE_FROM_ALL)
   endif()
 endif()

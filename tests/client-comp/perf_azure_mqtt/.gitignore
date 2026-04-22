@@ -1,0 +1,4 @@
+# Cloned azure_mqtt source (auto-fetched by setup scripts)
+azure_mqtt_src/
+# Rust build artifacts
+target/
