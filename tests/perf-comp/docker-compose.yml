@@ -1,0 +1,65 @@
+version: "3.8"
+
+# Performance-test infrastructure.
+# Usage:
+#   docker compose up -d          # start broker + metrics
+#   <run perf tests>
+#   docker compose down -v        # tear down
+
+services:
+  # ── MQTT broker ──────────────────────────────────────────────
+  emqx:
+    image: emqx/emqx:5-elixir
+    hostname: emqx
+    container_name: perf-emqx
+    environment:
+      EMQX_NAME: emqx
+      EMQX_HOST: 0.0.0.0
+      # Bump internal limits for stress testing
+      EMQX_LISTENERS__TCP__DEFAULT__MAX_CONNECTIONS: "infinity"
+      EMQX_LOG__CONSOLE__LEVEL: warning
+    ports:
+      - "1883:1883"   # MQTT TCP
+      - "18083:18083"  # Dashboard + Prometheus endpoint
+    healthcheck:
+      test: ["CMD", "emqx", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # ── Prometheus (scrapes emqx + cAdvisor) ─────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: perf-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      emqx:
+        condition: service_healthy
+
+  # ── Grafana (dashboards) ─────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: perf-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+  # ── cAdvisor (per-container CPU / mem) ───────────────────────
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: perf-cadvisor
+    privileged: true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - "8080:8080"
