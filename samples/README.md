@@ -42,7 +42,12 @@ Plain TCP: localhost:1883
 TLS:       localhost:8883
 ```
 
-Note: if OpenSSL is not available, the Windows script falls back to plain TCP only (1883).
+If OpenSSL is not available, the Windows script falls back to plain TCP only and prints:
+
+```text
+Plain TCP: localhost:1883
+TLS:       disabled (OpenSSL not found)
+```
 
 ## 2. Configure and build the sample
 

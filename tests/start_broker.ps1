@@ -122,8 +122,12 @@ allow_anonymous true
     if ($LASTEXITCODE -eq 0) {
       Write-Host " ready!"
       Write-Host "  Plain TCP: localhost:1883"
-      Write-Host "  TLS:       localhost:8883"
-      Write-Host "  CA cert:   $CertsDir\ca.crt"
+      if ($hasOpenSSL) {
+        Write-Host "  TLS:       localhost:8883"
+        Write-Host "  CA cert:   $CertsDir\ca.crt"
+      } else {
+        Write-Host "  TLS:       disabled (OpenSSL not found)"
+      }
       return
     }
     Write-Host -NoNewline "."

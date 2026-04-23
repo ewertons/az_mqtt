@@ -11,6 +11,9 @@
 #define RECV_BUFFER_SIZE 4096
 #define MAX_USER_PROPERTIES 8
 #define MAX_SUBACK_REASON_CODES 8
+// Must be >= az_mqtt5_transport_sizeof() at runtime.
+// Schannel transport on Windows is large due to TLS I/O buffers.
+#define TRANSPORT_BUFFER_SIZE (256 * 1024)
 
 // Reinterpret any fixed-size array as a byte array to use AZ_SPAN_FROM_BUFFER.
 #define AZ_MQTT5_SPAN_FROM_ARRAY(ARRAY) \
@@ -19,7 +22,7 @@
 // Static buffers (zero allocation).
 static uint8_t s_send_buffer[SEND_BUFFER_SIZE];
 static uint8_t s_recv_buffer[RECV_BUFFER_SIZE];
-static uint8_t s_transport_buffer[256]; // Sized >= az_mqtt5_transport_sizeof()
+static uint8_t s_transport_buffer[TRANSPORT_BUFFER_SIZE];
 
 static az_mqtt5_user_property s_connack_user_props[MAX_USER_PROPERTIES];
 static az_mqtt5_user_property s_publish_user_props[MAX_USER_PROPERTIES];
