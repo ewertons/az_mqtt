@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft. All rights reserved.
+# Licensed under the MIT license. See LICENSE file in the project root for full license information.
 <# run_azure_mqtt.ps1 – Run the azure_mqtt (Rust) performance test via Docker. #>
 
 $ErrorActionPreference = "Stop"

@@ -1,5 +1,5 @@
-// Copyright (c) az_mqtt5_client contributors. All rights reserved.
-// SPDX-License-Identifier: MIT
+// Copyright (c) Microsoft. All rights reserved.
+// Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 // POSIX TCP transport with optional mbedTLS TLS layer (alternative to
 // transport_posix.c which uses OpenSSL). Selected via the

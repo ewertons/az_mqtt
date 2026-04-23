@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft. All rights reserved.
+# Licensed under the MIT license. See LICENSE file in the project root for full license information.
 <# compare.ps1 – Find the latest result files for each client, merge, and display
    a side-by-side comparison table including memory footprint data.
    Also writes a human-readable markdown report (client-comp.md) covering

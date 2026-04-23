@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft. All rights reserved.
+# Licensed under the MIT license. See LICENSE file in the project root for full license information.
 <# run_az_mqtt5_openssl.ps1 – Run the az_mqtt5 (C) perf test built with the
    OpenSSL TLS backend, via Docker. #>
 

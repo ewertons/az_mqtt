@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Copyright (c) az_mqtt5_client contributors. All rights reserved.
-# SPDX-License-Identifier: MIT
-#
+# Copyright (c) Microsoft. All rights reserved.
+# Licensed under the MIT license. See LICENSE file in the project root for full license information.
 # Launches a Mosquitto MQTT 5 broker in Docker with:
 #   - Plain TCP on port 1883
 #   - TLS on port 8883

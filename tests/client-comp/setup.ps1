@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft. All rights reserved.
+# Licensed under the MIT license. See LICENSE file in the project root for full license information.
 <# setup.ps1 – Build Docker images for all perf binaries and start infrastructure.
    Run from the tests\client-comp\ directory. #>
 

@@ -1,5 +1,5 @@
-// Copyright (c) az_mqtt5_client contributors. All rights reserved.
-// SPDX-License-Identifier: MIT
+// Copyright (c) Microsoft. All rights reserved.
+// Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 #ifndef AZ_MQTT5_E2E_TEST_COMMON_H
 #define AZ_MQTT5_E2E_TEST_COMMON_H

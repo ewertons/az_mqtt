@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft. All rights reserved.
+# Licensed under the MIT license. See LICENSE file in the project root for full license information.
 <# run.ps1 – One-shot script: setup, run all four clients sequentially, compare, teardown.
    All clients run in Ubuntu 24.04 Docker containers for fair comparison.
 

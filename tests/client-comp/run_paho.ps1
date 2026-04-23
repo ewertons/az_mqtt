@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft. All rights reserved.
+# Licensed under the MIT license. See LICENSE file in the project root for full license information.
 <# run_paho.ps1 – Run the Paho MQTT C performance test via Docker. #>
 
 $ErrorActionPreference = "Stop"
