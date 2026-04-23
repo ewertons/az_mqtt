@@ -53,13 +53,13 @@ az_result az_mqtt5_e2e_init_client(
   opts.on_pubcomp = params->on_pubcomp;
   opts.on_disconnect = params->on_disconnect;
 
-      opts.connack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->connack_props);
-      opts.publish_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->publish_props);
-      opts.publish_subscription_identifiers = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->publish_subscription_ids);
-      opts.suback_reason_codes = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->suback_reasons);
-      opts.suback_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->suback_props);
-      opts.ack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->ack_props);
-      opts.disconnect_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->disconnect_props);
+  opts.connack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->connack_props);
+  opts.publish_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->publish_props);
+  opts.publish_subscription_identifiers = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->publish_subscription_ids);
+  opts.suback_reason_codes = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->suback_reasons);
+  opts.suback_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->suback_props);
+  opts.ack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->ack_props);
+  opts.disconnect_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->disconnect_props);
 
   return az_mqtt5_client_init(client, &opts);
 }
