@@ -1,7 +1,14 @@
 <# compare.ps1 – Find the latest result files for each client, merge, and display
    a side-by-side comparison table including memory footprint data.
    Also writes a human-readable markdown report (client-comp.md) covering
-   environment, client versions, build flags, workload, and results. #>
+   environment, client versions, build flags, workload, and results.
+
+   Four clients are compared:
+     - az_mqtt5 (C / OpenSSL)
+     - az_mqtt5 (C / mbedTLS)
+     - paho_mqtt_c
+     - azure_mqtt (Rust)
+#>
 
 $ErrorActionPreference = "Stop"
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -9,18 +16,20 @@ $ResultsDir = Join-Path $ScriptDir "results"
 $Timestamp  = Get-Date -Format "yyyyMMdd_HHmmss"
 
 # ── Find latest result per client ─────────────────────────────
-$azFiles   = Get-ChildItem -Path $ResultsDir -Filter "az_mqtt5_*.json"    -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
-$pahoFiles = Get-ChildItem -Path $ResultsDir -Filter "paho_*.json"        -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
-$rustFiles = Get-ChildItem -Path $ResultsDir -Filter "azure_mqtt_*.json"  -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
+$azOpensslFiles = Get-ChildItem -Path $ResultsDir -Filter "az_mqtt5_openssl_*.json" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
+$azMbedtlsFiles = Get-ChildItem -Path $ResultsDir -Filter "az_mqtt5_mbedtls_*.json" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
+$pahoFiles      = Get-ChildItem -Path $ResultsDir -Filter "paho_*.json"             -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
+$rustFiles      = Get-ChildItem -Path $ResultsDir -Filter "azure_mqtt_*.json"       -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
 
-if (-not $azFiles -and -not $pahoFiles -and -not $rustFiles) {
+if (-not $azOpensslFiles -and -not $azMbedtlsFiles -and -not $pahoFiles -and -not $rustFiles) {
     Write-Error "No result files found in $ResultsDir.  Run run.ps1 first."
     exit 1
 }
 
-$azData   = if ($azFiles)   { Get-Content $azFiles[0].FullName   | ConvertFrom-Json } else { $null }
-$pahoData = if ($pahoFiles) { Get-Content $pahoFiles[0].FullName | ConvertFrom-Json } else { $null }
-$rustData = if ($rustFiles) { Get-Content $rustFiles[0].FullName | ConvertFrom-Json } else { $null }
+$azOpensslData = if ($azOpensslFiles) { Get-Content $azOpensslFiles[0].FullName | ConvertFrom-Json } else { $null }
+$azMbedtlsData = if ($azMbedtlsFiles) { Get-Content $azMbedtlsFiles[0].FullName | ConvertFrom-Json } else { $null }
+$pahoData      = if ($pahoFiles)      { Get-Content $pahoFiles[0].FullName      | ConvertFrom-Json } else { $null }
+$rustData      = if ($rustFiles)      { Get-Content $rustFiles[0].FullName      | ConvertFrom-Json } else { $null }
 
 # ── Docker-side introspection helpers ─────────────────────────
 function Invoke-DockerQuery($image, $entrypoint, $argList) {
@@ -37,13 +46,6 @@ function Get-DockerBinSize($image, $binPath) {
     return $null
 }
 
-# Run GNU binutils `size` on a binary living inside an image. The slim runtime
-# images don't include binutils, so we copy the binary out to a host temp dir
-# and size it inside a cached ubuntu:24.04 helper container that has
-# build-essential (cached by the Paho/az_mqtt5 builder layers).
-# Parses Berkeley format:
-#    text    data     bss     dec     hex filename
-#    12345    678     910    13933    366D /bin/prog
 function Get-DockerSectionSizes($image, $binPath) {
     $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("size_" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $tmp -Force | Out-Null
@@ -55,7 +57,6 @@ function Get-DockerSectionSizes($image, $binPath) {
         } finally {
             & docker rm $cid 2>$null | Out-Null
         }
-        $tmpPosix = $tmp -replace '\\', '/'
         $out = & docker run --rm -v "${tmp}:/work" --entrypoint sh ubuntu:24.04 -c "command -v size >/dev/null 2>&1 || (apt-get update -qq >/dev/null && apt-get install -y -qq binutils >/dev/null); size /work/bin" 2>$null
         if (-not $out) { return $null }
         $lines = ($out -join "`n") -split "`n" | Where-Object { $_.Trim() -ne "" }
@@ -72,46 +73,33 @@ function Get-DockerSectionSizes($image, $binPath) {
     }
 }
 
-function Get-DockerVersion($image, $entrypoint, $argList) {
-    $out = Invoke-DockerQuery $image $entrypoint $argList
-    if ($out) { return $out.Split("`n")[0].Trim() }
-    return "?"
-}
+$azOpensslBinSize = Get-DockerBinSize "perf-az-mqtt5-openssl:latest" "/usr/local/bin/perf_az_mqtt5"
+$azMbedtlsBinSize = Get-DockerBinSize "perf-az-mqtt5-mbedtls:latest" "/usr/local/bin/perf_az_mqtt5"
+$pahoBinSize      = Get-DockerBinSize "perf-paho:latest"             "/usr/local/bin/perf_paho"
+$rustBinSize      = Get-DockerBinSize "perf-azure-mqtt:latest"       "/usr/local/bin/perf_azure_mqtt"
 
-$azBinSize   = Get-DockerBinSize "perf-az-mqtt5:latest"   "/usr/local/bin/perf_az_mqtt5"
-$pahoBinSize = Get-DockerBinSize "perf-paho:latest"       "/usr/local/bin/perf_paho"
-$rustBinSize = Get-DockerBinSize "perf-azure-mqtt:latest" "/usr/local/bin/perf_azure_mqtt"
+$azOpensslSections = Get-DockerSectionSizes "perf-az-mqtt5-openssl:latest" "/usr/local/bin/perf_az_mqtt5"
+$azMbedtlsSections = Get-DockerSectionSizes "perf-az-mqtt5-mbedtls:latest" "/usr/local/bin/perf_az_mqtt5"
+$pahoSections      = Get-DockerSectionSizes "perf-paho:latest"             "/usr/local/bin/perf_paho"
+$rustSections      = Get-DockerSectionSizes "perf-azure-mqtt:latest"       "/usr/local/bin/perf_azure_mqtt"
 
-$azSections   = Get-DockerSectionSizes "perf-az-mqtt5:latest"   "/usr/local/bin/perf_az_mqtt5"
-$pahoSections = Get-DockerSectionSizes "perf-paho:latest"       "/usr/local/bin/perf_paho"
-$rustSections = Get-DockerSectionSizes "perf-azure-mqtt:latest" "/usr/local/bin/perf_azure_mqtt"
-
-# ── Save consolidated JSON ────────────────────────────────────
 $comp = @{
-    timestamp       = $Timestamp
-    az_mqtt5        = $azData
-    paho_mqtt_c     = $pahoData
-    azure_mqtt_rust = $rustData
+    timestamp           = $Timestamp
+    az_mqtt5_openssl    = $azOpensslData
+    az_mqtt5_mbedtls    = $azMbedtlsData
+    paho_mqtt_c         = $pahoData
+    azure_mqtt_rust     = $rustData
     footprint = @{
-        az_mqtt5 = @{
-            binary_bytes = $azBinSize
-            sections     = $azSections
-        }
-        paho_mqtt_c = @{
-            binary_bytes = $pahoBinSize
-            sections     = $pahoSections
-        }
-        azure_mqtt_rust = @{
-            binary_bytes = $rustBinSize
-            sections     = $rustSections
-        }
+        az_mqtt5_openssl = @{ binary_bytes = $azOpensslBinSize; sections = $azOpensslSections }
+        az_mqtt5_mbedtls = @{ binary_bytes = $azMbedtlsBinSize; sections = $azMbedtlsSections }
+        paho_mqtt_c      = @{ binary_bytes = $pahoBinSize;      sections = $pahoSections      }
+        azure_mqtt_rust  = @{ binary_bytes = $rustBinSize;      sections = $rustSections      }
     }
 }
 $compFile = Join-Path $ResultsDir "comparison_${Timestamp}.json"
 $comp | ConvertTo-Json -Depth 6 | Set-Content $compFile
 Write-Host "Consolidated JSON saved to: $compFile`n"
 
-# ── Formatting helpers ────────────────────────────────────────
 function Get-Val($obj, $field) {
     if ($null -eq $obj) { return "-" }
     $v = $obj.PSObject.Properties[$field]
@@ -129,7 +117,11 @@ function Format-Human($bytes) {
 
 function Format-HumanField($obj, $field) { Format-Human (Get-Val $obj $field) }
 
-# ── Console tables ────────────────────────────────────────────
+function SecField($s, $name) {
+    if ($null -eq $s) { return "-" }
+    return Format-Human $s.$name
+}
+
 $fields = @(
     @("Messages sent",         "messages_sent",      $false),
     @("Messages received",     "messages_received",  $false),
@@ -149,62 +141,42 @@ $fields = @(
 )
 
 Write-Host ""
-Write-Host ("=" * 82)
-Write-Host "                   MQTT CLIENT PERFORMANCE COMPARISON"
-Write-Host ("=" * 82)
+Write-Host ("=" * 110)
+Write-Host "                        MQTT CLIENT PERFORMANCE COMPARISON"
+Write-Host ("=" * 110)
 Write-Host ""
 
-$fmt = "{0,-26} {1,16} {2,16} {3,16}"
-Write-Host ($fmt -f "Metric", "az_mqtt5 (C)", "paho_mqtt (C)", "azure_mqtt (Rust)")
-Write-Host ($fmt -f ("-" * 26), ("-" * 16), ("-" * 16), ("-" * 16))
+$fmt = "{0,-26} {1,16} {2,16} {3,16} {4,16}"
+Write-Host ($fmt -f "Metric", "az_mqtt5 (ossl)", "az_mqtt5 (mbed)", "paho_mqtt (C)", "azure_mqtt (Rust)")
+Write-Host ($fmt -f ("-" * 26), ("-" * 16), ("-" * 16), ("-" * 16), ("-" * 16))
 
 foreach ($f in $fields) {
     $label = $f[0]; $key = $f[1]; $human = $f[2]
-    $a = if ($human) { Format-HumanField $azData   $key } else { Get-Val $azData   $key }
-    $b = if ($human) { Format-HumanField $pahoData $key } else { Get-Val $pahoData $key }
-    $c = if ($human) { Format-HumanField $rustData $key } else { Get-Val $rustData $key }
-    Write-Host ($fmt -f $label, $a, $b, $c)
+    $a = if ($human) { Format-HumanField $azOpensslData $key } else { Get-Val $azOpensslData $key }
+    $b = if ($human) { Format-HumanField $azMbedtlsData $key } else { Get-Val $azMbedtlsData $key }
+    $c = if ($human) { Format-HumanField $pahoData      $key } else { Get-Val $pahoData      $key }
+    $d = if ($human) { Format-HumanField $rustData      $key } else { Get-Val $rustData      $key }
+    Write-Host ($fmt -f $label, $a, $b, $c, $d)
 }
 
 Write-Host ""
-Write-Host ($fmt -f "-- Binary Footprint --", "", "", "")
-Write-Host ($fmt -f ("-" * 26), ("-" * 16), ("-" * 16), ("-" * 16))
-Write-Host ($fmt -f "Binary on disk", (Format-Human $azBinSize), (Format-Human $pahoBinSize), (Format-Human $rustBinSize))
-if ($azSections -or $pahoSections -or $rustSections) {
-    $secTxt  = { param($s) if ($s) { Format-Human $s.text } else { "-" } }
-    $secData = { param($s) if ($s) { Format-Human $s.data } else { "-" } }
-    $secBss  = { param($s) if ($s) { Format-Human $s.bss  } else { "-" } }
-    Write-Host ($fmt -f ".text (code)",    (& $secTxt  $azSections), (& $secTxt  $pahoSections), (& $secTxt  $rustSections))
-    Write-Host ($fmt -f ".data (init'd)",  (& $secData $azSections), (& $secData $pahoSections), (& $secData $rustSections))
-    Write-Host ($fmt -f ".bss  (zeroed)",  (& $secBss  $azSections), (& $secBss  $pahoSections), (& $secBss  $rustSections))
-}
+Write-Host ($fmt -f "-- Binary Footprint --", "", "", "", "")
+Write-Host ($fmt -f ("-" * 26), ("-" * 16), ("-" * 16), ("-" * 16), ("-" * 16))
+Write-Host ($fmt -f "Binary on disk",   (Format-Human $azOpensslBinSize), (Format-Human $azMbedtlsBinSize), (Format-Human $pahoBinSize), (Format-Human $rustBinSize))
+Write-Host ($fmt -f ".text (code)",     (SecField $azOpensslSections text), (SecField $azMbedtlsSections text), (SecField $pahoSections text), (SecField $rustSections text))
+Write-Host ($fmt -f ".data (init'd)",   (SecField $azOpensslSections data), (SecField $azMbedtlsSections data), (SecField $pahoSections data), (SecField $rustSections data))
+Write-Host ($fmt -f ".bss (zeroed)",    (SecField $azOpensslSections bss),  (SecField $azMbedtlsSections bss),  (SecField $pahoSections bss),  (SecField $rustSections bss))
 Write-Host ""
 
-# ── Broker snapshots ──────────────────────────────────────────
-$azBroker   = Get-ChildItem -Path $ResultsDir -Filter "broker_az_mqtt5_*.json"    -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-$pahoBroker = Get-ChildItem -Path $ResultsDir -Filter "broker_paho_*.json"        -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-$rustBroker = Get-ChildItem -Path $ResultsDir -Filter "broker_azure_mqtt_*.json"  -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-
-if ($azBroker -or $pahoBroker -or $rustBroker) {
-    Write-Host "Broker stat snapshots:"
-    if ($azBroker)   { Write-Host "  az_mqtt5 run    : $($azBroker.FullName)" }
-    if ($pahoBroker) { Write-Host "  paho run        : $($pahoBroker.FullName)" }
-    if ($rustBroker) { Write-Host "  azure_mqtt run  : $($rustBroker.FullName)" }
-    Write-Host "(Inspect these files to compare broker-side resource usage between runs.)"
-}
-
-# ── Markdown report ───────────────────────────────────────────
 $mdPath = Join-Path $ScriptDir "client-comp.md"
 
-$hostInfo = "$([System.Environment]::OSVersion.VersionString) / PowerShell $($PSVersionTable.PSVersion)"
+$hostInfo  = "$([System.Environment]::OSVersion.VersionString) / PowerShell $($PSVersionTable.PSVersion)"
 $dockerVer = (& docker --version 2>$null); if (-not $dockerVer) { $dockerVer = "?" }
 
-# The slim runtime image doesn't have gcc; the compiler used at build time is
-# whatever ubuntu:24.04 ships (gcc 13.3.0 at the time of writing). Read it from
-# the builder-capable ubuntu:24.04 helper.
 $gccVer = & docker run --rm --entrypoint sh ubuntu:24.04 -c "command -v gcc >/dev/null 2>&1 || (apt-get update -qq >/dev/null && apt-get install -y -qq gcc >/dev/null); gcc --version | head -n 1" 2>$null
 if (-not $gccVer) { $gccVer = "GCC (Ubuntu 24.04 default)" } else { $gccVer = $gccVer.Trim() }
-$osRelease = Invoke-DockerQuery "perf-az-mqtt5:latest" "cat" @("/etc/os-release")
+
+$osRelease = Invoke-DockerQuery "perf-az-mqtt5-openssl:latest" "cat" @("/etc/os-release")
 $ubuntuVer = "Ubuntu (unknown)"
 if ($osRelease) {
     $m = [regex]::Match($osRelease, 'PRETTY_NAME="([^"]+)"')
@@ -215,7 +187,8 @@ $pahoVersion   = "v1.3.14 (Eclipse Paho MQTT C, fetched via CMake FetchContent)"
 $azSdkCVersion = "1.6.0-beta.1 (azure-sdk-for-c submodule)"
 $rustCrate     = "azure_mqtt v0.1.0 (local path dep in perf_azure_mqtt/azure_mqtt_src/)"
 
-function MdRow($label, $a, $b, $c) { "| {0} | {1} | {2} | {3} |" -f $label, $a, $b, $c }
+function MdRow4($label, $a, $b, $c, $d) { "| {0} | {1} | {2} | {3} | {4} |" -f $label, $a, $b, $c, $d }
+function MdCell($obj, $field) { Get-Val $obj $field }
 function MdHumanCell($obj, $field) { Format-Human (Get-Val $obj $field) }
 
 $sb = New-Object System.Text.StringBuilder
@@ -223,17 +196,22 @@ $sb = New-Object System.Text.StringBuilder
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("_Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')_")
 [void]$sb.AppendLine("")
-[void]$sb.AppendLine("This report compares three MQTT 5 client implementations running an identical")
+[void]$sb.AppendLine("This report compares **four** MQTT 5 client configurations running an identical")
 [void]$sb.AppendLine("publish/subscribe workload against the same broker, inside equivalent Linux")
-[void]$sb.AppendLine("containers. Each client is built with production / size-optimized release flags.")
+[void]$sb.AppendLine("containers. Each binary is built with production / size-optimized release flags.")
+[void]$sb.AppendLine("")
+[void]$sb.AppendLine("Two of the four are the **same C source** (``az_mqtt5``) but linked against")
+[void]$sb.AppendLine("different TLS backends — OpenSSL vs mbedTLS — so the footprint delta between")
+[void]$sb.AppendLine("them isolates the TLS wrapper cost.")
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("## Clients Under Test")
 [void]$sb.AppendLine("")
-[void]$sb.AppendLine("| Client | Language | Version | Notes |")
-[void]$sb.AppendLine("|---|---|---|---|")
-[void]$sb.AppendLine("| ``az_mqtt5`` | C99 | $azSdkCVersion | Zero dynamic allocation; static buffers supplied by caller. |")
-[void]$sb.AppendLine("| ``paho_mqtt_c`` | C | $pahoVersion | Async API (MQTTAsync), internal threads, heap-allocated internals. |")
-[void]$sb.AppendLine("| ``azure_mqtt`` | Rust | $rustCrate | Tokio async runtime, OpenSSL (vendored). |")
+[void]$sb.AppendLine("| Client | Language | Version | TLS backend | Notes |")
+[void]$sb.AppendLine("|---|---|---|---|---|")
+[void]$sb.AppendLine("| ``az_mqtt5`` (openssl) | C99 | $azSdkCVersion | OpenSSL (``libssl3``, dynamic) | ``src/platform/transport_posix.c``. |")
+[void]$sb.AppendLine("| ``az_mqtt5`` (mbedtls) | C99 | $azSdkCVersion | mbedTLS (dynamic) | ``src/platform/transport_mbedtls.c``. Same MQTT core. |")
+[void]$sb.AppendLine("| ``paho_mqtt_c`` | C | $pahoVersion | OpenSSL | Async API (MQTTAsync), internal threads, heap-allocated internals. |")
+[void]$sb.AppendLine("| ``azure_mqtt`` | Rust | $rustCrate | OpenSSL (vendored, static) | Tokio async runtime. |")
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("## Test Environment")
 [void]$sb.AppendLine("")
@@ -243,23 +221,27 @@ $sb = New-Object System.Text.StringBuilder
 [void]$sb.AppendLine("| Docker | $dockerVer |")
 [void]$sb.AppendLine("| Container base | $ubuntuVer |")
 [void]$sb.AppendLine("| C compiler | $gccVer |")
-[void]$sb.AppendLine("| Broker | EMQX (``docker-compose.yml`` service ``emqx``), TCP 1883, no TLS, no auth |")
+[void]$sb.AppendLine("| Broker | EMQX, TCP 1883, no TLS, no auth |")
 [void]$sb.AppendLine("| Network | Docker user-defined bridge (``client-comp_default``) |")
+[void]$sb.AppendLine("")
+[void]$sb.AppendLine("> **Note on runtime TLS.** All runs connect to the broker over plain TCP (port")
+[void]$sb.AppendLine("> 1883). TLS code is **linked in but not exercised** at runtime. Both C")
+[void]$sb.AppendLine("> ``az_mqtt5`` variants **dynamically** link their TLS library (``libssl3`` /")
+[void]$sb.AppendLine("> ``libmbedtls`` come from the runtime container), so the static binary size")
+[void]$sb.AppendLine("> reflects only the wrapper transport code — not the TLS library proper.")
+[void]$sb.AppendLine("> CPU / RSS / heap numbers are pure TCP.")
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("## Workload")
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("Each client, in its own container:")
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("1. Connects to the broker (TCP, MQTT 5).")
-[void]$sb.AppendLine("2. Subscribes to its own topic filter (``perf/<client>/#``) at QoS 1.")
-[void]$sb.AppendLine("3. Publishes the target number of messages to its own topic at QoS 1 (so each")
-[void]$sb.AppendLine("   message loops back and is also counted as *received*). Publishes are issued")
-[void]$sb.AppendLine("   as fast as the client accepts them; no artificial rate-limiting.")
-[void]$sb.AppendLine("4. Drains: waits for remaining inbound messages + PUBACKs using a no-progress")
-[void]$sb.AppendLine("   watchdog (3 s idle, 120 s hard cap).")
+[void]$sb.AppendLine("2. Subscribes to ``perf/<client>/#`` at QoS 1.")
+[void]$sb.AppendLine("3. Publishes the target number of messages at QoS 1 (so each message loops back).")
+[void]$sb.AppendLine("4. Drains remaining inbound + PUBACKs (3 s idle / 120 s hard cap).")
 [void]$sb.AppendLine("5. Disconnects cleanly and emits a JSON report.")
 [void]$sb.AppendLine("")
-$workload = if ($azData) { $azData } elseif ($pahoData) { $pahoData } else { $rustData }
+$workload = if ($azOpensslData) { $azOpensslData } elseif ($azMbedtlsData) { $azMbedtlsData } elseif ($pahoData) { $pahoData } else { $rustData }
 $msgCount = Get-Val $workload "messages_sent"
 $payload  = Get-Val $workload "payload_bytes"
 [void]$sb.AppendLine("| Parameter | Value |")
@@ -273,128 +255,109 @@ $payload  = Get-Val $workload "payload_bytes"
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("## Production Build Flags")
 [void]$sb.AppendLine("")
-[void]$sb.AppendLine("All binaries are built in **Release** mode with settings aimed at minimum")
-[void]$sb.AppendLine("on-disk size and minimum resident code pages.")
-[void]$sb.AppendLine("")
-[void]$sb.AppendLine("### C clients (``az_mqtt5`` and ``paho_mqtt_c``)")
-[void]$sb.AppendLine("")
-[void]$sb.AppendLine("Applied to the ``perf_az_mqtt5`` / ``perf_paho`` CMake targets in")
-[void]$sb.AppendLine("``tests/client-comp/CMakeLists.txt`` when ``CMAKE_BUILD_TYPE=Release`` and the")
-[void]$sb.AppendLine("compiler is GCC or Clang:")
+[void]$sb.AppendLine("### C clients")
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("| Flag | Purpose |")
 [void]$sb.AppendLine("|---|---|")
-[void]$sb.AppendLine("| ``-Os`` | Optimize for size instead of speed. |")
-[void]$sb.AppendLine("| ``-ffunction-sections`` | Put every function in its own ELF section. |")
-[void]$sb.AppendLine("| ``-fdata-sections`` | Put every data object in its own ELF section. |")
-[void]$sb.AppendLine("| ``-fno-unwind-tables`` | Omit ``.eh_frame`` (no C++ EH / no stack unwinders). |")
-[void]$sb.AppendLine("| ``-fno-asynchronous-unwind-tables`` | Omit ``.eh_frame_hdr`` as well. |")
-[void]$sb.AppendLine("| ``-Wl,--gc-sections`` | Drop unreferenced sections at link time (dead-code elimination). |")
-[void]$sb.AppendLine("| ``-Wl,-s`` | Strip ELF symbol/relocation tables from the final binary. |")
+[void]$sb.AppendLine("| ``-Os`` | Optimize for size. |")
+[void]$sb.AppendLine("| ``-ffunction-sections`` / ``-fdata-sections`` | One ELF section per symbol. |")
+[void]$sb.AppendLine("| ``-fno-unwind-tables`` / ``-fno-asynchronous-unwind-tables`` | Omit ``.eh_frame[_hdr]``. |")
+[void]$sb.AppendLine("| ``-Wl,--gc-sections`` | Drop unreferenced sections at link time. |")
+[void]$sb.AppendLine("| ``-Wl,-s`` | Strip symbol/relocation tables. |")
 [void]$sb.AppendLine("")
-[void]$sb.AppendLine("### Rust client (``azure_mqtt``)")
+[void]$sb.AppendLine("The two ``az_mqtt5`` variants differ only by ``-DAZ_MQTT5_TLS_BACKEND=openssl`` vs")
+[void]$sb.AppendLine("``-DAZ_MQTT5_TLS_BACKEND=mbedtls`` passed at CMake configure time, which selects")
+[void]$sb.AppendLine("``src/platform/transport_posix.c`` vs ``src/platform/transport_mbedtls.c`` and")
+[void]$sb.AppendLine("links the matching TLS libraries.")
 [void]$sb.AppendLine("")
-[void]$sb.AppendLine("Applied via ``[profile.release]`` in ``perf_azure_mqtt/Cargo.toml``:")
+[void]$sb.AppendLine("### Rust client")
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("| Setting | Purpose |")
 [void]$sb.AppendLine("|---|---|")
 [void]$sb.AppendLine("| ``opt-level = `"z`"`` | Aggressive size optimization. |")
-[void]$sb.AppendLine("| ``lto = true`` | Fat link-time optimization across all crates. |")
-[void]$sb.AppendLine("| ``codegen-units = 1`` | Single codegen unit: maximum inlining/DCE. |")
-[void]$sb.AppendLine("| ``strip = `"symbols`"`` | Strip symbol tables from the final ELF. |")
-[void]$sb.AppendLine("| ``panic = `"abort`"`` | Drop the unwinding runtime; smaller binary. |")
-[void]$sb.AppendLine("| ``debug = false`` | No debuginfo. |")
-[void]$sb.AppendLine("| ``incremental = false`` | Disable incremental compilation in release. |")
+[void]$sb.AppendLine("| ``lto = true`` | Fat LTO across all crates. |")
+[void]$sb.AppendLine("| ``codegen-units = 1`` | Max inlining / DCE. |")
+[void]$sb.AppendLine("| ``strip = `"symbols`"`` | Strip symbols. |")
+[void]$sb.AppendLine("| ``panic = `"abort`"`` | Drop the unwinding runtime. |")
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("## Results")
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("### Throughput & CPU")
 [void]$sb.AppendLine("")
-[void]$sb.AppendLine("| Metric | az_mqtt5 (C) | paho_mqtt (C) | azure_mqtt (Rust) |")
-[void]$sb.AppendLine("|---|---:|---:|---:|")
-[void]$sb.AppendLine((MdRow "Messages sent"     (Get-Val $azData "messages_sent")     (Get-Val $pahoData "messages_sent")     (Get-Val $rustData "messages_sent")))
-[void]$sb.AppendLine((MdRow "Messages received" (Get-Val $azData "messages_received") (Get-Val $pahoData "messages_received") (Get-Val $rustData "messages_received")))
-[void]$sb.AppendLine((MdRow "PUBACKs received"  (Get-Val $azData "pubacks_received")  (Get-Val $pahoData "pubacks_received")  (Get-Val $rustData "pubacks_received")))
-[void]$sb.AppendLine((MdRow "Elapsed (s)"       (Get-Val $azData "elapsed_sec")       (Get-Val $pahoData "elapsed_sec")       (Get-Val $rustData "elapsed_sec")))
-[void]$sb.AppendLine((MdRow "Send rate (msg/s)" (Get-Val $azData "send_rate_msg_sec") (Get-Val $pahoData "send_rate_msg_sec") (Get-Val $rustData "send_rate_msg_sec")))
-[void]$sb.AppendLine((MdRow "Recv rate (msg/s)" (Get-Val $azData "recv_rate_msg_sec") (Get-Val $pahoData "recv_rate_msg_sec") (Get-Val $rustData "recv_rate_msg_sec")))
-[void]$sb.AppendLine((MdRow "User CPU (s)"      (Get-Val $azData "user_cpu_sec")      (Get-Val $pahoData "user_cpu_sec")      (Get-Val $rustData "user_cpu_sec")))
-[void]$sb.AppendLine((MdRow "System CPU (s)"    (Get-Val $azData "sys_cpu_sec")       (Get-Val $pahoData "sys_cpu_sec")       (Get-Val $rustData "sys_cpu_sec")))
-[void]$sb.AppendLine((MdRow "Total CPU (s)"     (Get-Val $azData "total_cpu_sec")     (Get-Val $pahoData "total_cpu_sec")     (Get-Val $rustData "total_cpu_sec")))
+[void]$sb.AppendLine("| Metric | az_mqtt5 (openssl) | az_mqtt5 (mbedtls) | paho_mqtt (C) | azure_mqtt (Rust) |")
+[void]$sb.AppendLine("|---|---:|---:|---:|---:|")
+[void]$sb.AppendLine((MdRow4 "Messages sent"     (MdCell $azOpensslData "messages_sent")     (MdCell $azMbedtlsData "messages_sent")     (MdCell $pahoData "messages_sent")     (MdCell $rustData "messages_sent")))
+[void]$sb.AppendLine((MdRow4 "Messages received" (MdCell $azOpensslData "messages_received") (MdCell $azMbedtlsData "messages_received") (MdCell $pahoData "messages_received") (MdCell $rustData "messages_received")))
+[void]$sb.AppendLine((MdRow4 "PUBACKs received"  (MdCell $azOpensslData "pubacks_received")  (MdCell $azMbedtlsData "pubacks_received")  (MdCell $pahoData "pubacks_received")  (MdCell $rustData "pubacks_received")))
+[void]$sb.AppendLine((MdRow4 "Elapsed (s)"       (MdCell $azOpensslData "elapsed_sec")       (MdCell $azMbedtlsData "elapsed_sec")       (MdCell $pahoData "elapsed_sec")       (MdCell $rustData "elapsed_sec")))
+[void]$sb.AppendLine((MdRow4 "Send rate (msg/s)" (MdCell $azOpensslData "send_rate_msg_sec") (MdCell $azMbedtlsData "send_rate_msg_sec") (MdCell $pahoData "send_rate_msg_sec") (MdCell $rustData "send_rate_msg_sec")))
+[void]$sb.AppendLine((MdRow4 "Recv rate (msg/s)" (MdCell $azOpensslData "recv_rate_msg_sec") (MdCell $azMbedtlsData "recv_rate_msg_sec") (MdCell $pahoData "recv_rate_msg_sec") (MdCell $rustData "recv_rate_msg_sec")))
+[void]$sb.AppendLine((MdRow4 "User CPU (s)"      (MdCell $azOpensslData "user_cpu_sec")      (MdCell $azMbedtlsData "user_cpu_sec")      (MdCell $pahoData "user_cpu_sec")      (MdCell $rustData "user_cpu_sec")))
+[void]$sb.AppendLine((MdRow4 "System CPU (s)"    (MdCell $azOpensslData "sys_cpu_sec")       (MdCell $azMbedtlsData "sys_cpu_sec")       (MdCell $pahoData "sys_cpu_sec")       (MdCell $rustData "sys_cpu_sec")))
+[void]$sb.AppendLine((MdRow4 "Total CPU (s)"     (MdCell $azOpensslData "total_cpu_sec")     (MdCell $azMbedtlsData "total_cpu_sec")     (MdCell $pahoData "total_cpu_sec")     (MdCell $rustData "total_cpu_sec")))
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("### Runtime Memory")
 [void]$sb.AppendLine("")
-[void]$sb.AppendLine("| Metric | az_mqtt5 (C) | paho_mqtt (C) | azure_mqtt (Rust) |")
-[void]$sb.AppendLine("|---|---:|---:|---:|")
-[void]$sb.AppendLine((MdRow "RSS baseline (before MQTT)" (MdHumanCell $azData "rss_baseline_bytes") (MdHumanCell $pahoData "rss_baseline_bytes") (MdHumanCell $rustData "rss_baseline_bytes")))
-[void]$sb.AppendLine((MdRow "RSS peak (VmHWM)"           (MdHumanCell $azData "peak_rss_bytes")     (MdHumanCell $pahoData "peak_rss_bytes")     (MdHumanCell $rustData "peak_rss_bytes")))
-[void]$sb.AppendLine((MdRow "RSS delta (client cost)"    (MdHumanCell $azData "rss_delta_bytes")    (MdHumanCell $pahoData "rss_delta_bytes")    (MdHumanCell $rustData "rss_delta_bytes")))
-[void]$sb.AppendLine((MdRow "Heap baseline (``mallinfo2``)" (MdHumanCell $azData "heap_baseline_bytes") (MdHumanCell $pahoData "heap_baseline_bytes") "n/a"))
-[void]$sb.AppendLine((MdRow "Heap peak (``mallinfo2``)"     (MdHumanCell $azData "heap_peak_bytes")     (MdHumanCell $pahoData "heap_peak_bytes")     "n/a"))
-[void]$sb.AppendLine((MdRow "Heap delta (client allocs)"    (MdHumanCell $azData "heap_delta_bytes")    (MdHumanCell $pahoData "heap_delta_bytes")    "n/a"))
+[void]$sb.AppendLine("| Metric | az_mqtt5 (openssl) | az_mqtt5 (mbedtls) | paho_mqtt (C) | azure_mqtt (Rust) |")
+[void]$sb.AppendLine("|---|---:|---:|---:|---:|")
+[void]$sb.AppendLine((MdRow4 "RSS baseline (before MQTT)" (MdHumanCell $azOpensslData "rss_baseline_bytes") (MdHumanCell $azMbedtlsData "rss_baseline_bytes") (MdHumanCell $pahoData "rss_baseline_bytes") (MdHumanCell $rustData "rss_baseline_bytes")))
+[void]$sb.AppendLine((MdRow4 "RSS peak (VmHWM)"           (MdHumanCell $azOpensslData "peak_rss_bytes")     (MdHumanCell $azMbedtlsData "peak_rss_bytes")     (MdHumanCell $pahoData "peak_rss_bytes")     (MdHumanCell $rustData "peak_rss_bytes")))
+[void]$sb.AppendLine((MdRow4 "RSS delta (client cost)"    (MdHumanCell $azOpensslData "rss_delta_bytes")    (MdHumanCell $azMbedtlsData "rss_delta_bytes")    (MdHumanCell $pahoData "rss_delta_bytes")    (MdHumanCell $rustData "rss_delta_bytes")))
+[void]$sb.AppendLine((MdRow4 "Heap baseline (``mallinfo2``)" (MdHumanCell $azOpensslData "heap_baseline_bytes") (MdHumanCell $azMbedtlsData "heap_baseline_bytes") (MdHumanCell $pahoData "heap_baseline_bytes") "n/a"))
+[void]$sb.AppendLine((MdRow4 "Heap peak (``mallinfo2``)"     (MdHumanCell $azOpensslData "heap_peak_bytes")     (MdHumanCell $azMbedtlsData "heap_peak_bytes")     (MdHumanCell $pahoData "heap_peak_bytes")     "n/a"))
+[void]$sb.AppendLine((MdRow4 "Heap delta (client allocs)"    (MdHumanCell $azOpensslData "heap_delta_bytes")    (MdHumanCell $azMbedtlsData "heap_delta_bytes")    (MdHumanCell $pahoData "heap_delta_bytes")    "n/a"))
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("**Notes:**")
 [void]$sb.AppendLine("")
-[void]$sb.AppendLine("- **RSS baseline** is ``VmRSS`` sampled after process start, argv parsing, and")
-[void]$sb.AppendLine("  payload buffer initialisation, but **before** any MQTT client, socket, or")
-[void]$sb.AppendLine("  async runtime is touched. This captures the unavoidable cost of the process")
-[void]$sb.AppendLine("  image itself: libc pages, loader, stack, TLS, stdio buffers.")
-[void]$sb.AppendLine("- **RSS peak** is ``VmHWM`` (``ru_maxrss`` on Linux) at end of run.")
+[void]$sb.AppendLine("- **RSS baseline** is sampled after process start, argv parsing, and payload")
+[void]$sb.AppendLine("  buffer init — but **before** any MQTT client, socket, or async runtime is")
+[void]$sb.AppendLine("  touched.")
+[void]$sb.AppendLine("- **RSS peak** is ``VmHWM`` (``ru_maxrss``) at end of run.")
 [void]$sb.AppendLine("- **RSS delta** (peak − baseline) is the closest single-number approximation")
 [void]$sb.AppendLine("  to *the memory the client library actually caused this process to consume*.")
-[void]$sb.AppendLine("- **Heap baseline / peak / delta** are ``mallinfo2().uordblks`` (glibc")
-[void]$sb.AppendLine("  ptmalloc in-use bytes) around the run. For ``az_mqtt5`` this should be ≈0")
-[void]$sb.AppendLine("  because the library never calls ``malloc`` itself — any non-zero value comes")
-[void]$sb.AppendLine("  from stdio, ``getaddrinfo``, or libc internals. Not tracked for Rust (would")
-[void]$sb.AppendLine("  require a custom ``GlobalAlloc`` wrapper).")
+[void]$sb.AppendLine("- **Heap** numbers use ``mallinfo2().uordblks`` (glibc ptmalloc in-use bytes).")
+[void]$sb.AppendLine("  ``az_mqtt5`` never calls ``malloc`` itself; any non-zero value comes from")
+[void]$sb.AppendLine("  libc internals, stdio, or ``getaddrinfo``. Not tracked for Rust.")
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("### Static Binary Footprint")
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("Sizes of the stripped, size-optimized Release ELF binaries, measured with")
-[void]$sb.AppendLine("``stat`` (on-disk size) and ``size`` (text/data/bss sections) inside the same")
-[void]$sb.AppendLine("Docker images used for the runs.")
+[void]$sb.AppendLine("``stat`` (on-disk size) and ``size`` (text/data/bss sections) inside each image.")
 [void]$sb.AppendLine("")
-[void]$sb.AppendLine("| Metric | az_mqtt5 (C) | paho_mqtt (C) | azure_mqtt (Rust) |")
-[void]$sb.AppendLine("|---|---:|---:|---:|")
-[void]$sb.AppendLine((MdRow "Binary on disk" (Format-Human $azBinSize) (Format-Human $pahoBinSize) (Format-Human $rustBinSize)))
-if ($azSections -or $pahoSections -or $rustSections) {
-    $tText = { param($s) if ($s) { Format-Human $s.text } else { "-" } }
-    $tData = { param($s) if ($s) { Format-Human $s.data } else { "-" } }
-    $tBss  = { param($s) if ($s) { Format-Human $s.bss  } else { "-" } }
-    [void]$sb.AppendLine((MdRow ".text (code)"      (& $tText $azSections) (& $tText $pahoSections) (& $tText $rustSections)))
-    [void]$sb.AppendLine((MdRow ".data (init'd)"    (& $tData $azSections) (& $tData $pahoSections) (& $tData $rustSections)))
-    [void]$sb.AppendLine((MdRow ".bss (zero-init)"  (& $tBss  $azSections) (& $tBss  $pahoSections) (& $tBss  $rustSections)))
-}
+[void]$sb.AppendLine("| Metric | az_mqtt5 (openssl) | az_mqtt5 (mbedtls) | paho_mqtt (C) | azure_mqtt (Rust) |")
+[void]$sb.AppendLine("|---|---:|---:|---:|---:|")
+[void]$sb.AppendLine((MdRow4 "Binary on disk"   (Format-Human $azOpensslBinSize) (Format-Human $azMbedtlsBinSize) (Format-Human $pahoBinSize) (Format-Human $rustBinSize)))
+[void]$sb.AppendLine((MdRow4 ".text (code)"     (SecField $azOpensslSections text) (SecField $azMbedtlsSections text) (SecField $pahoSections text) (SecField $rustSections text)))
+[void]$sb.AppendLine((MdRow4 ".data (init'd)"   (SecField $azOpensslSections data) (SecField $azMbedtlsSections data) (SecField $pahoSections data) (SecField $rustSections data)))
+[void]$sb.AppendLine((MdRow4 ".bss (zero-init)" (SecField $azOpensslSections bss)  (SecField $azMbedtlsSections bss)  (SecField $pahoSections bss)  (SecField $rustSections bss)))
 [void]$sb.AppendLine("")
-[void]$sb.AppendLine("- ``.text`` is the executable code.")
+[void]$sb.AppendLine("- ``.text`` is executable code. Both ``az_mqtt5`` variants dynamically link")
+[void]$sb.AppendLine("  their TLS library, so the TLS code itself does **not** appear here; the")
+[void]$sb.AppendLine("  small delta between them reflects only the wrapper (``transport_posix.c`` vs")
+[void]$sb.AppendLine("  ``transport_mbedtls.c``).")
 [void]$sb.AppendLine("- ``.data`` is pre-initialized writable globals.")
-[void]$sb.AppendLine("- ``.bss`` is zero-initialized writable globals (occupies no file space but is")
-[void]$sb.AppendLine("  allocated at load time). Large ``.bss`` in C harnesses reflects the")
-[void]$sb.AppendLine("  static send/receive/payload buffers (``SEND_BUFFER_SIZE`` = 64 KiB, etc.).")
+[void]$sb.AppendLine("- ``.bss`` is zero-initialized writable globals — dominated by the caller's")
+[void]$sb.AppendLine("  static send / receive / payload / transport buffers.")
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("## Interpretation")
 [void]$sb.AppendLine("")
-[void]$sb.AppendLine("- **Throughput**: all three clients saturate roughly the same range on a")
-[void]$sb.AppendLine("  loopback broker; throughput is broker-bound more than client-bound.")
-[void]$sb.AppendLine("- **CPU**: ``az_mqtt5`` is the cheapest by a wide margin because it has no")
-[void]$sb.AppendLine("  internal threads and no heap traffic — all buffers are supplied by the")
-[void]$sb.AppendLine("  caller as ``az_span``s over static arrays.")
-[void]$sb.AppendLine("- **Memory**: most of the reported RSS is process baseline (libc, stack, TLS,")
-[void]$sb.AppendLine("  I/O buffers). See **RSS delta** and **Heap delta** for the")
-[void]$sb.AppendLine("  client-attributable numbers. ``az_mqtt5`` is expected to show a heap delta")
-[void]$sb.AppendLine("  of essentially zero, which is the designed behaviour for a zero-allocation")
-[void]$sb.AppendLine("  library.")
-[void]$sb.AppendLine("- **Binary size**: size-optimized ``az_mqtt5`` binary is smaller than")
-[void]$sb.AppendLine("  ``paho`` by roughly 3× and smaller than the Rust binary by two orders of")
-[void]$sb.AppendLine("  magnitude — primarily because the Rust binary statically links Tokio,")
-[void]$sb.AppendLine("  OpenSSL, ``std``, and the full async runtime.")
+[void]$sb.AppendLine("- **Throughput / CPU**: unchanged by TLS backend at runtime (runtime is plain")
+[void]$sb.AppendLine("  TCP). The two ``az_mqtt5`` columns should be statistically identical; any")
+[void]$sb.AppendLine("  delta is measurement noise.")
+[void]$sb.AppendLine("- **Binary footprint**: with *dynamic* TLS linkage the openssl-vs-mbedtls gap")
+[void]$sb.AppendLine("  is small (only the wrapper differs). To surface the real TLS library")
+[void]$sb.AppendLine("  footprint, rebuild against static TLS libraries.")
+[void]$sb.AppendLine("- **Memory**: most RSS is the process baseline (libc, stack, thread-local")
+[void]$sb.AppendLine("  storage, I/O buffers). See **RSS delta** and **Heap delta** for the")
+[void]$sb.AppendLine("  client-attributable portion. ``az_mqtt5``'s heap delta is essentially zero")
+[void]$sb.AppendLine("  (by design — no internal ``malloc``).")
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("## Reproducing")
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("From ``tests/client-comp``:")
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("``````powershell")
-[void]$sb.AppendLine(".\run.ps1              # full pipeline: build, run all 3, compare, teardown")
+[void]$sb.AppendLine(".\run.ps1              # full pipeline: build, run all 4, compare, teardown")
 [void]$sb.AppendLine(".\run.ps1 -Keep        # keep the broker running after the report")
 [void]$sb.AppendLine(".\teardown.ps1         # stop & remove the broker")
 [void]$sb.AppendLine("``````")
@@ -404,128 +367,3 @@ if ($azSections -or $pahoSections -or $rustSections) {
 
 Set-Content -Path $mdPath -Value $sb.ToString() -Encoding UTF8
 Write-Host "Markdown report saved to: $mdPath"
-<# compare.ps1 – Find the latest result files for each client, merge, and display
-   a side-by-side comparison table including memory footprint data.
-   Outputs both a table to the terminal and a consolidated JSON. #>
-
-$ErrorActionPreference = "Stop"
-$ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$ResultsDir = Join-Path $ScriptDir "results"
-$Timestamp  = Get-Date -Format "yyyyMMdd_HHmmss"
-
-# Find latest result per client
-$azFiles   = Get-ChildItem -Path $ResultsDir -Filter "az_mqtt5_*.json"    -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
-$pahoFiles = Get-ChildItem -Path $ResultsDir -Filter "paho_*.json"        -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
-$rustFiles = Get-ChildItem -Path $ResultsDir -Filter "azure_mqtt_*.json"  -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
-
-if (-not $azFiles -and -not $pahoFiles -and -not $rustFiles) {
-    Write-Error "No result files found in $ResultsDir.  Run run.ps1 first."
-    exit 1
-}
-
-$azData   = if ($azFiles)   { Get-Content $azFiles[0].FullName   | ConvertFrom-Json } else { $null }
-$pahoData = if ($pahoFiles) { Get-Content $pahoFiles[0].FullName | ConvertFrom-Json } else { $null }
-$rustData = if ($rustFiles) { Get-Content $rustFiles[0].FullName | ConvertFrom-Json } else { $null }
-
-# ── Collect binary sizes from Docker images ───────────────────
-
-function Get-DockerBinSize($image, $binPath) {
-    try {
-        $sizeStr = docker run --rm --entrypoint stat $image -c "%s" $binPath 2>$null
-        if ($sizeStr) { return [int64]$sizeStr.Trim() }
-    } catch { }
-    return $null
-}
-
-$azBinSize   = Get-DockerBinSize "perf-az-mqtt5:latest"   "/usr/local/bin/perf_az_mqtt5"
-$pahoBinSize = Get-DockerBinSize "perf-paho:latest"        "/usr/local/bin/perf_paho"
-$rustBinSize = Get-DockerBinSize "perf-azure-mqtt:latest"  "/usr/local/bin/perf_azure_mqtt"
-
-# Save consolidated JSON
-$comp = @{
-    timestamp        = $Timestamp
-    az_mqtt5         = $azData
-    paho_mqtt_c      = $pahoData
-    azure_mqtt_rust  = $rustData
-    footprint = @{
-        az_mqtt5_binary_bytes        = $azBinSize
-        paho_mqtt_c_binary_bytes     = $pahoBinSize
-        azure_mqtt_rust_binary_bytes = $rustBinSize
-    }
-}
-$compFile = Join-Path $ResultsDir "comparison_${Timestamp}.json"
-$comp | ConvertTo-Json -Depth 5 | Set-Content $compFile
-Write-Host "Consolidated JSON saved to: $compFile`n"
-
-# ── Helper functions ──────────────────────────────────────────
-
-function Get-Val($obj, $field) {
-    if ($null -eq $obj) { return "-" }
-    $v = $obj.PSObject.Properties[$field]
-    if ($null -eq $v) { return "-" }
-    return $v.Value
-}
-
-function Format-Human($bytes) {
-    if ($null -eq $bytes) { return "-" }
-    if ($bytes -ge 1MB) { return "{0:N1} MB" -f ($bytes / 1MB) }
-    if ($bytes -ge 1KB) { return "{0:N1} KB" -f ($bytes / 1KB) }
-    return "$bytes B"
-}
-
-# ── Performance Table ─────────────────────────────────────────
-
-$fields = @(
-    @("Messages sent",        "messages_sent"),
-    @("Messages received",    "messages_received"),
-    @("PUBACKs received",     "pubacks_received"),
-    @("Elapsed (sec)",        "elapsed_sec"),
-    @("Send rate (msg/s)",    "send_rate_msg_sec"),
-    @("Recv rate (msg/s)",    "recv_rate_msg_sec"),
-    @("User CPU (sec)",       "user_cpu_sec"),
-    @("System CPU (sec)",     "sys_cpu_sec"),
-    @("Total CPU (sec)",      "total_cpu_sec"),
-    @("Peak RSS (bytes)",     "peak_rss_bytes")
-)
-
-Write-Host ""
-Write-Host ("=" * 82)
-Write-Host "                   MQTT CLIENT PERFORMANCE COMPARISON"
-Write-Host ("=" * 82)
-Write-Host ""
-
-$fmt = "{0,-24} {1,16} {2,16} {3,16}"
-Write-Host ($fmt -f "Metric", "az_mqtt5 (C)", "paho_mqtt (C)", "azure_mqtt (Rust)")
-Write-Host ($fmt -f ("-" * 24), ("-" * 16), ("-" * 16), ("-" * 16))
-
-foreach ($f in $fields) {
-    $label = $f[0]
-    $key   = $f[1]
-    $a = Get-Val $azData   $key
-    $b = Get-Val $pahoData $key
-    $c = Get-Val $rustData $key
-    Write-Host ($fmt -f $label, $a, $b, $c)
-}
-
-# ── Memory Footprint Table ────────────────────────────────────
-
-Write-Host ""
-Write-Host ($fmt -f "-- Memory Footprint --", "", "", "")
-Write-Host ($fmt -f ("-" * 24), ("-" * 16), ("-" * 16), ("-" * 16))
-Write-Host ($fmt -f "Binary on disk", (Format-Human $azBinSize), (Format-Human $pahoBinSize), (Format-Human $rustBinSize))
-
-Write-Host ""
-
-# ── Broker snapshots ──────────────────────────────────────────
-
-$azBroker   = Get-ChildItem -Path $ResultsDir -Filter "broker_az_mqtt5_*.json"    -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-$pahoBroker = Get-ChildItem -Path $ResultsDir -Filter "broker_paho_*.json"        -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-$rustBroker = Get-ChildItem -Path $ResultsDir -Filter "broker_azure_mqtt_*.json"  -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-
-if ($azBroker -or $pahoBroker -or $rustBroker) {
-    Write-Host "Broker stat snapshots:"
-    if ($azBroker)   { Write-Host "  az_mqtt5 run    : $($azBroker.FullName)" }
-    if ($pahoBroker) { Write-Host "  paho run        : $($pahoBroker.FullName)" }
-    if ($rustBroker) { Write-Host "  azure_mqtt run  : $($rustBroker.FullName)" }
-    Write-Host "(Inspect these files to compare broker-side resource usage between runs.)"
-}

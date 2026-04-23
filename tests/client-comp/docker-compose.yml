@@ -25,13 +25,22 @@ services:
       timeout: 5s
       retries: 12
 
-  # ── az_mqtt5 (C) perf binary ─────────────────────────────────
-  perf-az-mqtt5:
+  # ── az_mqtt5 (C / OpenSSL) perf binary ───────────────────────
+  perf-az-mqtt5-openssl:
     build:
       context: ../..
-      dockerfile: tests/client-comp/Dockerfile.az_mqtt5
-    image: perf-az-mqtt5:latest
-    container_name: perf-az-mqtt5
+      dockerfile: tests/client-comp/Dockerfile.az_mqtt5_openssl
+    image: perf-az-mqtt5-openssl:latest
+    container_name: perf-az-mqtt5-openssl
+    profiles: ["build-only"]
+
+  # ── az_mqtt5 (C / mbedTLS) perf binary ───────────────────────
+  perf-az-mqtt5-mbedtls:
+    build:
+      context: ../..
+      dockerfile: tests/client-comp/Dockerfile.az_mqtt5_mbedtls
+    image: perf-az-mqtt5-mbedtls:latest
+    container_name: perf-az-mqtt5-mbedtls
     profiles: ["build-only"]
 
   # ── Paho MQTT C perf binary ──────────────────────────────────

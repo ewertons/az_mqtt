@@ -1,0 +1,45 @@
+# Dockerfile.az_mqtt5_openssl – az_mqtt5 (C) perf test built with OpenSSL TLS backend.
+#
+# Build context must be the repository root (az_mqtt5/).
+# Usage:
+#   docker build -f tests/client-comp/Dockerfile.az_mqtt5_openssl -t perf-az-mqtt5-openssl:latest .
+
+# ── Build stage ───────────────────────────────────────────────
+FROM ubuntu:24.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git ca-certificates \
+        libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy project tree (needed for library + deps)
+COPY CMakeLists.txt ./
+COPY deps/ ./deps/
+COPY inc/ ./inc/
+COPY src/ ./src/
+COPY tests/client-comp/CMakeLists.txt tests/client-comp/
+COPY tests/client-comp/perf_az_mqtt5.c tests/client-comp/
+COPY tests/client-comp/perf_paho.c tests/client-comp/
+
+# Build only the perf binary with OpenSSL TLS backend.
+RUN cmake -S tests/client-comp -B out -DCMAKE_BUILD_TYPE=Release \
+        -DAZ_MQTT5_ROOT=/build \
+        -DAZ_MQTT5_TLS_BACKEND=openssl \
+        -DAZ_MQTT5_BUILD_SAMPLES=OFF \
+        -DAZ_MQTT5_BUILD_TESTS=OFF \
+    && cmake --build out --config Release --target perf_az_mqtt5
+
+# ── Runtime stage ─────────────────────────────────────────────
+FROM ubuntu:24.04
+
+# OpenSSL runtime (libssl3t64 is the Ubuntu 24.04 split package).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libssl3t64 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/out/perf_az_mqtt5 /usr/local/bin/perf_az_mqtt5
+
+ENTRYPOINT ["perf_az_mqtt5"]
+CMD ["localhost", "1883", "10000", "128", "30"]

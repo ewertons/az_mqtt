@@ -48,7 +48,10 @@
 
 static uint8_t s_send_buf[SEND_BUFFER_SIZE];
 static uint8_t s_recv_buf[RECV_BUFFER_SIZE];
-static uint8_t s_transport_buf[256];
+// Large enough for either TLS backend. The transport struct embeds backend
+// state directly (OpenSSL: a few pointers; mbedTLS: full ssl_context,
+// ssl_config, entropy, ctr_drbg, x509_crt, pk_context).
+static uint8_t s_transport_buf[16384];
 
 static az_mqtt5_user_property s_connack_up[MAX_USER_PROPERTIES];
 static az_mqtt5_user_property s_pub_up[MAX_USER_PROPERTIES];

@@ -1,4 +1,4 @@
-<# run.ps1 – One-shot script: setup, run all three clients sequentially, compare, teardown.
+<# run.ps1 – One-shot script: setup, run all four clients sequentially, compare, teardown.
    All clients run in Ubuntu 24.04 Docker containers for fair comparison.
 
    Usage:
@@ -20,36 +20,41 @@ Write-Host "================================================================"
 Write-Host ""
 
 # -- 1. Setup --
-Write-Host ">>> Step 1/6: Setup (build Docker images + start broker)"
+Write-Host ">>> Step 1/7: Setup (build Docker images + start broker)"
 & "$ScriptDir\setup.ps1"
 Write-Host ""
 
-# -- 2. Run az_mqtt5 (C) --
-Write-Host ">>> Step 2/6: Run az_mqtt5 (C)"
-& "$ScriptDir\run_az_mqtt5.ps1"
+# -- 2. Run az_mqtt5 (C / OpenSSL) --
+Write-Host ">>> Step 2/7: Run az_mqtt5 (C / OpenSSL)"
+& "$ScriptDir\run_az_mqtt5_openssl.ps1"
 Write-Host ""
 
-# -- 3. Run Paho MQTT C --
-Write-Host ">>> Step 3/6: Run Paho MQTT C"
+# -- 3. Run az_mqtt5 (C / mbedTLS) --
+Write-Host ">>> Step 3/7: Run az_mqtt5 (C / mbedTLS)"
+& "$ScriptDir\run_az_mqtt5_mbedtls.ps1"
+Write-Host ""
+
+# -- 4. Run Paho MQTT C --
+Write-Host ">>> Step 4/7: Run Paho MQTT C"
 & "$ScriptDir\run_paho.ps1"
 Write-Host ""
 
-# -- 4. Run azure_mqtt (Rust) --
-Write-Host ">>> Step 4/6: Run azure_mqtt (Rust)"
+# -- 5. Run azure_mqtt (Rust) --
+Write-Host ">>> Step 5/7: Run azure_mqtt (Rust)"
 & "$ScriptDir\run_azure_mqtt.ps1"
 Write-Host ""
 
-# -- 5. Compare --
-Write-Host ">>> Step 5/6: Compare results"
+# -- 6. Compare --
+Write-Host ">>> Step 6/7: Compare results"
 & "$ScriptDir\compare.ps1"
 Write-Host ""
 
-# -- 6. Teardown --
+# -- 7. Teardown --
 if ($Keep) {
-    Write-Host ">>> Step 6/6: Teardown SKIPPED (-Keep flag)."
+    Write-Host ">>> Step 7/7: Teardown SKIPPED (-Keep flag)."
     Write-Host "  Run  .\teardown.ps1  when done."
 } else {
-    Write-Host ">>> Step 6/6: Teardown"
+    Write-Host ">>> Step 7/7: Teardown"
     & "$ScriptDir\teardown.ps1"
 }
 

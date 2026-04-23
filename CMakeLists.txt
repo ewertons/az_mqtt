@@ -32,8 +32,17 @@ set(AZ_MQTT5_SOURCES
   src/az_mqtt5_client.c
 )
 
+# TLS backend selection. Valid values: auto (default), openssl, mbedtls, none.
+#   auto   — use OpenSSL if found, otherwise no TLS.
+#   openssl — require OpenSSL; compile transport_posix.c with OpenSSL.
+#   mbedtls — require mbedTLS; compile transport_mbedtls.c.
+#   none   — compile transport_posix.c without any TLS support.
+set(AZ_MQTT5_TLS_BACKEND "auto" CACHE STRING "TLS backend: auto | openssl | mbedtls | none")
+
 if(WIN32)
   list(APPEND AZ_MQTT5_SOURCES src/platform/transport_win32.c)
+elseif(AZ_MQTT5_TLS_BACKEND STREQUAL "mbedtls")
+  list(APPEND AZ_MQTT5_SOURCES src/platform/transport_mbedtls.c)
 else()
   list(APPEND AZ_MQTT5_SOURCES src/platform/transport_posix.c)
 endif()
@@ -51,14 +60,36 @@ target_link_libraries(az_mqtt5_client
     az::core
 )
 
-# OpenSSL for TLS (optional)
-find_package(OpenSSL QUIET)
-if(OpenSSL_FOUND)
-  target_compile_definitions(az_mqtt5_client PRIVATE AZ_MQTT5_TLS_OPENSSL)
-  target_link_libraries(az_mqtt5_client PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-  message(STATUS "az_mqtt5_client: TLS support enabled (OpenSSL)")
+# Wire the selected TLS backend.
+if(WIN32)
+  target_compile_definitions(az_mqtt5_client PRIVATE AZ_MQTT5_TLS_SCHANNEL)
+  target_link_libraries(az_mqtt5_client PRIVATE secur32 crypt32)
+  message(STATUS "az_mqtt5_client: TLS backend = Schannel")
+elseif(AZ_MQTT5_TLS_BACKEND STREQUAL "mbedtls")
+  find_library(MBEDTLS_SSL_LIB    NAMES mbedtls    REQUIRED)
+  find_library(MBEDTLS_X509_LIB   NAMES mbedx509   REQUIRED)
+  find_library(MBEDTLS_CRYPTO_LIB NAMES mbedcrypto REQUIRED)
+  target_compile_definitions(az_mqtt5_client PRIVATE AZ_MQTT5_TLS_MBEDTLS)
+  # Order matters: ssl depends on x509 depends on crypto.
+  target_link_libraries(az_mqtt5_client PRIVATE
+      ${MBEDTLS_SSL_LIB} ${MBEDTLS_X509_LIB} ${MBEDTLS_CRYPTO_LIB})
+  message(STATUS "az_mqtt5_client: TLS backend = mbedTLS")
+elseif(AZ_MQTT5_TLS_BACKEND STREQUAL "openssl"
+  OR AZ_MQTT5_TLS_BACKEND STREQUAL "auto")
+  if(AZ_MQTT5_TLS_BACKEND STREQUAL "openssl")
+    find_package(OpenSSL REQUIRED)
+  else()
+    find_package(OpenSSL QUIET)
+  endif()
+  if(OpenSSL_FOUND)
+    target_compile_definitions(az_mqtt5_client PRIVATE AZ_MQTT5_TLS_OPENSSL)
+    target_link_libraries(az_mqtt5_client PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    message(STATUS "az_mqtt5_client: TLS backend = OpenSSL")
+  else()
+    message(STATUS "az_mqtt5_client: TLS support disabled (OpenSSL not found)")
+  endif()
 else()
-  message(STATUS "az_mqtt5_client: TLS support disabled (OpenSSL not found)")
+  message(STATUS "az_mqtt5_client: TLS support disabled (backend = none)")
 endif()
 
 # Platform-specific link libraries

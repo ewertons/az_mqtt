@@ -15,8 +15,10 @@ foreach ($cmd in @("docker")) {
 Write-Host "  docker found."
 
 Write-Host "=== [2/4] Building C perf Docker images ==="
-& docker compose -f (Join-Path $ScriptDir "docker-compose.yml") build perf-az-mqtt5
-Write-Host "  Docker image perf-az-mqtt5:latest built."
+& docker compose -f (Join-Path $ScriptDir "docker-compose.yml") build perf-az-mqtt5-openssl
+Write-Host "  Docker image perf-az-mqtt5-openssl:latest built."
+& docker compose -f (Join-Path $ScriptDir "docker-compose.yml") build perf-az-mqtt5-mbedtls
+Write-Host "  Docker image perf-az-mqtt5-mbedtls:latest built."
 & docker compose -f (Join-Path $ScriptDir "docker-compose.yml") build perf-paho
 Write-Host "  Docker image perf-paho:latest built."
 
@@ -51,7 +53,7 @@ for ($i = 0; $i -lt 30; $i++) {
 New-Item -ItemType Directory -Force -Path $ResultsDir | Out-Null
 
 Write-Host "=== Setup complete ==="
-Write-Host "  Images      : perf-az-mqtt5:latest  perf-paho:latest  perf-azure-mqtt:latest"
+Write-Host "  Images      : perf-az-mqtt5-openssl:latest  perf-az-mqtt5-mbedtls:latest  perf-paho:latest  perf-azure-mqtt:latest"
 Write-Host "  Results     : $ResultsDir"
 Write-Host "  EMQX        : mqtt://localhost:1883  dashboard http://localhost:18083"
 Write-Host ""

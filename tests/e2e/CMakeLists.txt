@@ -1,21 +1,49 @@
 # Copyright (c) az_mqtt5_client contributors. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# ── Integration test: connect/disconnect ─────────────────────
+function(add_az_mqtt5_e2e_test target_name source_file)
+  add_executable(${target_name}
+    ${source_file}
+    test_common.c
+  )
 
-add_executable(az_mqtt5_test_connect
-  test_connect.c
-)
+  target_include_directories(${target_name}
+    PRIVATE
+      ${cmocka_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}
+  )
 
-target_include_directories(az_mqtt5_test_connect
-  PRIVATE
-    ${cmocka_SOURCE_DIR}/include
-)
+  target_link_libraries(${target_name}
+    PRIVATE
+      az_mqtt5::client
+      cmocka
+  )
 
-target_link_libraries(az_mqtt5_test_connect
-  PRIVATE
-    az_mqtt5::client
-    cmocka
-)
+  add_test(NAME ${target_name} COMMAND ${target_name})
+endfunction()
 
-add_test(NAME az_mqtt5_test_connect COMMAND az_mqtt5_test_connect)
+# ── Integration tests: plain TCP ──────────────────────────────
+
+add_az_mqtt5_e2e_test(az_mqtt5_test_connect test_connect.c)
+add_az_mqtt5_e2e_test(az_mqtt5_test_publish test_publish.c)
+add_az_mqtt5_e2e_test(az_mqtt5_test_subscribe test_subscribe.c)
+
+# ── Integration tests: TLS (OS-specific) ─────────────────────
+
+if(WIN32)
+  add_az_mqtt5_e2e_test(az_mqtt5_test_ssl_win32 test_ssl_win32.c)
+  file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}/tests/broker/certs/ca.crt" E2E_CA_CERT_PATH)
+  target_compile_definitions(
+    az_mqtt5_test_ssl_win32
+    PRIVATE
+      E2E_WIN32_TLS_BACKEND_AVAILABLE=1
+      E2E_CA_CERT_PATH="${E2E_CA_CERT_PATH}")
+elseif(UNIX)
+  if(OpenSSL_FOUND)
+    file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}/tests/broker/certs/ca.crt" E2E_CA_CERT_PATH)
+    add_az_mqtt5_e2e_test(az_mqtt5_test_ssl_posix test_ssl_posix.c)
+    target_compile_definitions(az_mqtt5_test_ssl_posix PRIVATE E2E_CA_CERT_PATH="${E2E_CA_CERT_PATH}")
+  else()
+    message(STATUS "Skipping POSIX TLS e2e tests: OpenSSL not found")
+  endif()
+endif()
