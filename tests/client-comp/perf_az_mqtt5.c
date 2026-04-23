@@ -44,6 +44,9 @@
 #define MAX_SUBACK_REASON_CODES 4
 #define MAX_PAYLOAD_SIZE 8192
 
+#define AZ_MQTT5_SPAN_FROM_ARRAY(ARRAY) \
+  AZ_SPAN_FROM_BUFFER(*(uint8_t(*)[sizeof(ARRAY)])(ARRAY))
+
 // ─────────────── static buffers (zero-allocation) ────────────
 
 static uint8_t s_send_buf[SEND_BUFFER_SIZE];
@@ -233,18 +236,13 @@ int main(int argc, char* argv[])
   opts.on_publish = on_publish;
   opts.on_puback = on_puback;
 
-  opts.connack_user_properties = s_connack_up;
-  opts.connack_user_property_capacity = MAX_USER_PROPERTIES;
-  opts.publish_user_properties = s_pub_up;
-  opts.publish_subscription_identifiers = s_pub_sub_ids;
-  opts.suback_reason_codes = s_sub_rc;
-  opts.suback_reason_code_capacity = MAX_SUBACK_REASON_CODES;
-  opts.suback_user_properties = s_sub_up;
-  opts.suback_user_property_capacity = MAX_USER_PROPERTIES;
-  opts.ack_user_properties = s_ack_up;
-  opts.ack_user_property_capacity = MAX_USER_PROPERTIES;
-  opts.disconnect_user_properties = s_disc_up;
-  opts.disconnect_user_property_capacity = MAX_USER_PROPERTIES;
+  opts.connack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_connack_up);
+  opts.publish_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_pub_up);
+  opts.publish_subscription_identifiers = AZ_MQTT5_SPAN_FROM_ARRAY(s_pub_sub_ids);
+  opts.suback_reason_codes = AZ_MQTT5_SPAN_FROM_ARRAY(s_sub_rc);
+  opts.suback_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_sub_up);
+  opts.ack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_ack_up);
+  opts.disconnect_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_disc_up);
 
   az_mqtt5_client client;
   rc = az_mqtt5_client_init(&client, &opts);

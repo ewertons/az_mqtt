@@ -22,6 +22,9 @@
 #include <stdint.h>
 
 // cmocka must be included after the standard headers above
+
+#define AZ_MQTT5_SPAN_FROM_ARRAY(ARRAY) \
+  AZ_SPAN_FROM_BUFFER(*(uint8_t(*)[sizeof(ARRAY)])(ARRAY))
 #include <cmocka.h>
 
 #include <az_mqtt5/az_mqtt5_client.h>
@@ -201,20 +204,13 @@ static void test_connect_failure(void** state)
   opts.hostname = AZ_SPAN_FROM_STR("127.0.0.1");
   opts.port = 19999; // Nothing is listening here
   opts.tls_options = NULL;
-  opts.connack_user_properties = s_fixture.connack_props;
-  opts.connack_user_property_capacity = E2E_MAX_USER_PROPS;
-  opts.publish_user_properties = s_fixture.publish_props;
-  opts.publish_user_property_capacity = E2E_MAX_USER_PROPS;
-  opts.publish_subscription_identifiers = s_fixture.publish_subscription_ids;
-  opts.publish_subscription_identifier_capacity = E2E_MAX_USER_PROPS;
-  opts.suback_reason_codes = s_fixture.suback_reasons;
-  opts.suback_reason_code_capacity = E2E_MAX_REASON_CODES;
-  opts.suback_user_properties = s_fixture.suback_props;
-  opts.suback_user_property_capacity = E2E_MAX_USER_PROPS;
-  opts.ack_user_properties = s_fixture.ack_props;
-  opts.ack_user_property_capacity = E2E_MAX_USER_PROPS;
-  opts.disconnect_user_properties = s_fixture.disconnect_props;
-  opts.disconnect_user_property_capacity = E2E_MAX_USER_PROPS;
+  opts.connack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.connack_props);
+  opts.publish_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.publish_props);
+  opts.publish_subscription_identifiers = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.publish_subscription_ids);
+  opts.suback_reason_codes = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.suback_reasons);
+  opts.suback_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.suback_props);
+  opts.ack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.ack_props);
+  opts.disconnect_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.disconnect_props);
 
   az_mqtt5_client client;
   rc = az_mqtt5_client_init(&client, &opts);

@@ -107,33 +107,26 @@ typedef struct
   /** @brief User context pointer (passthrough, not used by the library). */
   void* user_context;
 
-  /** @brief Buffer for user properties in received CONNACK. */
-  az_mqtt5_user_property* connack_user_properties;
-  int32_t connack_user_property_capacity;
+  /** @brief Buffer for user properties in received CONNACK (az_mqtt5_user_property[]). */
+  az_span connack_user_properties;
 
-  /** @brief Buffer for user properties in received PUBLISH. */
-  az_mqtt5_user_property* publish_user_properties;
-  int32_t publish_user_property_capacity;
+  /** @brief Buffer for user properties in received PUBLISH (az_mqtt5_user_property[]). */
+  az_span publish_user_properties;
 
-  /** @brief Buffer for subscription identifiers in received PUBLISH. */
-  int32_t* publish_subscription_identifiers;
-  int32_t publish_subscription_identifier_capacity;
+  /** @brief Buffer for subscription identifiers in received PUBLISH (int32_t[]). */
+  az_span publish_subscription_identifiers;
 
-  /** @brief Buffer for reason codes in SUBACK/UNSUBACK. */
-  az_mqtt5_reason_code* suback_reason_codes;
-  int32_t suback_reason_code_capacity;
+  /** @brief Buffer for reason codes in SUBACK/UNSUBACK (az_mqtt5_reason_code[]). */
+  az_span suback_reason_codes;
 
-  /** @brief Buffer for user properties in SUBACK/UNSUBACK. */
-  az_mqtt5_user_property* suback_user_properties;
-  int32_t suback_user_property_capacity;
+  /** @brief Buffer for user properties in SUBACK/UNSUBACK (az_mqtt5_user_property[]). */
+  az_span suback_user_properties;
 
-  /** @brief Buffer for user properties in ACKs (PUBACK/PUBREC/PUBREL/PUBCOMP). */
-  az_mqtt5_user_property* ack_user_properties;
-  int32_t ack_user_property_capacity;
+  /** @brief Buffer for user properties in ACKs (PUBACK/PUBREC/PUBREL/PUBCOMP) (az_mqtt5_user_property[]). */
+  az_span ack_user_properties;
 
-  /** @brief Buffer for user properties in received DISCONNECT. */
-  az_mqtt5_user_property* disconnect_user_properties;
-  int32_t disconnect_user_property_capacity;
+  /** @brief Buffer for user properties in received DISCONNECT (az_mqtt5_user_property[]). */
+  az_span disconnect_user_properties;
 } az_mqtt5_client_options;
 
 // ──────────────────────── Client state ───────────────────────

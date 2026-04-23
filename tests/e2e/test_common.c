@@ -5,6 +5,9 @@
 
 #include <string.h>
 
+#define AZ_MQTT5_SPAN_FROM_ARRAY(ARRAY) \
+  AZ_SPAN_FROM_BUFFER(*(uint8_t(*)[sizeof(ARRAY)])(ARRAY))
+
 void az_mqtt5_e2e_fixture_reset(az_mqtt5_e2e_fixture* fixture)
 {
   memset(fixture, 0, sizeof(*fixture));
@@ -50,20 +53,13 @@ az_result az_mqtt5_e2e_init_client(
   opts.on_pubcomp = params->on_pubcomp;
   opts.on_disconnect = params->on_disconnect;
 
-  opts.connack_user_properties = fixture->connack_props;
-  opts.connack_user_property_capacity = E2E_MAX_USER_PROPS;
-  opts.publish_user_properties = fixture->publish_props;
-  opts.publish_user_property_capacity = E2E_MAX_USER_PROPS;
-  opts.publish_subscription_identifiers = fixture->publish_subscription_ids;
-  opts.publish_subscription_identifier_capacity = E2E_MAX_USER_PROPS;
-  opts.suback_reason_codes = fixture->suback_reasons;
-  opts.suback_reason_code_capacity = E2E_MAX_REASON_CODES;
-  opts.suback_user_properties = fixture->suback_props;
-  opts.suback_user_property_capacity = E2E_MAX_USER_PROPS;
-  opts.ack_user_properties = fixture->ack_props;
-  opts.ack_user_property_capacity = E2E_MAX_USER_PROPS;
-  opts.disconnect_user_properties = fixture->disconnect_props;
-  opts.disconnect_user_property_capacity = E2E_MAX_USER_PROPS;
+      opts.connack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->connack_props);
+      opts.publish_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->publish_props);
+      opts.publish_subscription_identifiers = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->publish_subscription_ids);
+      opts.suback_reason_codes = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->suback_reasons);
+      opts.suback_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->suback_props);
+      opts.ack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->ack_props);
+      opts.disconnect_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->disconnect_props);
 
   return az_mqtt5_client_init(client, &opts);
 }

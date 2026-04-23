@@ -32,6 +32,10 @@
 #define MAX_USER_PROPERTIES 8
 #define MAX_SUBACK_REASON_CODES 8
 
+// Reinterpret any fixed-size array as a byte array to use AZ_SPAN_FROM_BUFFER.
+#define AZ_MQTT5_SPAN_FROM_ARRAY(ARRAY) \
+  AZ_SPAN_FROM_BUFFER(*(uint8_t(*)[sizeof(ARRAY)])(ARRAY))
+
 // ──────────────────────── Static buffers (zero allocation) ───
 
 static uint8_t s_send_buffer[SEND_BUFFER_SIZE];
@@ -174,20 +178,13 @@ int main(int argc, char* argv[])
   client_opts.on_disconnect = on_disconnect;
 
   // Pre-allocated buffers for received properties
-  client_opts.connack_user_properties = s_connack_user_props;
-  client_opts.connack_user_property_capacity = MAX_USER_PROPERTIES;
-  client_opts.publish_user_properties = s_publish_user_props;
-  client_opts.publish_user_property_capacity = MAX_USER_PROPERTIES;
-  client_opts.publish_subscription_identifiers = s_publish_sub_ids;
-  client_opts.publish_subscription_identifier_capacity = MAX_USER_PROPERTIES;
-  client_opts.suback_reason_codes = s_suback_reason_codes;
-  client_opts.suback_reason_code_capacity = MAX_SUBACK_REASON_CODES;
-  client_opts.suback_user_properties = s_suback_user_props;
-  client_opts.suback_user_property_capacity = MAX_USER_PROPERTIES;
-  client_opts.ack_user_properties = s_ack_user_props;
-  client_opts.ack_user_property_capacity = MAX_USER_PROPERTIES;
-  client_opts.disconnect_user_properties = s_disconnect_user_props;
-  client_opts.disconnect_user_property_capacity = MAX_USER_PROPERTIES;
+  client_opts.connack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_connack_user_props);
+  client_opts.publish_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_publish_user_props);
+  client_opts.publish_subscription_identifiers = AZ_MQTT5_SPAN_FROM_ARRAY(s_publish_sub_ids);
+  client_opts.suback_reason_codes = AZ_MQTT5_SPAN_FROM_ARRAY(s_suback_reason_codes);
+  client_opts.suback_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_suback_user_props);
+  client_opts.ack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_ack_user_props);
+  client_opts.disconnect_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_disconnect_user_props);
 
   // Initialize client
   az_mqtt5_client client;
