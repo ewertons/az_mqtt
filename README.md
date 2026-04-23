@@ -1,30 +1,21 @@
-# az_mqtt5
+# Azure MQTT C Clients
 
-A zero-allocation MQTT 5.0 client library for embedded and constrained C environments,
-built on top of the [Azure SDK for C](https://github.com/Azure/azure-sdk-for-c) span and
-platform abstractions.
+This repository contains two zero-allocation MQTT client libraries in C, sharing a similar architecture and API style.
 
-## What it is
+## Client options
 
-- **Codec layer** — pure encode/decode of every MQTT 5.0 packet type, operating on caller-supplied buffers with no heap allocation
-- **Client layer** — connection management, keep-alive, QoS 0/1/2 ACK dispatch, and a simple event loop
-- **Transport layer** — pluggable TCP/TLS backend (Schannel on Windows, OpenSSL on Linux/macOS)
+- [az_mqtt5](az_mqtt5/README.md)
+  - MQTT 5.0 client
+  - Includes MQTT 5 packet/property support and compliance notes
+  - Sample: [az_mqtt5/samples/az_mqtt5_sample_connect.c](az_mqtt5/samples/az_mqtt5_sample_connect.c)
 
-## Getting started
+- [az_mqtt3](az_mqtt3/README.md)
+  - MQTT 3.1.1-only client variant
+  - Focused on MQTT 3.1.1 wire format and behavior
+  - Sample: [az_mqtt3/samples/az_mqtt3_sample_connect.c](az_mqtt3/samples/az_mqtt3_sample_connect.c)
 
-See **[samples/README.md](samples/README.md)** for a step-by-step walkthrough:
-start a local broker, build, and run the connect sample.
+## Repository layout
 
-The sample source is in [samples/az_mqtt5_sample_connect.c](samples/az_mqtt5_sample_connect.c).
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [doc/eng/mqtt_v5_spec_compliance.md](doc/eng/mqtt_v5_spec_compliance.md) | MQTT v5 spec compliance matrix |
-| [doc/eng/mqtt_v3_vs_v5_api.md](doc/eng/mqtt_v3_vs_v5_api.md) | Design decision: MQTT v3.1.1 vs v5 API |
-| [doc/api_design_decisions.md](doc/api_design_decisions.md) | Per-call vs per-session buffer design |
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+- [az_mqtt5](az_mqtt5)
+- [az_mqtt3](az_mqtt3)
+- [LICENSE](LICENSE)

@@ -1,2 +1,7 @@
+az_mqtt5/build/
+az_mqtt3/build/
+build_m3/
+az_mqtt5/tests/broker/certs/
+az_mqtt3/tests/broker/certs/
 build/
 tests/broker/certs/
