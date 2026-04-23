@@ -199,10 +199,10 @@ static az_result _read_packet(
 static az_result _handle_connack(az_mqtt5_client* client, az_span body)
 {
   az_mqtt5_connack_data connack;
-  connack.user_properties = _span_user_properties(client->options.connack_user_properties);
+  connack.user_properties = _span_user_properties(client->options.buffers.connack_user_properties);
   connack.user_property_count = 0;
   connack.user_property_capacity =
-      _span_count(client->options.connack_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
+      _span_count(client->options.buffers.connack_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
 
   az_result rc = az_mqtt5_codec_decode_connack(body, &connack);
   if (az_result_failed(rc))
@@ -224,9 +224,9 @@ static az_result _handle_connack(az_mqtt5_client* client, az_span body)
 static az_result _handle_publish(az_mqtt5_client* client, az_span body, uint8_t flags)
 {
   az_mqtt5_publish_data publish;
-  publish.user_properties = _span_user_properties(client->options.publish_user_properties);
+  publish.user_properties = _span_user_properties(client->options.buffers.publish_user_properties);
   publish.user_property_count = 0;
-  publish.subscription_identifiers = _span_i32(client->options.publish_subscription_identifiers);
+  publish.subscription_identifiers = _span_i32(client->options.buffers.publish_subscription_identifiers);
   publish.subscription_identifier_count = 0;
 
   az_result rc = az_mqtt5_codec_decode_publish(body, flags, &publish);
@@ -266,10 +266,10 @@ static az_result _handle_publish(az_mqtt5_client* client, az_span body, uint8_t 
 static az_result _handle_puback(az_mqtt5_client* client, az_span body)
 {
   az_mqtt5_ack_data ack;
-  ack.user_properties = _span_user_properties(client->options.ack_user_properties);
+  ack.user_properties = _span_user_properties(client->options.buffers.ack_user_properties);
   ack.user_property_count = 0;
   ack.user_property_capacity =
-      _span_count(client->options.ack_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
+      _span_count(client->options.buffers.ack_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
 
   az_result rc = az_mqtt5_codec_decode_ack(body, &ack);
   if (az_result_failed(rc))
@@ -285,10 +285,10 @@ static az_result _handle_puback(az_mqtt5_client* client, az_span body)
 static az_result _handle_pubrec(az_mqtt5_client* client, az_span body)
 {
   az_mqtt5_ack_data ack;
-  ack.user_properties = _span_user_properties(client->options.ack_user_properties);
+  ack.user_properties = _span_user_properties(client->options.buffers.ack_user_properties);
   ack.user_property_count = 0;
   ack.user_property_capacity =
-      _span_count(client->options.ack_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
+      _span_count(client->options.buffers.ack_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
 
   az_result rc = az_mqtt5_codec_decode_ack(body, &ack);
   if (az_result_failed(rc))
@@ -309,10 +309,10 @@ static az_result _handle_pubrec(az_mqtt5_client* client, az_span body)
 static az_result _handle_pubrel(az_mqtt5_client* client, az_span body)
 {
   az_mqtt5_ack_data ack;
-  ack.user_properties = _span_user_properties(client->options.ack_user_properties);
+  ack.user_properties = _span_user_properties(client->options.buffers.ack_user_properties);
   ack.user_property_count = 0;
   ack.user_property_capacity =
-      _span_count(client->options.ack_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
+      _span_count(client->options.buffers.ack_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
 
   az_result rc = az_mqtt5_codec_decode_ack(body, &ack);
   if (az_result_failed(rc))
@@ -338,10 +338,10 @@ static az_result _handle_pubrel(az_mqtt5_client* client, az_span body)
 static az_result _handle_pubcomp(az_mqtt5_client* client, az_span body)
 {
   az_mqtt5_ack_data ack;
-  ack.user_properties = _span_user_properties(client->options.ack_user_properties);
+  ack.user_properties = _span_user_properties(client->options.buffers.ack_user_properties);
   ack.user_property_count = 0;
   ack.user_property_capacity =
-      _span_count(client->options.ack_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
+      _span_count(client->options.buffers.ack_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
 
   az_result rc = az_mqtt5_codec_decode_ack(body, &ack);
   if (az_result_failed(rc))
@@ -357,14 +357,14 @@ static az_result _handle_pubcomp(az_mqtt5_client* client, az_span body)
 static az_result _handle_suback(az_mqtt5_client* client, az_span body)
 {
   az_mqtt5_suback_data suback;
-  suback.reason_codes = _span_reason_codes(client->options.suback_reason_codes);
+  suback.reason_codes = _span_reason_codes(client->options.buffers.suback_reason_codes);
   suback.reason_code_count = 0;
   suback.reason_code_capacity =
-      _span_count(client->options.suback_reason_codes, (int32_t)sizeof(az_mqtt5_reason_code));
-  suback.user_properties = _span_user_properties(client->options.suback_user_properties);
+      _span_count(client->options.buffers.suback_reason_codes, (int32_t)sizeof(az_mqtt5_reason_code));
+  suback.user_properties = _span_user_properties(client->options.buffers.suback_user_properties);
   suback.user_property_count = 0;
   suback.user_property_capacity =
-      _span_count(client->options.suback_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
+      _span_count(client->options.buffers.suback_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
 
   az_result rc = az_mqtt5_codec_decode_suback(body, &suback);
   if (az_result_failed(rc))
@@ -380,14 +380,14 @@ static az_result _handle_suback(az_mqtt5_client* client, az_span body)
 static az_result _handle_unsuback(az_mqtt5_client* client, az_span body)
 {
   az_mqtt5_suback_data unsuback;
-  unsuback.reason_codes = _span_reason_codes(client->options.suback_reason_codes);
+  unsuback.reason_codes = _span_reason_codes(client->options.buffers.suback_reason_codes);
   unsuback.reason_code_count = 0;
   unsuback.reason_code_capacity =
-      _span_count(client->options.suback_reason_codes, (int32_t)sizeof(az_mqtt5_reason_code));
-  unsuback.user_properties = _span_user_properties(client->options.suback_user_properties);
+      _span_count(client->options.buffers.suback_reason_codes, (int32_t)sizeof(az_mqtt5_reason_code));
+  unsuback.user_properties = _span_user_properties(client->options.buffers.suback_user_properties);
   unsuback.user_property_count = 0;
   unsuback.user_property_capacity =
-      _span_count(client->options.suback_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
+      _span_count(client->options.buffers.suback_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
 
   az_result rc = az_mqtt5_codec_decode_unsuback(body, &unsuback);
   if (az_result_failed(rc))
@@ -403,10 +403,10 @@ static az_result _handle_unsuback(az_mqtt5_client* client, az_span body)
 static az_result _handle_disconnect(az_mqtt5_client* client, az_span body)
 {
   az_mqtt5_disconnect_data disc;
-  disc.user_properties = _span_user_properties(client->options.disconnect_user_properties);
+  disc.user_properties = _span_user_properties(client->options.buffers.disconnect_user_properties);
   disc.user_property_count = 0;
   disc.user_property_capacity = _span_count(
-      client->options.disconnect_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
+      client->options.buffers.disconnect_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
 
   az_result rc = az_mqtt5_codec_decode_disconnect(body, &disc);
   if (az_result_failed(rc))

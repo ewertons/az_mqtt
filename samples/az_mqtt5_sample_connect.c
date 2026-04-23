@@ -155,13 +155,13 @@ int main(int argc, char* argv[])
   client_opts.on_disconnect = on_disconnect;
 
   // Pre-allocated buffers for received properties
-  client_opts.connack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_connack_user_props);
-  client_opts.publish_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_publish_user_props);
-  client_opts.publish_subscription_identifiers = AZ_MQTT5_SPAN_FROM_ARRAY(s_publish_sub_ids);
-  client_opts.suback_reason_codes = AZ_MQTT5_SPAN_FROM_ARRAY(s_suback_reason_codes);
-  client_opts.suback_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_suback_user_props);
-  client_opts.ack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_ack_user_props);
-  client_opts.disconnect_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_disconnect_user_props);
+  client_opts.buffers.connack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_connack_user_props);
+  client_opts.buffers.publish_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_publish_user_props);
+  client_opts.buffers.publish_subscription_identifiers = AZ_MQTT5_SPAN_FROM_ARRAY(s_publish_sub_ids);
+  client_opts.buffers.suback_reason_codes = AZ_MQTT5_SPAN_FROM_ARRAY(s_suback_reason_codes);
+  client_opts.buffers.suback_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_suback_user_props);
+  client_opts.buffers.ack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_ack_user_props);
+  client_opts.buffers.disconnect_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_disconnect_user_props);
 
   // Initialize client
   az_mqtt5_client client;

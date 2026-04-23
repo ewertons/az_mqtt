@@ -74,6 +74,30 @@ typedef void (*az_mqtt5_on_disconnect_fn)(az_mqtt5_client* client, az_mqtt5_disc
 
 typedef struct
 {
+  /** @brief Buffer for user properties in received CONNACK (az_mqtt5_user_property[]). */
+  az_span connack_user_properties;
+
+  /** @brief Buffer for user properties in received PUBLISH (az_mqtt5_user_property[]). */
+  az_span publish_user_properties;
+
+  /** @brief Buffer for subscription identifiers in received PUBLISH (int32_t[]). */
+  az_span publish_subscription_identifiers;
+
+  /** @brief Buffer for reason codes in SUBACK/UNSUBACK (az_mqtt5_reason_code[]). */
+  az_span suback_reason_codes;
+
+  /** @brief Buffer for user properties in SUBACK/UNSUBACK (az_mqtt5_user_property[]). */
+  az_span suback_user_properties;
+
+  /** @brief Buffer for user properties in ACKs (PUBACK/PUBREC/PUBREL/PUBCOMP) (az_mqtt5_user_property[]). */
+  az_span ack_user_properties;
+
+  /** @brief Buffer for user properties in received DISCONNECT (az_mqtt5_user_property[]). */
+  az_span disconnect_user_properties;
+} az_mqtt5_client_buffers;
+
+typedef struct
+{
   /** @brief Transport handle (caller-allocated). */
   az_mqtt5_transport* transport;
 
@@ -107,26 +131,8 @@ typedef struct
   /** @brief User context pointer (passthrough, not used by the library). */
   void* user_context;
 
-  /** @brief Buffer for user properties in received CONNACK (az_mqtt5_user_property[]). */
-  az_span connack_user_properties;
-
-  /** @brief Buffer for user properties in received PUBLISH (az_mqtt5_user_property[]). */
-  az_span publish_user_properties;
-
-  /** @brief Buffer for subscription identifiers in received PUBLISH (int32_t[]). */
-  az_span publish_subscription_identifiers;
-
-  /** @brief Buffer for reason codes in SUBACK/UNSUBACK (az_mqtt5_reason_code[]). */
-  az_span suback_reason_codes;
-
-  /** @brief Buffer for user properties in SUBACK/UNSUBACK (az_mqtt5_user_property[]). */
-  az_span suback_user_properties;
-
-  /** @brief Buffer for user properties in ACKs (PUBACK/PUBREC/PUBREL/PUBCOMP) (az_mqtt5_user_property[]). */
-  az_span ack_user_properties;
-
-  /** @brief Buffer for user properties in received DISCONNECT (az_mqtt5_user_property[]). */
-  az_span disconnect_user_properties;
+  /** @brief Caller-provided decode buffers used by callbacks and packet parsing. */
+  az_mqtt5_client_buffers buffers;
 } az_mqtt5_client_options;
 
 // ──────────────────────── Client state ───────────────────────

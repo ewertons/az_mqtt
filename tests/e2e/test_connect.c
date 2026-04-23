@@ -204,13 +204,13 @@ static void test_connect_failure(void** state)
   opts.hostname = AZ_SPAN_FROM_STR("127.0.0.1");
   opts.port = 19999; // Nothing is listening here
   opts.tls_options = NULL;
-  opts.connack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.connack_props);
-  opts.publish_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.publish_props);
-  opts.publish_subscription_identifiers = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.publish_subscription_ids);
-  opts.suback_reason_codes = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.suback_reasons);
-  opts.suback_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.suback_props);
-  opts.ack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.ack_props);
-  opts.disconnect_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.disconnect_props);
+  opts.buffers.connack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.connack_props);
+  opts.buffers.publish_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.publish_props);
+  opts.buffers.publish_subscription_identifiers = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.publish_subscription_ids);
+  opts.buffers.suback_reason_codes = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.suback_reasons);
+  opts.buffers.suback_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.suback_props);
+  opts.buffers.ack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.ack_props);
+  opts.buffers.disconnect_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_fixture.disconnect_props);
 
   az_mqtt5_client client;
   rc = az_mqtt5_client_init(&client, &opts);
