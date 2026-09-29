@@ -932,13 +932,20 @@ AZ_NODISCARD az_result az_mqtt5_transport_connect(
   _az_PRECONDITION_NOT_NULL(transport);
 
 #ifdef AZ_MQTT5_TLS_SCHANNEL
-  if (tls_options != NULL
-      && (az_span_size(tls_options->client_cert_path) > 0
-          || az_span_size(tls_options->client_key_path) > 0))
+  if (tls_options != NULL)
   {
-    // Client certificates are not implemented for Schannel yet; refuse rather
-    // than connect without the identity the caller asked for.
-    return AZ_MQTT5_ERROR_NOT_SUPPORTED;
+    bool const has_cert = az_span_size(tls_options->client_cert_path) > 0;
+    bool const has_key = az_span_size(tls_options->client_key_path) > 0;
+    if (has_cert != has_key)
+    {
+      return AZ_MQTT5_ERROR_INVALID_CONFIG; // Same contract as the other backends.
+    }
+    if (has_cert)
+    {
+      // Client certificates are not implemented for Schannel yet; refuse rather
+      // than connect without the identity the caller asked for.
+      return AZ_MQTT5_ERROR_NOT_SUPPORTED;
+    }
   }
 #else
   if (tls_options != NULL)
