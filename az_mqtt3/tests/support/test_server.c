@@ -33,10 +33,12 @@ struct test_server
   int listen_fd;
   uint16_t port;
   pthread_t thread;
-  volatile int stop;
-  volatile int accepted;
-  volatile int handshakes;
-  volatile bool saw_client_cert;
+  // Shared with the server thread: guarded by lock.
+  pthread_mutex_t lock;
+  int stop;
+  int accepted;
+  int handshakes;
+  bool saw_client_cert;
   int silent_fds[MAX_SILENT];
   int silent_count;
   SSL_CTX* ctx;
@@ -44,6 +46,25 @@ struct test_server
   char client_cert_path[64];
   char client_key_path[64];
 };
+
+/** @brief Read a shared int under the lock. */
+static int _get(test_server const* s, int const* field)
+{
+  pthread_mutex_lock((pthread_mutex_t*)&s->lock);
+  int v = *field;
+  pthread_mutex_unlock((pthread_mutex_t*)&s->lock);
+  return v;
+}
+
+/** @brief Add to a shared int under the lock. */
+static void _add(test_server* s, int* field, int delta)
+{
+  pthread_mutex_lock(&s->lock);
+  *field += delta;
+  pthread_mutex_unlock(&s->lock);
+}
+
+static bool _stopping(test_server* s) { return _get(s, &s->stop) != 0; }
 
 test_server_options test_server_options_default(void)
 {
@@ -209,7 +230,7 @@ static bool _write(conn* c, uint8_t const* buf, int len)
 
 static bool _wait_readable(test_server* s, conn* c)
 {
-  while (!s->stop)
+  while (!_stopping(s))
   {
     if (c->ssl != NULL && SSL_pending(c->ssl) > 0)
     {
@@ -332,7 +353,7 @@ static void* _run(void* arg)
   sigemptyset(&pipe_set);
   sigaddset(&pipe_set, SIGPIPE);
   pthread_sigmask(SIG_BLOCK, &pipe_set, NULL);
-  while (!s->stop)
+  while (!_stopping(s))
   {
     struct pollfd p = { s->listen_fd, POLLIN, 0 };
     if (poll(&p, 1, 50) <= 0)
@@ -344,7 +365,7 @@ static void* _run(void* arg)
     {
       continue;
     }
-    s->accepted++;
+    _add(s, &s->accepted, 1);
     if (s->options.behavior == TEST_SERVER_SILENT)
     {
       if (s->silent_count < MAX_SILENT)
@@ -366,9 +387,11 @@ static void* _run(void* arg)
       if (c.ssl != NULL && SSL_set_fd(c.ssl, fd) == 1 && SSL_accept(c.ssl) == 1)
       {
         X509* peer = SSL_get1_peer_certificate(c.ssl);
+        pthread_mutex_lock(&s->lock);
         s->saw_client_cert = peer != NULL;
-        X509_free(peer);
         s->handshakes++;
+        pthread_mutex_unlock(&s->lock);
+        X509_free(peer);
         _serve(s, &c);
       }
       SSL_free(c.ssl);
@@ -393,6 +416,7 @@ test_server* test_server_start(test_server_options const* options)
   }
   s->options = *options;
   s->listen_fd = -1;
+  pthread_mutex_init(&s->lock, NULL);
   if (s->options.tls && !_setup_tls(s))
   {
     test_server_stop(s);
@@ -428,7 +452,9 @@ void test_server_stop(test_server* s)
   {
     return;
   }
+  pthread_mutex_lock(&s->lock);
   s->stop = 1;
+  pthread_mutex_unlock(&s->lock);
   if (s->thread != 0)
   {
     pthread_join(s->thread, NULL);
@@ -442,6 +468,7 @@ void test_server_stop(test_server* s)
     close(s->listen_fd);
   }
   SSL_CTX_free(s->ctx);
+  pthread_mutex_destroy(&s->lock);
   if (s->ca_path[0] != '\0')
   {
     remove(s->ca_path);
@@ -455,6 +482,12 @@ uint16_t test_server_port(test_server const* s) { return s->port; }
 char const* test_server_ca_path(test_server const* s) { return s->ca_path; }
 char const* test_server_client_cert_path(test_server const* s) { return s->client_cert_path; }
 char const* test_server_client_key_path(test_server const* s) { return s->client_key_path; }
-int test_server_accepted(test_server const* s) { return s->accepted; }
-int test_server_handshakes(test_server const* s) { return s->handshakes; }
-bool test_server_saw_client_cert(test_server const* s) { return s->saw_client_cert; }
+int test_server_accepted(test_server const* s) { return _get(s, &s->accepted); }
+int test_server_handshakes(test_server const* s) { return _get(s, &s->handshakes); }
+bool test_server_saw_client_cert(test_server const* s)
+{
+  pthread_mutex_lock((pthread_mutex_t*)&s->lock);
+  bool v = s->saw_client_cert;
+  pthread_mutex_unlock((pthread_mutex_t*)&s->lock);
+  return v;
+}
