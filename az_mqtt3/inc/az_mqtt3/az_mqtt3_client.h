@@ -70,6 +70,16 @@ typedef void (*az_mqtt3_on_pubcomp_fn)(az_mqtt3_client* client, az_mqtt3_ack_dat
  */
 typedef void (*az_mqtt3_on_disconnect_fn)(az_mqtt3_client* client, az_mqtt3_disconnect_data const* disc);
 
+/**
+ * @brief Called whenever the client leaves CONNECTING or CONNECTED for DISCONNECTED.
+ *
+ * @p reason is AZ_OK after az_mqtt3_client_disconnect(), otherwise why the
+ * session ended (e.g. AZ_MQTT3_ERROR_KEEP_ALIVE_TIMEOUT,
+ * AZ_MQTT3_ERROR_SERVER_DISCONNECTED, a transport error). The transport is
+ * already closed when it runs.
+ */
+typedef void (*az_mqtt3_on_connection_closed_fn)(az_mqtt3_client* client, az_result reason);
+
 // ──────────────────────── Client options ─────────────────────
 
 typedef struct
@@ -133,6 +143,8 @@ typedef struct
 
   /** @brief Caller-provided decode buffers used by callbacks and packet parsing. */
   az_mqtt3_client_buffers buffers;
+  /** @brief Optional. See az_mqtt3_on_connection_closed_fn. */
+  az_mqtt3_on_connection_closed_fn on_connection_closed;
 } az_mqtt3_client_options;
 
 // ──────────────────────── Client state ───────────────────────
@@ -154,6 +166,11 @@ struct az_mqtt3_client
 
   // Receive buffer tracking
   int32_t recv_buf_pos; // how many bytes are buffered
+  /** @brief Keep-alive in force: the CONNACK's Server Keep Alive if present, else ours. */
+  uint16_t keep_alive_seconds;
+  /** @brief A PINGREQ is awaiting its PINGRESP (or any other packet). */
+  bool ping_outstanding;
+  int64_t ping_sent_time_ms;
 };
 
 // ──────────────────────── API ────────────────────────────────
@@ -165,15 +182,26 @@ AZ_NODISCARD az_result az_mqtt3_client_init(az_mqtt3_client* client, az_mqtt3_cl
 
 /**
  * @brief Connect to the broker (TCP + optional TLS + MQTT CONNECT).
- * Blocks until CONNACK is received or timeout.
+ *
+ * Blocks until the CONNACK arrives; @p timeout_ms bounds the whole sequence
+ * (AZ_MQTT3_ERROR_TIMEOUT). A refused CONNACK returns AZ_MQTT3_ERROR_NOT_CONNECTED
+ * after on_connack reports its reason code.
  */
 AZ_NODISCARD az_result az_mqtt3_client_connect(az_mqtt3_client* client, int32_t timeout_ms);
 
 /**
  * @brief Run the I/O processing loop once.
- * Reads incoming packets, dispatches callbacks, sends keepalive PINGs.
  *
- * @param timeout_ms  Max time to wait for incoming data.
+ * Handles every complete packet available (up to a bound), dispatches
+ * callbacks, and sends PINGREQ when due. Returns early when keep-alive needs
+ * attention, so a long @p timeout_ms never delays a PINGREQ.
+ *
+ * Any failure ends the session: the transport is closed, the state becomes
+ * DISCONNECTED and on_connection_closed reports the same result.
+ *
+ * @param timeout_ms  Max time to wait for incoming data; -1 waits until keep-alive is due.
+ * @retval AZ_MQTT3_ERROR_KEEP_ALIVE_TIMEOUT A PINGREQ got nothing back within the keep-alive.
+ * @retval AZ_MQTT3_ERROR_NOT_CONNECTED Called while disconnected.
  */
 AZ_NODISCARD az_result az_mqtt3_client_process_loop(az_mqtt3_client* client, int32_t timeout_ms);
 

@@ -974,6 +974,8 @@ AZ_NODISCARD az_result az_mqtt3_transport_connect(
   return AZ_OK;
 }
 
+AZ_NODISCARD int64_t az_mqtt3_transport_clock_ms(void) { return (int64_t)GetTickCount64(); }
+
 AZ_NODISCARD az_result az_mqtt3_transport_connect_start(
     az_mqtt3_transport* transport,
     az_span host,

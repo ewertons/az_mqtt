@@ -18,6 +18,9 @@
 
 #include <azure/core/_az_cfg_prefix.h>
 
+/** @brief CONNECT Protocol Level this codec speaks (MQTT 3.1.1). */
+#define AZ_MQTT3_PROTOCOL_VERSION 4
+
 // ──────────────────────── Encoding ───────────────────────────
 
 /**

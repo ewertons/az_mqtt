@@ -12,6 +12,7 @@
 
 #include "az_mqtt5_socket_posix.h"
 
+#include <az_mqtt5/az_mqtt5_transport.h>
 #include <az_mqtt5/az_mqtt5_types.h>
 
 #include <errno.h>
@@ -40,6 +41,8 @@ int64_t _az_mqtt5_now_ms(void)
   (void)clock_gettime(CLOCK_MONOTONIC, &ts);
   return (int64_t)ts.tv_sec * 1000 + (int64_t)(ts.tv_nsec / 1000000);
 }
+
+AZ_NODISCARD int64_t az_mqtt5_transport_clock_ms(void) { return _az_mqtt5_now_ms(); }
 
 int64_t _az_mqtt5_deadline(int32_t timeout_ms)
 {

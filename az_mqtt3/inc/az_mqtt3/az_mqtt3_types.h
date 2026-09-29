@@ -32,6 +32,10 @@ enum az_mqtt3_result
   AZ_MQTT3_ERROR_NOT_SUPPORTED = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 17),
   /** @brief The options are inconsistent (e.g. a client certificate without its key). */
   AZ_MQTT3_ERROR_INVALID_CONFIG = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 18),
+  /** @brief No PINGRESP (or any packet) within the keep-alive interval after a PINGREQ. */
+  AZ_MQTT3_ERROR_KEEP_ALIVE_TIMEOUT = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 19),
+  /** @brief The server ended the session with a DISCONNECT packet. */
+  AZ_MQTT3_ERROR_SERVER_DISCONNECTED = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 20),
 };
 
 // ──────────────────────── MQTT 5 Packet Types ────────────────
@@ -230,6 +234,8 @@ typedef struct
   bool subscription_identifier_available;
   bool shared_subscription_available;
   uint16_t server_keep_alive;
+  /** @brief Whether the CONNACK carried Server Keep Alive (which then overrides the client's). */
+  bool server_keep_alive_present;
   az_span response_information;
   az_span server_reference;
   az_span authentication_method;

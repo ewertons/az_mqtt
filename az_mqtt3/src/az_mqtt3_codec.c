@@ -641,7 +641,7 @@ az_mqtt3_codec_encode_connect(az_span* dest, az_mqtt3_connect_options const* opt
     return rc;
 
   // Protocol Version (4 = MQTT 3.1.1)
-  rc = _write_byte(dest, 4);
+  rc = _write_byte(dest, AZ_MQTT3_PROTOCOL_VERSION);
   if (az_result_failed(rc))
     return rc;
 
