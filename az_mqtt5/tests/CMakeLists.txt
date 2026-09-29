@@ -26,3 +26,7 @@ set(BUILD_SHARED_LIBS ${_saved_BUILD_SHARED_LIBS} CACHE BOOL "" FORCE)
 # ── Test subdirectories ──────────────────────────────────────
 
 add_subdirectory(e2e)
+
+if(UNIX)
+  add_subdirectory(transport)
+endif()
