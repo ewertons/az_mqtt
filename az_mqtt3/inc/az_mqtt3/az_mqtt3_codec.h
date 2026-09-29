@@ -21,6 +21,19 @@
 /** @brief CONNECT Protocol Level this codec speaks (MQTT 3.1.1). */
 #define AZ_MQTT3_PROTOCOL_VERSION 4
 
+/**
+ * @name MQTT 3.1.1 CONNACK return codes
+ * @brief Stored verbatim in az_mqtt3_connack_data::reason_code.
+ * @{
+ */
+#define AZ_MQTT3_CONNACK_ACCEPTED 0x00
+#define AZ_MQTT3_CONNACK_UNACCEPTABLE_PROTOCOL_VERSION 0x01
+#define AZ_MQTT3_CONNACK_IDENTIFIER_REJECTED 0x02
+#define AZ_MQTT3_CONNACK_SERVER_UNAVAILABLE 0x03
+#define AZ_MQTT3_CONNACK_BAD_USER_NAME_OR_PASSWORD 0x04
+#define AZ_MQTT3_CONNACK_NOT_AUTHORIZED 0x05
+/** @} */
+
 // ──────────────────────── Encoding ───────────────────────────
 
 /**

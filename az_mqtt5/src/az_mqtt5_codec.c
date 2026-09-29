@@ -1661,11 +1661,12 @@ static az_result _decode_suback_common(az_span body, az_mqtt5_suback_data* out)
     rc = _read_byte(&body, &reason);
     if (az_result_failed(rc))
       return rc;
+    // Like user properties: keep what fits, so reason_code_count never exceeds capacity.
     if (out->reason_codes != NULL && out->reason_code_count < out->reason_code_capacity)
     {
       out->reason_codes[out->reason_code_count] = (az_mqtt5_reason_code)reason;
+      out->reason_code_count++;
     }
-    out->reason_code_count++;
   }
 
   return AZ_OK;
