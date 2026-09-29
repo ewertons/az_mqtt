@@ -51,11 +51,15 @@ struct az_mqtt5_transport
 
 AZ_NODISCARD int32_t az_mqtt5_transport_sizeof(void) { return (int32_t)sizeof(az_mqtt5_transport); }
 
-AZ_NODISCARD az_result az_mqtt5_transport_init(az_mqtt5_transport* transport)
-{
-  _az_PRECONDITION_NOT_NULL(transport);
-  transport->socket_fd = -1;
 #ifdef AZ_MQTT5_TLS_MBEDTLS
+/**
+ * @brief Put every TLS context in its freshly-initialized state.
+ *
+ * The socket is owned by az_mqtt5_transport::socket_fd, so the net context
+ * never closes it.
+ */
+static void _tls_contexts_init(az_mqtt5_transport* transport)
+{
   mbedtls_ssl_init(&transport->ssl);
   mbedtls_ssl_config_init(&transport->conf);
   mbedtls_entropy_init(&transport->entropy);
@@ -65,6 +69,28 @@ AZ_NODISCARD az_result az_mqtt5_transport_init(az_mqtt5_transport* transport)
   mbedtls_pk_init(&transport->client_key);
   mbedtls_net_init(&transport->net_ctx);
   transport->tls_initialized = false;
+}
+
+/** @brief Release every TLS context and re-initialize it for the next connect. */
+static void _tls_contexts_reset(az_mqtt5_transport* transport)
+{
+  mbedtls_ssl_free(&transport->ssl);
+  mbedtls_ssl_config_free(&transport->conf);
+  mbedtls_x509_crt_free(&transport->ca_chain);
+  mbedtls_x509_crt_free(&transport->client_cert);
+  mbedtls_pk_free(&transport->client_key);
+  mbedtls_ctr_drbg_free(&transport->ctr_drbg);
+  mbedtls_entropy_free(&transport->entropy);
+  _tls_contexts_init(transport);
+}
+#endif
+
+AZ_NODISCARD az_result az_mqtt5_transport_init(az_mqtt5_transport* transport)
+{
+  _az_PRECONDITION_NOT_NULL(transport);
+  transport->socket_fd = -1;
+#ifdef AZ_MQTT5_TLS_MBEDTLS
+  _tls_contexts_init(transport);
 #endif
   transport->connected = false;
   return AZ_OK;
@@ -136,90 +162,89 @@ static az_result _tcp_connect(az_mqtt5_transport* transport, az_span host, uint1
 }
 
 #ifdef AZ_MQTT5_TLS_MBEDTLS
+/**
+ * @brief Reject TLS options this backend cannot honour, before any socket work.
+ */
+static az_result _check_tls_options(az_mqtt5_tls_options const* tls_options)
+{
+  if ((az_span_size(tls_options->client_cert_path) > 0)
+      != (az_span_size(tls_options->client_key_path) > 0))
+  {
+    // Half a client identity would silently downgrade to server-only TLS.
+    return AZ_MQTT5_ERROR_INVALID_CONFIG;
+  }
+  if (az_span_size(tls_options->ca_cert_path) == 0)
+  {
+    // mbedTLS has no system trust store; never connect without a trust anchor.
+    return AZ_MQTT5_ERROR_NOT_SUPPORTED;
+  }
+  return AZ_OK;
+}
+
 static az_result _tls_setup(
     az_mqtt5_transport* transport,
     az_span host,
     az_mqtt5_tls_options const* tls_options)
 {
-  static const char* pers = "az_mqtt5_mbedtls";
-  int ret = mbedtls_ctr_drbg_seed(
-      &transport->ctr_drbg,
-      mbedtls_entropy_func,
-      &transport->entropy,
-      (const unsigned char*)pers,
-      strlen(pers));
-  if (ret != 0)
+  bool const has_cert = az_span_size(tls_options->client_cert_path) > 0;
+  static const char pers[] = "az_mqtt5_mbedtls";
+  if (mbedtls_ctr_drbg_seed(
+          &transport->ctr_drbg,
+          mbedtls_entropy_func,
+          &transport->entropy,
+          (const unsigned char*)pers,
+          sizeof(pers) - 1)
+          != 0
+      || mbedtls_ssl_config_defaults(
+             &transport->conf,
+             MBEDTLS_SSL_IS_CLIENT,
+             MBEDTLS_SSL_TRANSPORT_STREAM,
+             MBEDTLS_SSL_PRESET_DEFAULT)
+          != 0)
   {
     return AZ_MQTT5_ERROR_TRANSPORT;
   }
-
-  ret = mbedtls_ssl_config_defaults(
-      &transport->conf,
-      MBEDTLS_SSL_IS_CLIENT,
-      MBEDTLS_SSL_TRANSPORT_STREAM,
-      MBEDTLS_SSL_PRESET_DEFAULT);
-  if (ret != 0)
-  {
-    return AZ_MQTT5_ERROR_TRANSPORT;
-  }
-
   mbedtls_ssl_conf_rng(&transport->conf, mbedtls_ctr_drbg_random, &transport->ctr_drbg);
 
-  if (az_span_size(tls_options->ca_cert_path) > 0)
+  char path[256];
+  az_result rc = _span_to_cstr(tls_options->ca_cert_path, path, (int32_t)sizeof(path));
+  if (az_result_failed(rc))
   {
-    char ca_path[256];
-    az_result rc = _span_to_cstr(tls_options->ca_cert_path, ca_path, (int32_t)sizeof(ca_path));
-    if (az_result_failed(rc))
-    {
-      return rc;
-    }
-    if (mbedtls_x509_crt_parse_file(&transport->ca_chain, ca_path) != 0)
-    {
-      return AZ_MQTT5_ERROR_TRANSPORT;
-    }
-    mbedtls_ssl_conf_ca_chain(&transport->conf, &transport->ca_chain, NULL);
-    mbedtls_ssl_conf_authmode(&transport->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
+    return rc;
   }
-  else
+  if (mbedtls_x509_crt_parse_file(&transport->ca_chain, path) != 0)
   {
-    // No CA provided — skip verification. Production code should always verify.
-    mbedtls_ssl_conf_authmode(&transport->conf, MBEDTLS_SSL_VERIFY_NONE);
+    return AZ_MQTT5_ERROR_TRANSPORT;
   }
+  mbedtls_ssl_conf_ca_chain(&transport->conf, &transport->ca_chain, NULL);
+  mbedtls_ssl_conf_authmode(&transport->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
 
-  if (az_span_size(tls_options->client_cert_path) > 0
-      && az_span_size(tls_options->client_key_path) > 0)
+  if (has_cert)
   {
-    char cert_path[256];
-    char key_path[256];
-    az_result rc
-        = _span_to_cstr(tls_options->client_cert_path, cert_path, (int32_t)sizeof(cert_path));
+    rc = _span_to_cstr(tls_options->client_cert_path, path, (int32_t)sizeof(path));
     if (az_result_failed(rc))
     {
       return rc;
     }
-    rc = _span_to_cstr(tls_options->client_key_path, key_path, (int32_t)sizeof(key_path));
-    if (az_result_failed(rc))
-    {
-      return rc;
-    }
-    if (mbedtls_x509_crt_parse_file(&transport->client_cert, cert_path) != 0)
+    if (mbedtls_x509_crt_parse_file(&transport->client_cert, path) != 0)
     {
       return AZ_MQTT5_ERROR_TRANSPORT;
+    }
+    rc = _span_to_cstr(tls_options->client_key_path, path, (int32_t)sizeof(path));
+    if (az_result_failed(rc))
+    {
+      return rc;
     }
 #if MBEDTLS_VERSION_MAJOR >= 3
-    if (mbedtls_pk_parse_keyfile(
-            &transport->client_key, key_path, NULL,
-            mbedtls_ctr_drbg_random, &transport->ctr_drbg)
-        != 0)
+    int const key_rc = mbedtls_pk_parse_keyfile(
+        &transport->client_key, path, NULL, mbedtls_ctr_drbg_random, &transport->ctr_drbg);
 #else
-    if (mbedtls_pk_parse_keyfile(&transport->client_key, key_path, NULL) != 0)
+    int const key_rc = mbedtls_pk_parse_keyfile(&transport->client_key, path, NULL);
 #endif
-    {
-      return AZ_MQTT5_ERROR_TRANSPORT;
-    }
-    if (mbedtls_ssl_conf_own_cert(
-            &transport->conf, &transport->client_cert, &transport->client_key)
-        != 0)
+    if (key_rc != 0
+        || mbedtls_ssl_conf_own_cert(
+               &transport->conf, &transport->client_cert, &transport->client_key)
+            != 0)
     {
       return AZ_MQTT5_ERROR_TRANSPORT;
     }
@@ -230,9 +255,9 @@ static az_result _tls_setup(
     return AZ_MQTT5_ERROR_TRANSPORT;
   }
 
-  // Set SNI hostname
+  // Sets both SNI and the name the certificate is verified against.
   char host_str[256];
-  az_result rc = _span_to_cstr(host, host_str, (int32_t)sizeof(host_str));
+  rc = _span_to_cstr(host, host_str, (int32_t)sizeof(host_str));
   if (az_result_failed(rc))
   {
     return rc;
@@ -243,11 +268,7 @@ static az_result _tls_setup(
   }
 
   mbedtls_ssl_set_bio(
-      &transport->ssl,
-      &transport->net_ctx,
-      mbedtls_net_send,
-      mbedtls_net_recv,
-      NULL);
+      &transport->ssl, &transport->net_ctx, mbedtls_net_send, mbedtls_net_recv, NULL);
 
   int hs;
   while ((hs = mbedtls_ssl_handshake(&transport->ssl)) != 0)
@@ -256,6 +277,11 @@ static az_result _tls_setup(
     {
       return AZ_MQTT5_ERROR_TRANSPORT;
     }
+  }
+  // VERIFY_REQUIRED already fails the handshake; checked again so it stays so.
+  if (mbedtls_ssl_get_verify_result(&transport->ssl) != 0)
+  {
+    return AZ_MQTT5_ERROR_TRANSPORT;
   }
 
   transport->tls_initialized = true;
@@ -271,6 +297,23 @@ AZ_NODISCARD az_result az_mqtt5_transport_connect(
 {
   _az_PRECONDITION_NOT_NULL(transport);
 
+#ifdef AZ_MQTT5_TLS_MBEDTLS
+  if (tls_options != NULL)
+  {
+    az_result const check = _check_tls_options(tls_options);
+    if (az_result_failed(check))
+    {
+      return check;
+    }
+  }
+#else
+  if (tls_options != NULL)
+  {
+    // Built without TLS: never fall back to plaintext.
+    return AZ_MQTT5_ERROR_NOT_SUPPORTED;
+  }
+#endif
+
   az_result rc = _tcp_connect(transport, host, port);
   if (az_result_failed(rc))
   {
@@ -283,13 +326,12 @@ AZ_NODISCARD az_result az_mqtt5_transport_connect(
     rc = _tls_setup(transport, host, tls_options);
     if (az_result_failed(rc))
     {
+      _tls_contexts_reset(transport);
       close(transport->socket_fd);
       transport->socket_fd = -1;
       return rc;
     }
   }
-#else
-  (void)tls_options;
 #endif
 
   transport->connected = true;
@@ -420,14 +462,7 @@ void az_mqtt5_transport_close(az_mqtt5_transport* transport)
     (void)mbedtls_ssl_close_notify(&transport->ssl);
     transport->tls_initialized = false;
   }
-  mbedtls_ssl_free(&transport->ssl);
-  mbedtls_ssl_config_free(&transport->conf);
-  mbedtls_x509_crt_free(&transport->ca_chain);
-  mbedtls_x509_crt_free(&transport->client_cert);
-  mbedtls_pk_free(&transport->client_key);
-  mbedtls_ctr_drbg_free(&transport->ctr_drbg);
-  mbedtls_entropy_free(&transport->entropy);
-  mbedtls_net_free(&transport->net_ctx);
+  _tls_contexts_reset(transport);
 #endif
   if (transport->socket_fd >= 0)
   {
