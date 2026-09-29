@@ -12,6 +12,7 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -300,10 +301,11 @@ static void _serve(test_server* s, conn* c)
   {
     return;
   }
-  if (s->options.behavior == TEST_SERVER_RESET_AFTER_CONNACK)
+  if (s->options.behavior == TEST_SERVER_CLOSE_AFTER_CONNACK)
   {
-    struct linger lg = { 1, 0 };
-    setsockopt(c->fd, SOL_SOCKET, SO_LINGER, &lg, sizeof(lg));
+    // Plain close (FIN). The client's next write draws an RST and the one after
+    // that fails with EPIPE, which is what raises SIGPIPE.
+    usleep(200 * 1000);
     return;
   }
   for (;;)
@@ -324,6 +326,12 @@ static void _serve(test_server* s, conn* c)
 static void* _run(void* arg)
 {
   test_server* s = (test_server*)arg;
+  // SIGPIPE from write() goes to the writing thread: blocking it here keeps the
+  // server's own writes from masking or causing one in the client under test.
+  sigset_t pipe_set;
+  sigemptyset(&pipe_set);
+  sigaddset(&pipe_set, SIGPIPE);
+  pthread_sigmask(SIG_BLOCK, &pipe_set, NULL);
   while (!s->stop)
   {
     struct pollfd p = { s->listen_fd, POLLIN, 0 };
