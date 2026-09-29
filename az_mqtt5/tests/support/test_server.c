@@ -37,6 +37,8 @@ struct test_server
   volatile int accepted;
   volatile int handshakes;
   volatile bool saw_client_cert;
+  volatile int pingreqs;
+  volatile bool client_closed;
   int silent_fds[MAX_SILENT];
   int silent_count;
   SSL_CTX* ctx;
@@ -293,12 +295,57 @@ static void _serve(test_server* s, conn* c)
     return;
   }
   // CONNECT variable header: 00 04 'M' 'Q' 'T' 'T' <level>
-  static const uint8_t connack_v5[] = { 0x20, 0x03, 0x00, 0x00, 0x00 };
+  bool const v5 = body[6] == 5;
   static const uint8_t connack_v3[] = { 0x20, 0x02, 0x00, 0x00 };
-  bool ok = body[6] == 5 ? _write(c, connack_v5, (int)sizeof(connack_v5))
-                         : _write(c, connack_v3, (int)sizeof(connack_v3));
+  uint8_t connack_v5[] = { 0x20, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+  int connack_v5_len = 5;
+  if (s->options.server_keep_alive != 0)
+  {
+    // Properties: Server Keep Alive (0x13).
+    connack_v5[1] = 0x06;
+    connack_v5[4] = 0x03;
+    connack_v5[5] = 0x13;
+    connack_v5[6] = (uint8_t)(s->options.server_keep_alive >> 8);
+    connack_v5[7] = (uint8_t)(s->options.server_keep_alive & 0xFF);
+    connack_v5_len = 8;
+  }
+  bool ok = v5 ? _write(c, connack_v5, connack_v5_len)
+               : _write(c, connack_v3, (int)sizeof(connack_v3));
   if (!ok)
   {
+    return;
+  }
+  if (s->options.burst_publishes > 0)
+  {
+    // QoS 0 PUBLISH "t" / "p": 30 len 00 01 't' [00 props] 'p'
+    uint8_t burst[64 * 8];
+    int n = 0;
+    for (int i = 0; i < s->options.burst_publishes && n + 8 <= (int)sizeof(burst); i++)
+    {
+      burst[n++] = 0x30;
+      burst[n++] = v5 ? 0x05 : 0x04;
+      burst[n++] = 0x00;
+      burst[n++] = 0x01;
+      burst[n++] = 't';
+      if (v5)
+      {
+        burst[n++] = 0x00;
+      }
+      burst[n++] = 'p';
+    }
+    if (!_write(c, burst, n))
+    {
+      return;
+    }
+  }
+  if (s->options.behavior == TEST_SERVER_DISCONNECT_AFTER_CONNACK)
+  {
+    static const uint8_t disconnect_v5[] = { 0xE0, 0x01, 0x8B };
+    if (v5)
+    {
+      (void)_write(c, disconnect_v5, (int)sizeof(disconnect_v5));
+    }
+    usleep(100 * 1000);
     return;
   }
   if (s->options.behavior == TEST_SERVER_CLOSE_AFTER_CONNACK)
@@ -313,12 +360,17 @@ static void _serve(test_server* s, conn* c)
     int type = _read_packet(s, c, body, (int)sizeof(body), &len);
     if (type < 0 || type == 14)
     {
+      s->client_closed = !s->stop;
       return;
     }
     if (type == 12)
     {
+      s->pingreqs++;
       static const uint8_t pingresp[] = { 0xD0, 0x00 };
-      (void)_write(c, pingresp, (int)sizeof(pingresp));
+      if (!s->options.no_pingresp)
+      {
+        (void)_write(c, pingresp, (int)sizeof(pingresp));
+      }
     }
   }
 }
@@ -458,3 +510,5 @@ char const* test_server_client_key_path(test_server const* s) { return s->client
 int test_server_accepted(test_server const* s) { return s->accepted; }
 int test_server_handshakes(test_server const* s) { return s->handshakes; }
 bool test_server_saw_client_cert(test_server const* s) { return s->saw_client_cert; }
+int test_server_pingreqs(test_server const* s) { return s->pingreqs; }
+bool test_server_client_closed(test_server const* s) { return s->client_closed; }

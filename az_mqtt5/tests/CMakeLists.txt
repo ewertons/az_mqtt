@@ -27,6 +27,9 @@ set(BUILD_SHARED_LIBS ${_saved_BUILD_SHARED_LIBS} CACHE BOOL "" FORCE)
 
 add_subdirectory(e2e)
 
+# Tests against an in-process peer; no broker needed.
 if(UNIX)
+  add_subdirectory(support)
   add_subdirectory(transport)
+  add_subdirectory(client)
 endif()
