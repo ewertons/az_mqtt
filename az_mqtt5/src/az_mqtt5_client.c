@@ -64,6 +64,9 @@ static void _close(az_mqtt5_client* client, az_result reason)
   client->state = AZ_MQTT5_CLIENT_STATE_DISCONNECTED;
   client->recv_buf_pos = 0;
   client->ping_outstanding = false;
+  // The callback may reconnect: callers compare generations before touching
+  // anything that belonged to the old session.
+  client->session_generation++;
   if (was_open && client->options.on_connection_closed != NULL)
   {
     client->options.on_connection_closed(client, reason);
@@ -575,6 +578,7 @@ AZ_NODISCARD az_result az_mqtt5_client_connect(az_mqtt5_client* client, int32_t 
   az_span body;
   int32_t packet_size;
 
+  uint32_t const generation = client->session_generation;
   rc = _read_packet(client, deadline, &type, &flags, &body, &packet_size);
   if (az_result_succeeded(rc))
   {
@@ -585,6 +589,12 @@ AZ_NODISCARD az_result az_mqtt5_client_connect(az_mqtt5_client* client, int32_t 
     else
     {
       rc = _dispatch_packet(client, type, flags, body);
+    }
+    if (client->session_generation != generation)
+    {
+      // on_connack ended the session (and may have started another): leave it be.
+      return client->state == AZ_MQTT5_CLIENT_STATE_CONNECTED ? AZ_OK
+                                                                : AZ_MQTT5_ERROR_NOT_CONNECTED;
     }
     _consume_recv(client, packet_size);
   }
@@ -644,8 +654,9 @@ static az_result _service_keep_alive(az_mqtt5_client* client, int32_t* out_next_
   }
   if (az_result_succeeded(rc))
   {
+    // The response window starts once the PINGREQ is out, not before a slow send.
     client->ping_outstanding = true;
-    client->ping_sent_time_ms = now;
+    client->ping_sent_time_ms = _get_clock_ms();
     *out_next_ms = (int32_t)keep_alive_ms;
   }
   return rc;
@@ -686,6 +697,7 @@ AZ_NODISCARD az_result az_mqtt5_client_process_loop(az_mqtt5_client* client, int
     az_span body;
     int32_t packet_size;
 
+    uint32_t const generation = client->session_generation;
     rc = _read_packet(client, deadline, &type, &flags, &body, &packet_size);
     if (rc == AZ_MQTT5_ERROR_TIMEOUT)
     {
@@ -695,10 +707,13 @@ AZ_NODISCARD az_result az_mqtt5_client_process_loop(az_mqtt5_client* client, int
     if (az_result_succeeded(rc))
     {
       rc = _dispatch_packet(client, type, flags, body);
-      if (client->state != AZ_MQTT5_CLIENT_STATE_DISCONNECTED)
+      if (client->session_generation != generation)
       {
-        _consume_recv(client, packet_size);
+        // A callback ended this session, and may have connected a new one whose
+        // receive buffer must not be touched: stop here.
+        return az_result_failed(rc) ? rc : AZ_OK;
       }
+      _consume_recv(client, packet_size);
     }
     if (az_result_failed(rc))
     {

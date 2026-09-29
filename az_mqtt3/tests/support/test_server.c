@@ -320,7 +320,7 @@ static void _serve(test_server* s, conn* c)
   static const uint8_t connack_v3[] = { 0x20, 0x02, 0x00, 0x00 };
   uint8_t connack_v5[] = { 0x20, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
   int connack_v5_len = 5;
-  if (s->options.server_keep_alive != 0)
+  if (s->options.server_keep_alive != 0 || s->options.server_keep_alive_present)
   {
     // Properties: Server Keep Alive (0x13).
     connack_v5[1] = 0x06;

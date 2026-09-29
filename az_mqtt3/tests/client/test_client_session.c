@@ -41,6 +41,8 @@ static struct
   int disconnects;
   int closed;
   az_result closed_reason;
+  int reconnects_left;
+  az_result reconnect_rc;
 } g;
 
 static void _on_connack(az_mqtt3_client* c, az_mqtt3_connack_data const* d)
@@ -70,6 +72,11 @@ static void _on_closed(az_mqtt3_client* c, az_result reason)
   assert_int_equal(az_mqtt3_client_get_state(c), AZ_MQTT3_CLIENT_STATE_DISCONNECTED);
   g.closed++;
   g.closed_reason = reason;
+  if (g.reconnects_left > 0)
+  {
+    g.reconnects_left--;
+    g.reconnect_rc = az_mqtt3_client_connect(c, 3000);
+  }
 }
 
 static int64_t _now_ms(void)
@@ -314,6 +321,61 @@ static void reconnect_after_a_lost_session_works(void** state)
   _teardown(&f);
 }
 
+static void an_explicit_server_keep_alive_of_zero_disables_pings(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.server_keep_alive = 0;
+  so.server_keep_alive_present = true;
+  fixture f;
+  _setup(&f, &so, 1);
+  assert_int_equal(az_mqtt3_client_connect(&f.client, 3000), AZ_OK);
+  int64_t const end = _now_ms() + 2500;
+  while (_now_ms() < end)
+  {
+    assert_int_equal(az_mqtt3_client_process_loop(&f.client, 100), AZ_OK);
+  }
+#if AZ_MQTT3_PROTOCOL_VERSION == 5
+  assert_int_equal(f.client.keep_alive_seconds, 0);
+  assert_int_equal(test_server_pingreqs(f.server), 0);
+#else
+  // No such property in MQTT 3.1.1: the client's 1 s stands.
+  assert_int_equal(f.client.keep_alive_seconds, 1);
+  assert_true(test_server_pingreqs(f.server) >= 1);
+#endif
+  _teardown(&f);
+}
+
+static void reconnecting_from_on_connection_closed_is_safe(void** state)
+{
+  (void)state;
+  // Each session gets CONNACK then DISCONNECT (MQTT 5) or a close (3.1.1).
+  test_server_options so = _plain();
+  so.behavior = TEST_SERVER_DISCONNECT_AFTER_CONNACK;
+  fixture f;
+  _setup(&f, &so, 30);
+  g.reconnects_left = 1;
+  assert_int_equal(az_mqtt3_client_connect(&f.client, 3000), AZ_OK);
+
+  // First end: the callback reconnects synchronously.
+  for (int i = 0; i < 30 && g.closed == 0; i++)
+  {
+    (void)az_mqtt3_client_process_loop(&f.client, 100);
+  }
+  assert_int_equal(g.closed, 1);
+  assert_int_equal(g.reconnect_rc, AZ_OK);
+  assert_int_equal(g.connacks, 2);
+
+  // The new session must still see its own end, intact.
+  (void)_pump_until_closed(&f, 3000);
+  assert_int_equal(g.closed, 2);
+#if AZ_MQTT3_PROTOCOL_VERSION == 5
+  assert_int_equal(g.disconnects, 2);
+  assert_int_equal(g.closed_reason, AZ_MQTT3_ERROR_SERVER_DISCONNECTED);
+#endif
+  _teardown(&f);
+}
+
 int main(void)
 {
   const struct CMUnitTest tests[] = {
@@ -326,6 +388,8 @@ int main(void)
     cmocka_unit_test(a_local_disconnect_reports_closed_once),
     cmocka_unit_test(connect_to_a_silent_peer_times_out),
     cmocka_unit_test(reconnect_after_a_lost_session_works),
+    cmocka_unit_test(an_explicit_server_keep_alive_of_zero_disables_pings),
+    cmocka_unit_test(reconnecting_from_on_connection_closed_is_safe),
   };
   return cmocka_run_group_tests_name("client_session", tests, NULL, NULL);
 }

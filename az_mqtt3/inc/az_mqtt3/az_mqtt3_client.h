@@ -76,7 +76,8 @@ typedef void (*az_mqtt3_on_disconnect_fn)(az_mqtt3_client* client, az_mqtt3_disc
  * @p reason is AZ_OK after az_mqtt3_client_disconnect(), otherwise why the
  * session ended (e.g. AZ_MQTT3_ERROR_KEEP_ALIVE_TIMEOUT,
  * AZ_MQTT3_ERROR_SERVER_DISCONNECTED, a transport error). The transport is
- * already closed when it runs.
+ * already closed when it runs, and the callback may call
+ * az_mqtt3_client_connect() to reconnect.
  */
 typedef void (*az_mqtt3_on_connection_closed_fn)(az_mqtt3_client* client, az_result reason);
 
@@ -171,6 +172,8 @@ struct az_mqtt3_client
   /** @brief A PINGREQ is awaiting its PINGRESP (or any other packet). */
   bool ping_outstanding;
   int64_t ping_sent_time_ms;
+  /** @brief Bumped whenever a session ends; guards against callbacks that reconnect. */
+  uint32_t session_generation;
 };
 
 // ──────────────────────── API ────────────────────────────────

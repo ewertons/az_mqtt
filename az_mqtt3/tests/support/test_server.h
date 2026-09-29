@@ -46,8 +46,10 @@ typedef struct
   test_server_behavior behavior;
   /** @brief Never answer PINGREQ. */
   bool no_pingresp;
-  /** @brief Server Keep Alive to put in an MQTT 5 CONNACK; 0 = none. */
+  /** @brief Server Keep Alive to put in an MQTT 5 CONNACK (see server_keep_alive_present). */
   uint16_t server_keep_alive;
+  /** @brief Send server_keep_alive even when 0; otherwise 0 means "no property". */
+  bool server_keep_alive_present;
   /** @brief QoS 0 PUBLISHes written in one burst right after the CONNACK. */
   int burst_publishes;
 } test_server_options;
