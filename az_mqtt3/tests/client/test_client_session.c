@@ -37,6 +37,9 @@ typedef struct
 static struct
 {
   int connacks;
+  int connack_reason;
+  int subacks;
+  int32_t suback_count;
   int publishes;
   int disconnects;
   int closed;
@@ -46,8 +49,19 @@ static struct
 static void _on_connack(az_mqtt3_client* c, az_mqtt3_connack_data const* d)
 {
   (void)c;
-  (void)d;
   g.connacks++;
+  g.connack_reason = (int)d->reason_code;
+}
+
+static void _on_suback(az_mqtt3_client* c, az_mqtt3_suback_data const* d)
+{
+  (void)c;
+  g.subacks++;
+  g.suback_count = d->reason_code_count;
+  for (int32_t i = 0; i < d->reason_code_count; i++)
+  {
+    assert_int_equal(d->reason_codes[i], 0);
+  }
 }
 
 static void _on_publish(az_mqtt3_client* c, az_mqtt3_publish_data const* p)
@@ -107,6 +121,7 @@ static void _setup(fixture* f, test_server_options const* so, uint16_t keep_aliv
   o.port = test_server_port(f->server);
   o.on_connack = _on_connack;
   o.on_publish = _on_publish;
+  o.on_suback = _on_suback;
   o.on_disconnect = _on_disconnect;
   o.on_connection_closed = _on_closed;
   o.buffers.connack_user_properties = ARRAY_SPAN(f->props[0]);
@@ -314,6 +329,43 @@ static void reconnect_after_a_lost_session_works(void** state)
   _teardown(&f);
 }
 
+static void a_refused_connack_code_is_reported_verbatim(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  // "Not authorized": MQTT 5 reason 0x87, MQTT 3.1.1 return code 5.
+  so.connack_code = AZ_MQTT3_PROTOCOL_VERSION == 5 ? 0x87 : 0x05;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(az_mqtt3_client_connect(&f.client, 3000), AZ_MQTT3_ERROR_NOT_CONNECTED);
+  assert_int_equal(g.connacks, 1);
+  assert_int_equal(g.connack_reason, so.connack_code);
+  assert_int_equal(g.closed, 1);
+  assert_int_equal(g.closed_reason, AZ_MQTT3_ERROR_NOT_CONNECTED);
+  _teardown(&f);
+}
+
+static void suback_reason_codes_never_exceed_the_buffer(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.suback_codes = 10; // The fixture holds 4.
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(az_mqtt3_client_connect(&f.client, 3000), AZ_OK);
+  az_mqtt3_subscription sub;
+  memset(&sub, 0, sizeof(sub));
+  sub.topic_filter = AZ_SPAN_FROM_STR("t");
+  assert_int_equal(az_mqtt3_client_subscribe(&f.client, &sub, 1, NULL), AZ_OK);
+  for (int i = 0; i < 20 && g.subacks == 0; i++)
+  {
+    assert_int_equal(az_mqtt3_client_process_loop(&f.client, 50), AZ_OK);
+  }
+  assert_int_equal(g.subacks, 1);
+  assert_int_equal(g.suback_count, 4);
+  _teardown(&f);
+}
+
 int main(void)
 {
   const struct CMUnitTest tests[] = {
@@ -326,6 +378,8 @@ int main(void)
     cmocka_unit_test(a_local_disconnect_reports_closed_once),
     cmocka_unit_test(connect_to_a_silent_peer_times_out),
     cmocka_unit_test(reconnect_after_a_lost_session_works),
+    cmocka_unit_test(a_refused_connack_code_is_reported_verbatim),
+    cmocka_unit_test(suback_reason_codes_never_exceed_the_buffer),
   };
   return cmocka_run_group_tests_name("client_session", tests, NULL, NULL);
 }
