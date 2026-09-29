@@ -33,8 +33,8 @@ set(AZ_MQTT5_SOURCES
 )
 
 # TLS backend selection. Valid values: auto (default), openssl, mbedtls, none.
-#   auto   — use OpenSSL if found, otherwise no TLS.
-#   openssl — require OpenSSL; compile transport_posix.c with OpenSSL.
+#   auto   — use OpenSSL 3.0+ if found, otherwise no TLS.
+#   openssl — require OpenSSL 3.0+; compile transport_posix.c with OpenSSL.
 #   mbedtls — require mbedTLS; compile transport_mbedtls.c.
 #   none   — compile transport_posix.c without any TLS support.
 set(AZ_MQTT5_TLS_BACKEND "auto" CACHE STRING "TLS backend: auto | openssl | mbedtls | none")
@@ -81,9 +81,9 @@ elseif(AZ_MQTT5_TLS_BACKEND STREQUAL "mbedtls")
 elseif(AZ_MQTT5_TLS_BACKEND STREQUAL "openssl"
   OR AZ_MQTT5_TLS_BACKEND STREQUAL "auto")
   if(AZ_MQTT5_TLS_BACKEND STREQUAL "openssl")
-    find_package(OpenSSL REQUIRED)
+    find_package(OpenSSL 3.0 REQUIRED)
   else()
-    find_package(OpenSSL QUIET)
+    find_package(OpenSSL 3.0 QUIET)
   endif()
   if(OpenSSL_FOUND)
     target_compile_definitions(az_mqtt5_client PRIVATE AZ_MQTT5_TLS_OPENSSL)
@@ -92,7 +92,7 @@ elseif(AZ_MQTT5_TLS_BACKEND STREQUAL "openssl"
     message(STATUS "az_mqtt5_client: TLS backend = OpenSSL")
   else()
     # TLS connects fail with AZ_MQTT5_ERROR_NOT_SUPPORTED; they never fall back to plaintext.
-    message(WARNING "az_mqtt5_client: TLS support disabled (OpenSSL not found)")
+    message(WARNING "az_mqtt5_client: TLS support disabled (OpenSSL 3.0+ not found)")
     set(AZ_MQTT5_TLS_BACKEND_RESOLVED "none")
   endif()
 else()

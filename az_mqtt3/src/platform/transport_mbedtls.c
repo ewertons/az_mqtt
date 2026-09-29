@@ -45,6 +45,8 @@ struct az_mqtt3_transport
   mbedtls_pk_context client_key;
   mbedtls_net_context net_ctx;
   bool tls_initialized;
+  /** @brief Contexts are initialized (and own resources, e.g. mutexes) until freed. */
+  bool tls_contexts_ready;
 #endif
   bool connected;
 };
@@ -53,13 +55,14 @@ AZ_NODISCARD int32_t az_mqtt3_transport_sizeof(void) { return (int32_t)sizeof(az
 
 #ifdef AZ_MQTT3_TLS_MBEDTLS
 /**
- * @brief Put every TLS context in its freshly-initialized state.
+ * @brief Initialize every TLS context; called per connect, undone by _tls_contexts_free().
  *
  * The socket is owned by az_mqtt3_transport::socket_fd, so the net context
  * never closes it.
  */
 static void _tls_contexts_init(az_mqtt3_transport* transport)
 {
+  transport->tls_contexts_ready = true;
   mbedtls_ssl_init(&transport->ssl);
   mbedtls_ssl_config_init(&transport->conf);
   mbedtls_entropy_init(&transport->entropy);
@@ -71,9 +74,18 @@ static void _tls_contexts_init(az_mqtt3_transport* transport)
   transport->tls_initialized = false;
 }
 
-/** @brief Release every TLS context and re-initialize it for the next connect. */
-static void _tls_contexts_reset(az_mqtt3_transport* transport)
+/**
+ * @brief Release every TLS context. Free-only, so a transport that is closed
+ * and then discarded holds nothing (init() and close() have no deinit pair).
+ */
+static void _tls_contexts_free(az_mqtt3_transport* transport)
 {
+  if (!transport->tls_contexts_ready)
+  {
+    return;
+  }
+  transport->tls_contexts_ready = false;
+  transport->tls_initialized = false;
   mbedtls_ssl_free(&transport->ssl);
   mbedtls_ssl_config_free(&transport->conf);
   mbedtls_x509_crt_free(&transport->ca_chain);
@@ -81,7 +93,6 @@ static void _tls_contexts_reset(az_mqtt3_transport* transport)
   mbedtls_pk_free(&transport->client_key);
   mbedtls_ctr_drbg_free(&transport->ctr_drbg);
   mbedtls_entropy_free(&transport->entropy);
-  _tls_contexts_init(transport);
 }
 #endif
 
@@ -90,7 +101,8 @@ AZ_NODISCARD az_result az_mqtt3_transport_init(az_mqtt3_transport* transport)
   _az_PRECONDITION_NOT_NULL(transport);
   transport->socket_fd = -1;
 #ifdef AZ_MQTT3_TLS_MBEDTLS
-  _tls_contexts_init(transport);
+  transport->tls_initialized = false;
+  transport->tls_contexts_ready = false;
 #endif
   transport->connected = false;
   return AZ_OK;
@@ -323,10 +335,13 @@ AZ_NODISCARD az_result az_mqtt3_transport_connect(
 #ifdef AZ_MQTT3_TLS_MBEDTLS
   if (tls_options != NULL)
   {
+    _tls_contexts_free(transport);
+    _tls_contexts_init(transport);
+    transport->net_ctx.fd = transport->socket_fd; // Init reset it.
     rc = _tls_setup(transport, host, tls_options);
     if (az_result_failed(rc))
     {
-      _tls_contexts_reset(transport);
+      _tls_contexts_free(transport);
       close(transport->socket_fd);
       transport->socket_fd = -1;
       return rc;
@@ -460,9 +475,8 @@ void az_mqtt3_transport_close(az_mqtt3_transport* transport)
   if (transport->tls_initialized)
   {
     (void)mbedtls_ssl_close_notify(&transport->ssl);
-    transport->tls_initialized = false;
   }
-  _tls_contexts_reset(transport);
+  _tls_contexts_free(transport);
 #endif
   if (transport->socket_fd >= 0)
   {

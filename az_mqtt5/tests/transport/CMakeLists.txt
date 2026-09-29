@@ -3,7 +3,7 @@
 
 # Transport tests run against an in-process peer (POSIX + OpenSSL), so they
 # need no broker and cover every TLS backend the library can be built with.
-find_package(OpenSSL REQUIRED)
+find_package(OpenSSL 3.0 REQUIRED)
 find_package(Threads REQUIRED)
 
 add_library(az_mqtt5_test_server STATIC ../support/test_server.c)
