@@ -24,6 +24,10 @@ typedef enum
   TEST_SERVER_SILENT,
   /** @brief Answer CONNECT, then close the connection. */
   TEST_SERVER_CLOSE_AFTER_CONNACK,
+  /** @brief Answer CONNECT, then write only the start of a TLS record (TLS only). */
+  TEST_SERVER_PARTIAL_TLS_RECORD,
+  /** @brief Answer CONNECT, then never read again (the client's sends back up). */
+  TEST_SERVER_STOP_READING,
   /** @brief Answer CONNECT, then send DISCONNECT (0x8B) and close (MQTT 5; 3.1.1 just closes). */
   TEST_SERVER_DISCONNECT_AFTER_CONNACK,
 } test_server_behavior;

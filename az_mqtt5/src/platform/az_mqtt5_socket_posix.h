@@ -25,6 +25,10 @@ typedef struct
   int fd;
   struct addrinfo* addresses;
   struct addrinfo* next;
+  /** @brief addresses came from getaddrinfo() and are freed here. */
+  bool owns_addresses;
+  /** @brief When the current address was tried. */
+  int64_t attempt_start_ms;
 } _az_mqtt5_tcp_connect;
 
 /** @brief Readiness to wait for. */
@@ -57,7 +61,18 @@ AZ_NODISCARD az_result
 _az_mqtt5_tcp_connect_start(_az_mqtt5_tcp_connect* c, az_span host, uint16_t port);
 
 /**
+ * @brief Start a non-blocking connect over a caller-owned address list (tests;
+ * _az_mqtt5_tcp_connect_start() uses it after name resolution).
+ */
+AZ_NODISCARD az_result
+_az_mqtt5_tcp_connect_start_addresses(_az_mqtt5_tcp_connect* c, struct addrinfo* addresses);
+
+/**
  * @brief Wait up to @p timeout_ms for the connect to complete.
+ *
+ * An address that neither connects nor fails within
+ * AZ_MQTT5_TRANSPORT_ADDRESS_ATTEMPT_MS is abandoned for the next one, so a
+ * black-holed first address (e.g. broken IPv6) does not stall the connect.
  *
  * @retval AZ_OK Connected; c->fd is the socket and now belongs to the caller.
  * @retval AZ_MQTT5_ERROR_TIMEOUT Still connecting; call again.

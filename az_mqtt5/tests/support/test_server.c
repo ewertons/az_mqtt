@@ -33,12 +33,14 @@ struct test_server
   int listen_fd;
   uint16_t port;
   pthread_t thread;
-  volatile int stop;
-  volatile int accepted;
-  volatile int handshakes;
-  volatile bool saw_client_cert;
-  volatile int pingreqs;
-  volatile bool client_closed;
+  // Shared with the server thread: guarded by lock.
+  pthread_mutex_t lock;
+  int stop;
+  int accepted;
+  int handshakes;
+  bool saw_client_cert;
+  int pingreqs;
+  bool client_closed;
   int silent_fds[MAX_SILENT];
   int silent_count;
   SSL_CTX* ctx;
@@ -46,6 +48,25 @@ struct test_server
   char client_cert_path[64];
   char client_key_path[64];
 };
+
+/** @brief Read a shared int under the lock. */
+static int _get(test_server const* s, int const* field)
+{
+  pthread_mutex_lock((pthread_mutex_t*)&s->lock);
+  int v = *field;
+  pthread_mutex_unlock((pthread_mutex_t*)&s->lock);
+  return v;
+}
+
+/** @brief Add to a shared int under the lock. */
+static void _add(test_server* s, int* field, int delta)
+{
+  pthread_mutex_lock(&s->lock);
+  *field += delta;
+  pthread_mutex_unlock(&s->lock);
+}
+
+static bool _stopping(test_server* s) { return _get(s, &s->stop) != 0; }
 
 test_server_options test_server_options_default(void)
 {
@@ -211,7 +232,7 @@ static bool _write(conn* c, uint8_t const* buf, int len)
 
 static bool _wait_readable(test_server* s, conn* c)
 {
-  while (!s->stop)
+  while (!_stopping(s))
   {
     if (c->ssl != NULL && SSL_pending(c->ssl) > 0)
     {
@@ -348,6 +369,26 @@ static void _serve(test_server* s, conn* c)
     usleep(100 * 1000);
     return;
   }
+  if (s->options.behavior == TEST_SERVER_PARTIAL_TLS_RECORD)
+  {
+    // Application-data record header announcing 64 bytes, then only 5 of them,
+    // written under OpenSSL so the client sees a record that never completes.
+    static const uint8_t partial[] = { 0x17, 0x03, 0x03, 0x00, 0x40, 1, 2, 3, 4, 5 };
+    (void)send(c->fd, partial, sizeof(partial), MSG_NOSIGNAL);
+    while (!_stopping(s))
+    {
+      usleep(20 * 1000);
+    }
+    return;
+  }
+  if (s->options.behavior == TEST_SERVER_STOP_READING)
+  {
+    while (!_stopping(s))
+    {
+      usleep(20 * 1000);
+    }
+    return;
+  }
   if (s->options.behavior == TEST_SERVER_CLOSE_AFTER_CONNACK)
   {
     // Plain close (FIN). The client's next write draws an RST and the one after
@@ -360,12 +401,14 @@ static void _serve(test_server* s, conn* c)
     int type = _read_packet(s, c, body, (int)sizeof(body), &len);
     if (type < 0 || type == 14)
     {
+      pthread_mutex_lock(&s->lock);
       s->client_closed = !s->stop;
+      pthread_mutex_unlock(&s->lock);
       return;
     }
     if (type == 12)
     {
-      s->pingreqs++;
+      _add(s, &s->pingreqs, 1);
       static const uint8_t pingresp[] = { 0xD0, 0x00 };
       if (!s->options.no_pingresp)
       {
@@ -384,7 +427,7 @@ static void* _run(void* arg)
   sigemptyset(&pipe_set);
   sigaddset(&pipe_set, SIGPIPE);
   pthread_sigmask(SIG_BLOCK, &pipe_set, NULL);
-  while (!s->stop)
+  while (!_stopping(s))
   {
     struct pollfd p = { s->listen_fd, POLLIN, 0 };
     if (poll(&p, 1, 50) <= 0)
@@ -396,7 +439,7 @@ static void* _run(void* arg)
     {
       continue;
     }
-    s->accepted++;
+    _add(s, &s->accepted, 1);
     if (s->options.behavior == TEST_SERVER_SILENT)
     {
       if (s->silent_count < MAX_SILENT)
@@ -418,9 +461,11 @@ static void* _run(void* arg)
       if (c.ssl != NULL && SSL_set_fd(c.ssl, fd) == 1 && SSL_accept(c.ssl) == 1)
       {
         X509* peer = SSL_get1_peer_certificate(c.ssl);
+        pthread_mutex_lock(&s->lock);
         s->saw_client_cert = peer != NULL;
-        X509_free(peer);
         s->handshakes++;
+        pthread_mutex_unlock(&s->lock);
+        X509_free(peer);
         _serve(s, &c);
       }
       SSL_free(c.ssl);
@@ -445,6 +490,7 @@ test_server* test_server_start(test_server_options const* options)
   }
   s->options = *options;
   s->listen_fd = -1;
+  pthread_mutex_init(&s->lock, NULL);
   if (s->options.tls && !_setup_tls(s))
   {
     test_server_stop(s);
@@ -457,6 +503,11 @@ test_server* test_server_start(test_server_options const* options)
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   socklen_t alen = sizeof(addr);
   s->listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (s->listen_fd >= 0 && s->options.behavior == TEST_SERVER_STOP_READING)
+  {
+    int small = 4096; // Inherited by accepted sockets: backs the client up quickly.
+    setsockopt(s->listen_fd, SOL_SOCKET, SO_RCVBUF, &small, sizeof(small));
+  }
   if (s->listen_fd < 0 || bind(s->listen_fd, (struct sockaddr*)&addr, sizeof(addr)) != 0
       || listen(s->listen_fd, 8) != 0
       || getsockname(s->listen_fd, (struct sockaddr*)&addr, &alen) != 0)
@@ -480,7 +531,9 @@ void test_server_stop(test_server* s)
   {
     return;
   }
+  pthread_mutex_lock(&s->lock);
   s->stop = 1;
+  pthread_mutex_unlock(&s->lock);
   if (s->thread != 0)
   {
     pthread_join(s->thread, NULL);
@@ -494,6 +547,7 @@ void test_server_stop(test_server* s)
     close(s->listen_fd);
   }
   SSL_CTX_free(s->ctx);
+  pthread_mutex_destroy(&s->lock);
   if (s->ca_path[0] != '\0')
   {
     remove(s->ca_path);
@@ -507,8 +561,20 @@ uint16_t test_server_port(test_server const* s) { return s->port; }
 char const* test_server_ca_path(test_server const* s) { return s->ca_path; }
 char const* test_server_client_cert_path(test_server const* s) { return s->client_cert_path; }
 char const* test_server_client_key_path(test_server const* s) { return s->client_key_path; }
-int test_server_accepted(test_server const* s) { return s->accepted; }
-int test_server_handshakes(test_server const* s) { return s->handshakes; }
-bool test_server_saw_client_cert(test_server const* s) { return s->saw_client_cert; }
-int test_server_pingreqs(test_server const* s) { return s->pingreqs; }
-bool test_server_client_closed(test_server const* s) { return s->client_closed; }
+int test_server_accepted(test_server const* s) { return _get(s, &s->accepted); }
+int test_server_handshakes(test_server const* s) { return _get(s, &s->handshakes); }
+bool test_server_saw_client_cert(test_server const* s)
+{
+  pthread_mutex_lock((pthread_mutex_t*)&s->lock);
+  bool v = s->saw_client_cert;
+  pthread_mutex_unlock((pthread_mutex_t*)&s->lock);
+  return v;
+}
+int test_server_pingreqs(test_server const* s) { return _get(s, &s->pingreqs); }
+bool test_server_client_closed(test_server const* s)
+{
+  pthread_mutex_lock((pthread_mutex_t*)&s->lock);
+  bool v = s->client_closed;
+  pthread_mutex_unlock((pthread_mutex_t*)&s->lock);
+  return v;
+}
