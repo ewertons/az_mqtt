@@ -76,7 +76,7 @@ to the current implementation status of `az_mqtt3`.
 | 54 | PINGREQ encoded (2-byte packet, no payload) | [§3.12](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `az_mqtt3_codec_encode_pingreq` | [src/az_mqtt3_codec.c](../../src/az_mqtt3_codec.c) |
 | 55 | Client must send PINGREQ when no packet sent within Keep Alive interval | [§3.1.2.10](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `az_mqtt3_client_process_loop` checks `last_send_time_ms` vs `keep_alive_seconds` | [src/az_mqtt3_client.c](../../src/az_mqtt3_client.c) |
 | 56 | PINGRESP received and handled (no action required by client) | [§3.13](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `_dispatch_packet` returns `AZ_OK` on PINGRESP | [src/az_mqtt3_client.c](../../src/az_mqtt3_client.c) |
-| 57 | Client should close Network Connection if no PINGRESP within reasonable time | [§3.1.2.10](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | No | PINGRESP timeout not detected; no `last_pingreq_time` tracking | |
+| 57 | Client should close Network Connection if no PINGRESP within reasonable time | [§3.1.2.10](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `process_loop` closes the session with `AZ_MQTT3_ERROR_KEEP_ALIVE_TIMEOUT` when a PINGREQ gets no packet back within the keep-alive | [src/az_mqtt3_client.c](../../src/az_mqtt3_client.c) |
 | 58 | Keep Alive of 0 disables the mechanism | [§3.1.2.10](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | Timer check is guarded by `keep_alive_seconds > 0` | [src/az_mqtt3_client.c](../../src/az_mqtt3_client.c) |
 | **DISCONNECT ([§3.14](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html))** |||||
 | 59 | DISCONNECT encoded (2-byte fixed form: no variable header, no payload) | [§3.14](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `az_mqtt3_codec_encode_disconnect`; `az_mqtt3_client_disconnect` | [src/az_mqtt3_codec.c](../../src/az_mqtt3_codec.c), [src/az_mqtt3_client.c](../../src/az_mqtt3_client.c) |
@@ -89,8 +89,8 @@ to the current implementation status of `az_mqtt3`.
 | 65 | Payload of PUBLISH must be preceded by Topic Name (2-byte length + data) | [§3.3.2](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `_read_binary_data` / `_write_binary_data` | [src/az_mqtt3_codec.c](../../src/az_mqtt3_codec.c) |
 | 66 | Topic wildcards (+, #) permitted only in SUBSCRIBE, never in PUBLISH | [§3.3.2.1, 4.7.2](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | No | No topic validation on outgoing PUBLISH | |
 | 67 | Client must accept packets up to 268 MB (client resource permitting) | [§4.6](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | Receive buffer is caller-provided and can be arbitrarily large | [src/az_mqtt3_client.c](../../src/az_mqtt3_client.c) |
-| 68 | Client must close Network Connection on receipt of a Malformed Packet | [§4.8.3.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Partial | `AZ_MQTT3_ERROR_MALFORMED_PACKET` returned to caller; transport not automatically closed | [src/az_mqtt3_client.c](../../src/az_mqtt3_client.c) |
-| 69 | Client must close Network Connection on receipt of a Protocol Error | [§4.8.3.2](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Partial | `AZ_MQTT3_ERROR_PROTOCOL` returned to caller; transport not automatically closed | [src/az_mqtt3_client.c](../../src/az_mqtt3_client.c) |
+| 68 | Client must close Network Connection on receipt of a Malformed Packet | [§4.8.3.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `process_loop` closes the transport and reports the error via `on_connection_closed` | [src/az_mqtt3_client.c](../../src/az_mqtt3_client.c) |
+| 69 | Client must close Network Connection on receipt of a Protocol Error | [§4.8.3.2](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `process_loop` closes the transport and reports the error via `on_connection_closed` | [src/az_mqtt3_client.c](../../src/az_mqtt3_client.c) |
 
 ---
 
@@ -98,9 +98,9 @@ to the current implementation status of `az_mqtt3`.
 
 | Status | Count |
 |--------|-------|
-| Yes | 47 |
-| Partial | 3 |
-| No | 22 |
+| Yes | 56 |
+| Partial | 1 |
+| No | 12 |
 
 ### Key gaps (client-facing impact)
 
@@ -109,8 +109,6 @@ to the current implementation status of `az_mqtt3`.
 | QoS 2 receive deduplication not implemented | [§3.5](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) |
 | QoS 1/2 retransmission on reconnect not implemented | [§3.3.1, 3.6](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) |
 | In-flight packet ID uniqueness not guaranteed | [§3.3.2.2](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) |
-| PINGRESP timeout not detected | [§3.1.2.10](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) |
 | Topic wildcards not validated in PUBLISH | [§3.3.2.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) |
-| Malformed Packet / Protocol Error: transport not auto-closed | [§4.8.3.1, 4.8.3.2](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) |
 | UTF-8 string validation not performed | [§2.3.2](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) |
 | Will flag consistency validation not enforced | [§3.1.2.4](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) |

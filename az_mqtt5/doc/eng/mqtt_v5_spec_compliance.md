@@ -65,7 +65,7 @@ to the current implementation status of `az_mqtt5`.
 | 51 | Wildcard Subscription Available property decoded | [§3.2.2.3.11](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `connack_data.wildcard_subscription_available` | [src/az_mqtt5_codec.c](../../src/az_mqtt5_codec.c) |
 | 52 | Subscription Identifier Available property decoded | [§3.2.2.3.12](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `connack_data.subscription_identifier_available` | [src/az_mqtt5_codec.c](../../src/az_mqtt5_codec.c) |
 | 53 | Shared Subscription Available property decoded | [§3.2.2.3.13](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `connack_data.shared_subscription_available` | [src/az_mqtt5_codec.c](../../src/az_mqtt5_codec.c) |
-| 54 | Server Keep Alive property (CONNACK) decoded | [§3.2.2.3.14](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Partial | Decoded into `connack_data.server_keep_alive` but client does **not** override its own keep-alive timer with this value | [src/az_mqtt5_codec.c](../../src/az_mqtt5_codec.c) |
+| 54 | Server Keep Alive property (CONNACK) decoded | [§3.2.2.3.14](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | Decoded into `connack_data.server_keep_alive` (`server_keep_alive_present`) and used as the keep-alive in force | [src/az_mqtt5_client.c](../../src/az_mqtt5_client.c) |
 | 55 | Response Information property (CONNACK) decoded | [§3.2.2.3.15](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `connack_data.response_information` | [src/az_mqtt5_codec.c](../../src/az_mqtt5_codec.c) |
 | 56 | Server Reference property (CONNACK) decoded | [§3.2.2.3.16](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `connack_data.server_reference` | [src/az_mqtt5_codec.c](../../src/az_mqtt5_codec.c) |
 | 57 | Authentication Method / Data (CONNACK) decoded | [§3.2.2.3.17](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html)–18 | Yes | `connack_data.authentication_method/data` | [src/az_mqtt5_codec.c](../../src/az_mqtt5_codec.c) |
@@ -129,7 +129,7 @@ to the current implementation status of `az_mqtt5`.
 | 107 | PINGREQ encoded (2-byte packet, no payload) | [[MQTT-3.12.1-1]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `az_mqtt5_codec_encode_pingreq` | [src/az_mqtt5_codec.c](../../src/az_mqtt5_codec.c) |
 | 108 | PINGREQ sent when no packet sent within Keep Alive interval | [§3.1.2.10](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `az_mqtt5_client_process_loop` checks `last_send_time_ms` vs `keep_alive_seconds` | [src/az_mqtt5_client.c](../../src/az_mqtt5_client.c) |
 | 109 | PINGRESP received and handled (no action required by client) | [§3.13](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `_dispatch_packet` returns `AZ_OK` on PINGRESP | [src/az_mqtt5_client.c](../../src/az_mqtt5_client.c) |
-| 110 | Client SHOULD close Network Connection if no PINGRESP within reasonable time | [[MQTT-3.3.4-2]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | PINGRESP timeout not detected; no `last_pingreq_time` tracking | |
+| 110 | Client SHOULD close Network Connection if no PINGRESP within reasonable time | [[MQTT-3.3.4-2]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `process_loop` closes the session with `AZ_MQTT5_ERROR_KEEP_ALIVE_TIMEOUT` when a PINGREQ gets no packet back within the keep-alive | [src/az_mqtt5_client.c](../../src/az_mqtt5_client.c) |
 | **DISCONNECT ([§3.14](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html))** |||||
 | 111 | DISCONNECT encoded by client | [§3.14](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `az_mqtt5_codec_encode_disconnect`; `az_mqtt5_client_disconnect` | [src/az_mqtt5_codec.c](../../src/az_mqtt5_codec.c), [src/az_mqtt5_client.c](../../src/az_mqtt5_client.c) |
 | 112 | Session Expiry Interval in DISCONNECT must not increase beyond CONNECT value | [[MQTT-3.14.2-3]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | Not validated; caller may pass a larger value | |
@@ -146,7 +146,7 @@ to the current implementation status of `az_mqtt5`.
 | 121 | A client must not send any packet other than CONNECT before CONNACK is received | [[MQTT-3.1.4-5]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | State machine: `AZ_MQTT5_CLIENT_STATE_CONNECTING` prevents publish/subscribe | [src/az_mqtt5_client.c](../../src/az_mqtt5_client.c) |
 | 122 | Keep Alive: client must send PINGREQ if no packet within Keep Alive interval | [[MQTT-3.1.2-22]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `process_loop` timer check | [src/az_mqtt5_client.c](../../src/az_mqtt5_client.c) |
 | 123 | Keep Alive of 0 disables the mechanism | [§3.1.2.10](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | Timer check is guarded by `keep_alive_seconds > 0` | [src/az_mqtt5_client.c](../../src/az_mqtt5_client.c) |
-| 124 | If Server Keep Alive is present in CONNACK, use it instead of the value in CONNECT | [[MQTT-3.2.2-21]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | `connack_data.server_keep_alive` decoded but `process_loop` uses `connect_options.keep_alive_seconds` | [src/az_mqtt5_client.c](../../src/az_mqtt5_client.c) |
+| 124 | If Server Keep Alive is present in CONNACK, use it instead of the value in CONNECT | [[MQTT-3.2.2-21]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `client.keep_alive_seconds` takes the CONNACK value when present | [src/az_mqtt5_client.c](../../src/az_mqtt5_client.c) |
 | 125 | Flow control: client must not exceed server Receive Maximum in-flight QoS>0 packets | [[MQTT-4.9-1]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | No in-flight send counter; Receive Maximum from CONNACK is ignored at runtime | |
 | 126 | Flow control: client SHOULD send PUBACK/PUBCOMP promptly to keep flow moving | [§4.9](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | Auto-ACK during `_handle_publish` within the same `process_loop` iteration | [src/az_mqtt5_client.c](../../src/az_mqtt5_client.c) |
 | 127 | Topic Alias: client must not send a Topic Alias > Topic Alias Maximum advertised by server | [[MQTT-3.2.2-17]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | No enforcement; caller is responsible | |
@@ -154,8 +154,8 @@ to the current implementation status of `az_mqtt5`.
 | 129 | Session state: if Clean Start=0 and Session Present=1, resume in-flight messages | [§4.1](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | Session state persistence not implemented; zero-allocation design intentional | [src/az_mqtt5_client.c](../../src/az_mqtt5_client.c) |
 | 130 | Maximum Packet Size: client must not send packets larger than server's Maximum Packet Size | [[MQTT-3.2.2-15]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | No outgoing packet size check against CONNACK `maximum_packet_size` | |
 | 131 | Client must accept packets up to 20 bytes (minimum required) | [§4.6](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | Receive buffer is caller-provided and can be arbitrarily large | |
-| 132 | Client must close Network Connection on receipt of a Malformed Packet | [[MQTT-4.13.1-1]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Partial | `AZ_MQTT5_ERROR_MALFORMED_PACKET` returned to caller; transport not automatically closed | [src/az_mqtt5_client.c](../../src/az_mqtt5_client.c) |
-| 133 | Client must close Network Connection on receipt of a Protocol Error | [[MQTT-4.13.2-1]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Partial | `AZ_MQTT5_ERROR_PROTOCOL` returned to caller; transport not automatically closed | [src/az_mqtt5_client.c](../../src/az_mqtt5_client.c) |
+| 132 | Client must close Network Connection on receipt of a Malformed Packet | [[MQTT-4.13.1-1]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `process_loop` closes the transport and reports the error via `on_connection_closed` | [src/az_mqtt5_client.c](../../src/az_mqtt5_client.c) |
+| 133 | Client must close Network Connection on receipt of a Protocol Error | [[MQTT-4.13.2-1]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `process_loop` closes the transport and reports the error via `on_connection_closed` | [src/az_mqtt5_client.c](../../src/az_mqtt5_client.c) |
 | 134 | On receipt of CONNACK with reason code 0x9C (Use Another Server) or 0x9D (Server Moved), use Server Reference | [§4.11](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | `server_reference` decoded but no redirect logic or callback for it | |
 | 135 | Shared Subscriptions: topic filter begins with `$share/` | [§4.8.2](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Partial | Codec will encode any topic filter string; no `$share/` validation or special handling | |
 
@@ -165,9 +165,9 @@ to the current implementation status of `az_mqtt5`.
 
 | Status | Count |
 |--------|-------|
-| Yes | 80 |
-| Partial | 8 |
-| No | 47 |
+| Yes | 100 |
+| Partial | 2 |
+| No | 33 |
 
 ### Key gaps (client-facing impact)
 
@@ -178,8 +178,6 @@ to the current implementation status of `az_mqtt5`.
 | QoS 2 receive deduplication not implemented | [[MQTT-4.3.3-2]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) |
 | QoS 1/2 retransmission on reconnect not implemented | [[MQTT-4.3.3-1]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) |
 | In-flight packet ID uniqueness not guaranteed | [[MQTT-2.2.1-3]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) |
-| Server Keep Alive override not applied | [[MQTT-3.2.2-21]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) |
-| PINGRESP timeout not detected | [[MQTT-3.3.4-2]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) |
 | Enhanced authentication (AUTH exchange) not implemented | [[MQTT-4.12.0-1]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) |
 | Topic Alias mapping table not maintained | [§3.3.2.3.4](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) |
 | Unknown / duplicate property IDs not rejected | [[MQTT-2.2.2-2]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html), [[MQTT-2.2.2-3]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) |
