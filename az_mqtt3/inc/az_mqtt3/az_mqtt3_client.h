@@ -159,7 +159,7 @@ struct az_mqtt3_client
 // ──────────────────────── API ────────────────────────────────
 
 /**
- * @brief Initialize the MQTT5 client.
+ * @brief Initialize the MQTT3 client.
  */
 AZ_NODISCARD az_result az_mqtt3_client_init(az_mqtt3_client* client, az_mqtt3_client_options const* options);
 
