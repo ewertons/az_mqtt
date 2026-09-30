@@ -192,8 +192,10 @@ static void test_subscribe_and_unsubscribe_callbacks(void** state)
   rc = az_mqtt3_e2e_wait_until(&client, WAIT_ITERATIONS, PROCESS_LOOP_TIMEOUT_MS, cond_unsuback_received);
   assert_int_equal(rc, AZ_OK);
   assert_int_equal(s_unsuback_packet_id, unsub_packet_id);
+#if AZ_MQTT3_PROTOCOL_VERSION == 5
   assert_true(
       s_unsuback_reason == AZ_MQTT3_REASON_SUCCESS || s_unsuback_reason == AZ_MQTT3_REASON_NO_SUBSCRIPTION_EXISTED);
+#endif
 
   rc = az_mqtt3_client_disconnect(&client, AZ_MQTT3_REASON_NORMAL_DISCONNECTION);
   assert_int_equal(rc, AZ_OK);

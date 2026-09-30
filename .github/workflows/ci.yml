@@ -1,0 +1,167 @@
+# Copyright (c) Microsoft. All rights reserved.
+# Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
+# Build and test az_mqtt5 and az_mqtt3. Every job treats warnings in our code as
+# errors. The Linux steps are scripts in eng/ci, so they run the same way locally.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MBEDTLS_VERSION: 3.6.7
+  MBEDTLS_PREFIX: ${{ github.workspace }}/build/mbedtls
+
+jobs:
+  linux:
+    name: ${{ matrix.lib }} / ${{ matrix.tls }} / ${{ matrix.cc }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        lib: [az_mqtt5, az_mqtt3]
+        tls: [openssl, mbedtls, none]
+        cc: [gcc, clang]
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Install packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build libssl-dev mosquitto mosquitto-clients
+      - name: Cache mbedTLS
+        if: matrix.tls == 'mbedtls'
+        id: mbedtls-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.MBEDTLS_PREFIX }}
+          key: mbedtls-${{ env.MBEDTLS_VERSION }}-${{ runner.os }}-${{ matrix.cc }}-v1
+      - name: Build mbedTLS
+        if: matrix.tls == 'mbedtls' && steps.mbedtls-cache.outputs.cache-hit != 'true'
+        run: eng/ci/install-mbedtls.sh "$MBEDTLS_VERSION" "$MBEDTLS_PREFIX"
+      - name: Start broker
+        run: eng/ci/start-broker.sh
+      - name: Build and test
+        run: eng/ci/build-and-test.sh ${{ matrix.lib }} ${{ matrix.tls }} debug
+
+  sanitizers:
+    name: ${{ matrix.lib }} / ASan + UBSan
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        lib: [az_mqtt5, az_mqtt3]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Install packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build libssl-dev mosquitto mosquitto-clients
+      # ASan cannot map its shadow memory with the runner kernel's default ASLR entropy.
+      - name: Reduce mmap ASLR entropy for ASan
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+      - name: Start broker
+        run: eng/ci/start-broker.sh
+      - name: Build and test
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: eng/ci/build-and-test.sh ${{ matrix.lib }} openssl asan
+
+  hardened:
+    name: ${{ matrix.lib }} / hardened release
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        lib: [az_mqtt5, az_mqtt3]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Install packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build libssl-dev mosquitto mosquitto-clients
+      - name: Start broker
+        run: eng/ci/start-broker.sh
+      - name: Build, check and test
+        run: eng/ci/build-and-test.sh ${{ matrix.lib }} openssl hardened
+
+  windows:
+    name: ${{ matrix.lib }} / Schannel / MSVC
+    runs-on: windows-2022
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        lib: [az_mqtt5, az_mqtt3]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Install Mosquitto
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $ProgressPreference = 'SilentlyContinue' # the progress bar slows Invoke-WebRequest badly
+          # Official NSIS installer, unpacked with 7-Zip (the Chocolatey package is gone, and
+          # the installer does not finish unattended). Newest 2.0.x release; 2.0.9x are snapshots.
+          $base = "https://mosquitto.org/files/binary/win64/"
+          $list = (Invoke-WebRequest -UseBasicParsing $base).Content
+          $all = [regex]::Matches($list, 'mosquitto-2\.0\.(\d+)-install-windows-x64\.exe') |
+            Where-Object { [int]$_.Groups[1].Value -lt 90 } | Sort-Object { [int]$_.Groups[1].Value }
+          $file = $all | Select-Object -Last 1 -ExpandProperty Value
+          if (-not $file) { "::error::No mosquitto 2.0.x release installer found at $base"; exit 1 }
+          "::notice::Using $file"
+          Invoke-WebRequest -UseBasicParsing "$base$file" -OutFile mosquitto-setup.exe
+          7z x mosquitto-setup.exe "-oC:\Program Files\mosquitto" -y *> 7z.log
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path "C:\Program Files\mosquitto\mosquitto.exe")) {
+            Get-Content 7z.log -Tail 10 | ForEach-Object { "::error::$_" }
+            exit 1
+          }
+          "C:\Program Files\mosquitto" | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Start broker
+        shell: bash
+        run: |
+          eng/ci/start-broker.sh > broker.log 2>&1 && exit 0
+          echo "::error::start-broker.sh failed"
+          tail -n 15 broker.log | tr -d '\r' | sed 's/^/::error::/'
+          exit 1
+      # Failures are also echoed as annotations, readable without the raw log.
+      - name: Configure, build and test
+        shell: pwsh
+        run: |
+          $opt = "${{ matrix.lib }}".Substring(3).ToUpper()
+          function Step([string]$label, [scriptblock]$cmd) {
+            & $cmd *> step.log
+            $code = $LASTEXITCODE
+            Get-Content step.log
+            if ($code -ne 0) {
+              Select-String -Path step.log -Pattern 'error|warning C|Failed|FAILED|ERROR' |
+                Select-Object -First 25 | ForEach-Object { "::error title=$label::$($_.Line.Trim())" }
+              exit $code
+            }
+          }
+          Step configure { cmake -S ${{ matrix.lib }} -B build/win -A x64 "-DAZ_${opt}_BUILD_TESTS=ON" "-DAZ_${opt}_BUILD_SAMPLES=ON" "-DAZ_${opt}_WARNINGS_AS_ERRORS=ON" }
+          Step build { cmake --build build/win --config Debug }
+          $env:AZ_MQTT5_RUN_TLS_E2E = '1' # test_ssl_win32 is opt-in
+          $env:AZ_MQTT3_RUN_TLS_E2E = '1'
+          Step test { ctest --test-dir build/win -C Debug --output-on-failure --timeout 300 }
+          $summary = Select-String -Path step.log -Pattern 'tests passed' | Select-Object -First 1
+          "::notice title=${{ matrix.lib }} schannel::$($summary.Line)"

@@ -18,6 +18,9 @@
 
 #include <azure/core/_az_cfg_prefix.h>
 
+/** @brief CONNECT Protocol Level this codec speaks (MQTT 5.0). */
+#define AZ_MQTT5_PROTOCOL_VERSION 5
+
 // ──────────────────────── Encoding ───────────────────────────
 
 /**

@@ -23,6 +23,7 @@
 
 #include <azure/core/az_span.h>
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -145,7 +146,7 @@ int main(int argc, char* argv[])
   client_opts.send_buffer = AZ_SPAN_FROM_BUFFER(s_send_buffer);
   client_opts.receive_buffer = AZ_SPAN_FROM_BUFFER(s_recv_buffer);
   client_opts.connect_options = connect_opts;
-  client_opts.hostname = az_span_create_from_str((char*)host);
+  client_opts.hostname = az_span_create((uint8_t*)(uintptr_t)host, (int32_t)strlen(host));
   client_opts.port = port;
   client_opts.tls_options = NULL; // Plain TCP for this sample
 
@@ -197,7 +198,10 @@ int main(int argc, char* argv[])
   if (az_result_failed(rc))
   {
     printf("ERROR: subscribe failed: 0x%08X\n", (unsigned)rc);
-    az_mqtt3_client_disconnect(&client, AZ_MQTT3_REASON_NORMAL_DISCONNECTION);
+    if (az_result_failed(az_mqtt3_client_disconnect(&client, AZ_MQTT3_REASON_NORMAL_DISCONNECTION)))
+    {
+      printf("WARNING: disconnect failed\n");
+    }
     return 1;
   }
   printf("Subscribe sent (packet_id=%d)\n", sub_packet_id);
@@ -214,7 +218,10 @@ int main(int argc, char* argv[])
   if (az_result_failed(rc))
   {
     printf("ERROR: publish failed: 0x%08X\n", (unsigned)rc);
-    az_mqtt3_client_disconnect(&client, AZ_MQTT3_REASON_NORMAL_DISCONNECTION);
+    if (az_result_failed(az_mqtt3_client_disconnect(&client, AZ_MQTT3_REASON_NORMAL_DISCONNECTION)))
+    {
+      printf("WARNING: disconnect failed\n");
+    }
     return 1;
   }
   printf("Publish sent (packet_id=%d)\n", pub_packet_id);

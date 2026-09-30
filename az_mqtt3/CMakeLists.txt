@@ -31,6 +31,10 @@ else()
   message(FATAL_ERROR "azure-sdk-for-c not found. Initialize submodules in az_mqtt3/deps or provide ../az_mqtt5/deps/azure-sdk-for-c")
 endif()
 
+# azure-sdk-for-c headers are third-party: our warning set must not apply to them.
+get_target_property(_az_core_includes az_core INTERFACE_INCLUDE_DIRECTORIES)
+set_property(TARGET az_core APPEND PROPERTY INTERFACE_SYSTEM_INCLUDE_DIRECTORIES ${_az_core_includes})
+
 # ──────────────────────── az_mqtt3_client library ────────────────
 
 set(AZ_MQTT3_SOURCES
@@ -115,11 +119,27 @@ add_library(az_mqtt3::client ALIAS az_mqtt3_client)
 
 # ──────────────────────── Compiler warnings ───────────────────
 
-if(MSVC)
-  target_compile_options(az_mqtt3_client PRIVATE /W4)
-else()
-  target_compile_options(az_mqtt3_client PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+option(AZ_MQTT3_WARNINGS_AS_ERRORS "Treat warnings in az_mqtt3 code (library, samples, tests) as errors" OFF)
+
+# az_mqtt3_apply_warnings(<target>): the project's warning set, applied to our
+# own targets only (never to azure-sdk-for-c or cmocka).
+function(az_mqtt3_apply_warnings target)
+  if(MSVC)
+    target_compile_options(${target} PRIVATE /W4)
+    if(AZ_MQTT3_WARNINGS_AS_ERRORS)
+      target_compile_options(${target} PRIVATE /WX)
+    endif()
+  else()
+    target_compile_options(${target} PRIVATE
+      -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes
+      -Wformat=2 -Wcast-qual -Wvla -Wundef -Wnull-dereference -Wimplicit-fallthrough)
+    if(AZ_MQTT3_WARNINGS_AS_ERRORS)
+      target_compile_options(${target} PRIVATE -Werror)
+    endif()
+  endif()
+endfunction()
+
+az_mqtt3_apply_warnings(az_mqtt3_client)
 
 # ──────────────────────── Samples ─────────────────────────────
 
