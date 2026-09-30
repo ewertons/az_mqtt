@@ -934,16 +934,17 @@ AZ_NODISCARD az_result az_mqtt3_transport_connect(
 #ifdef AZ_MQTT3_TLS_SCHANNEL
   if (tls_options != NULL)
   {
-    bool const has_cert = az_span_size(tls_options->client_cert_path) > 0;
-    bool const has_key = az_span_size(tls_options->client_key_path) > 0;
-    if (has_cert != has_key)
+    az_result const check = az_mqtt3_tls_options_check(tls_options);
+    if (az_result_failed(check))
     {
-      return AZ_MQTT3_ERROR_INVALID_CONFIG; // Same contract as the other backends.
+      return check; // Same contract as the other backends.
     }
-    if (has_cert)
+    // Not implemented for Schannel yet: refuse rather than connect without
+    // the identity, trust or hook the caller asked for.
+    if (az_span_size(tls_options->client_cert_path) > 0
+        || az_span_size(tls_options->client_cert_pem) > 0
+        || az_span_size(tls_options->ca_cert_pem) > 0 || tls_options->configure != NULL)
     {
-      // Client certificates are not implemented for Schannel yet; refuse rather
-      // than connect without the identity the caller asked for.
       return AZ_MQTT3_ERROR_NOT_SUPPORTED;
     }
   }
