@@ -20,13 +20,15 @@ mkdir -p "${work}"
 export MSYS_NO_PATHCONV=1
 native() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else echo "$1"; fi; }
 
+w="$(native "${work}")" # every path handed to openssl / mosquitto
 openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 30 -subj "/CN=az-mqtt-ci-ca" \
-  -keyout "${work}/ca.key" -out "${work}/ca.crt"
+  -keyout "${w}/ca.key" -out "${w}/ca.crt" 2>&1 | grep -v '^[.+*]*$' || true
 openssl req -newkey rsa:2048 -nodes -sha256 -subj "/CN=localhost" \
-  -keyout "${work}/server.key" -out "${work}/server.csr"
+  -keyout "${w}/server.key" -out "${w}/server.csr" 2>&1 | grep -v '^[.+*]*$' || true
 printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\n' > "${work}/san.cnf"
-openssl x509 -req -in "${work}/server.csr" -CA "${work}/ca.crt" -CAkey "${work}/ca.key" \
-  -CAcreateserial -days 30 -sha256 -extfile "${work}/san.cnf" -out "${work}/server.crt"
+openssl x509 -req -in "${w}/server.csr" -CA "${w}/ca.crt" -CAkey "${w}/ca.key" \
+  -CAcreateserial -days 30 -sha256 -extfile "${w}/san.cnf" -out "${w}/server.crt"
+[ -s "${work}/server.crt" ] || { echo "certificate generation failed" >&2; exit 1; }
 
 for lib in az_mqtt5 az_mqtt3; do
   mkdir -p "${root}/${lib}/tests/broker/certs"
@@ -38,9 +40,9 @@ per_listener_settings false
 allow_anonymous true
 listener 1883 127.0.0.1
 listener 8883 127.0.0.1
-cafile $(native "${work}/ca.crt")
-certfile $(native "${work}/server.crt")
-keyfile $(native "${work}/server.key")
+cafile ${w}/ca.crt
+certfile ${w}/server.crt
+keyfile ${w}/server.key
 CONF
 
 # A packaged broker may already own 1883.
@@ -48,11 +50,11 @@ if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet mosquitto
   sudo systemctl stop mosquitto
 fi
 
-nohup mosquitto -c "$(native "${work}/mosquitto.conf")" > "${work}/mosquitto.log" 2>&1 &
+nohup mosquitto -c "${w}/mosquitto.conf" > "${work}/mosquitto.log" 2>&1 &
 
 for _ in $(seq 1 30); do
   if mosquitto_pub -h 127.0.0.1 -p 1883 -t ci/ready -m ok 2>/dev/null \
-    && mosquitto_pub -h localhost -p 8883 --cafile "$(native "${work}/ca.crt")" -t ci/ready -m ok 2>/dev/null; then
+    && mosquitto_pub -h localhost -p 8883 --cafile "${w}/ca.crt" -t ci/ready -m ok 2>/dev/null; then
     echo "Mosquitto ready (1883, 8883)"
     exit 0
   fi
