@@ -27,7 +27,7 @@ Warnings in our code are errors in every job.
 
 | Job | What it covers |
 |-----|----------------|
-| Linux | {az_mqtt5, az_mqtt3} × {OpenSSL, mbedTLS, no TLS} × {gcc, clang}: build and all tests, including e2e against a local Mosquitto (plain and TLS) |
+| Linux | {az_mqtt5, az_mqtt3} × {OpenSSL, mbedTLS 3.6.7 / 4.1.1 / 4.2.0, no TLS} × {gcc, clang}: build and all tests, including e2e against a local Mosquitto (plain and TLS) |
 | Sanitizers | ASan + UBSan (+ leak check) over all tests |
 | Hardened | Release build with `_FORTIFY_SOURCE=3`, stack protector, CET, full RELRO and PIE, verified on every executable, then all tests |
 | Windows | MSVC `/W4 /WX`, Schannel, all tests |

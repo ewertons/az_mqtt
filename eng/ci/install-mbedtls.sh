@@ -16,6 +16,8 @@ prefix="$2"
 
 case "${version}" in
   3.6.7) sha256="a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6" ;;
+  4.1.1) sha256="3359a349e23db3d5536fcee032ae7b2ecbfc08972fab643089b5cbf2a375c98c" ;;
+  4.2.0) sha256="2bed9d713b4668f76553b097e72b8aa30bc8f112a940d7ae228d524bbde6ffea" ;;
   *) echo "mbedTLS ${version} is not pinned in ${0##*/}" >&2; exit 1 ;;
 esac
 

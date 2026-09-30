@@ -18,9 +18,6 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  MBEDTLS_VERSION: 3.6.7
-  MBEDTLS_PREFIX: ${{ github.workspace }}/build/mbedtls
 
 jobs:
   sync:
@@ -37,10 +34,12 @@ jobs:
       fail-fast: false
       matrix:
         lib: [az_mqtt5, az_mqtt3]
-        tls: [openssl, mbedtls, none]
+        # mbedtls-4.x is what ESP-IDF v6 ships.
+        tls: [openssl, mbedtls-3.6.7, mbedtls-4.1.1, mbedtls-4.2.0, none]
         cc: [gcc, clang]
     env:
       CC: ${{ matrix.cc }}
+      MBEDTLS_PREFIX: ${{ github.workspace }}/build/${{ matrix.tls }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -50,19 +49,23 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq ninja-build libssl-dev mosquitto mosquitto-clients
       - name: Cache mbedTLS
-        if: matrix.tls == 'mbedtls'
+        if: startsWith(matrix.tls, 'mbedtls')
         id: mbedtls-cache
         uses: actions/cache@v6
         with:
           path: ${{ env.MBEDTLS_PREFIX }}
-          key: mbedtls-${{ env.MBEDTLS_VERSION }}-${{ runner.os }}-${{ matrix.cc }}-v1
+          key: ${{ matrix.tls }}-${{ runner.os }}-${{ matrix.cc }}-v1
       - name: Build mbedTLS
-        if: matrix.tls == 'mbedtls' && steps.mbedtls-cache.outputs.cache-hit != 'true'
-        run: eng/ci/install-mbedtls.sh "$MBEDTLS_VERSION" "$MBEDTLS_PREFIX"
+        if: startsWith(matrix.tls, 'mbedtls') && steps.mbedtls-cache.outputs.cache-hit != 'true'
+        run: eng/ci/install-mbedtls.sh "${TLS#mbedtls-}" "$MBEDTLS_PREFIX"
+        env:
+          TLS: ${{ matrix.tls }}
       - name: Start broker
         run: eng/ci/start-broker.sh
       - name: Build and test
-        run: eng/ci/build-and-test.sh ${{ matrix.lib }} ${{ matrix.tls }} debug
+        run: eng/ci/build-and-test.sh ${{ matrix.lib }} "${TLS%%-*}" debug
+        env:
+          TLS: ${{ matrix.tls }}
 
   sanitizers:
     name: ${{ matrix.lib }} / ASan + UBSan
