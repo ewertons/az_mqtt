@@ -1,0 +1,134 @@
+# Copyright (c) Microsoft. All rights reserved.
+# Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
+# Build and test az_mqtt5 and az_mqtt3. Every job treats warnings in our code as
+# errors. The Linux steps are scripts in eng/ci, so they run the same way locally.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MBEDTLS_VERSION: 3.6.7
+  MBEDTLS_PREFIX: ${{ github.workspace }}/build/mbedtls
+
+jobs:
+  linux:
+    name: ${{ matrix.lib }} / ${{ matrix.tls }} / ${{ matrix.cc }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        lib: [az_mqtt5, az_mqtt3]
+        tls: [openssl, mbedtls, none]
+        cc: [gcc, clang]
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build libssl-dev mosquitto mosquitto-clients
+      - name: Cache mbedTLS
+        if: matrix.tls == 'mbedtls'
+        id: mbedtls-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.MBEDTLS_PREFIX }}
+          key: mbedtls-${{ env.MBEDTLS_VERSION }}-${{ runner.os }}-${{ matrix.cc }}-v1
+      - name: Build mbedTLS
+        if: matrix.tls == 'mbedtls' && steps.mbedtls-cache.outputs.cache-hit != 'true'
+        run: eng/ci/install-mbedtls.sh "$MBEDTLS_VERSION" "$MBEDTLS_PREFIX"
+      - name: Start broker
+        run: eng/ci/start-broker.sh
+      - name: Build and test
+        run: eng/ci/build-and-test.sh ${{ matrix.lib }} ${{ matrix.tls }} debug
+
+  sanitizers:
+    name: ${{ matrix.lib }} / ASan + UBSan
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        lib: [az_mqtt5, az_mqtt3]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build libssl-dev mosquitto mosquitto-clients
+      # ASan cannot map its shadow memory with the runner kernel's default ASLR entropy.
+      - name: Reduce mmap ASLR entropy for ASan
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+      - name: Start broker
+        run: eng/ci/start-broker.sh
+      - name: Build and test
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: eng/ci/build-and-test.sh ${{ matrix.lib }} openssl asan
+
+  hardened:
+    name: ${{ matrix.lib }} / hardened release
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        lib: [az_mqtt5, az_mqtt3]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build libssl-dev mosquitto mosquitto-clients
+      - name: Start broker
+        run: eng/ci/start-broker.sh
+      - name: Build, check and test
+        run: eng/ci/build-and-test.sh ${{ matrix.lib }} openssl hardened
+
+  windows:
+    name: ${{ matrix.lib }} / Schannel / MSVC
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        lib: [az_mqtt5, az_mqtt3]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install Mosquitto
+        shell: pwsh
+        run: |
+          choco install mosquitto -y --no-progress
+          "C:\Program Files\mosquitto" | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Start broker
+        shell: bash
+        run: eng/ci/start-broker.sh
+      - name: Configure
+        shell: pwsh
+        run: |
+          $opt = "${{ matrix.lib }}".Substring(3).ToUpper()
+          cmake -S ${{ matrix.lib }} -B build/win -A x64 `
+            "-DAZ_${opt}_BUILD_TESTS=ON" "-DAZ_${opt}_BUILD_SAMPLES=ON" "-DAZ_${opt}_WARNINGS_AS_ERRORS=ON"
+      - name: Build
+        run: cmake --build build/win --config Debug
+      - name: Test
+        run: ctest --test-dir build/win -C Debug --output-on-failure --timeout 300
