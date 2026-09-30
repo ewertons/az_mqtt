@@ -10,6 +10,7 @@ add_library(az_mqtt3_test_server STATIC ../support/test_server.c)
 target_include_directories(az_mqtt3_test_server PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../support)
 target_compile_definitions(az_mqtt3_test_server PRIVATE _DEFAULT_SOURCE)
 target_link_libraries(az_mqtt3_test_server PUBLIC OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
+az_mqtt3_apply_warnings(az_mqtt3_test_server)
 
 # The library again, with 1 s transport bounds, so timeout paths run in seconds.
 list(TRANSFORM AZ_MQTT3_SOURCES PREPEND "${PROJECT_SOURCE_DIR}/" OUTPUT_VARIABLE _sources)
@@ -39,6 +40,7 @@ function(add_az_mqtt3_transport_test target_name source_file)
     ${cmocka_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/platform)
   target_compile_definitions(${target_name} PRIVATE AZ_MQTT3_TEST_BACKEND_${_backend} _DEFAULT_SOURCE)
   target_link_libraries(${target_name} PRIVATE ${_client} az_mqtt3_test_server cmocka)
+  az_mqtt3_apply_warnings(${target_name})
   add_test(NAME ${target_name} COMMAND ${target_name})
   # A regression here tends to hang rather than fail.
   set_tests_properties(${target_name} PROPERTIES TIMEOUT 120)

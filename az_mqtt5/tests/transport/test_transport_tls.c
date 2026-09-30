@@ -69,27 +69,6 @@ static az_result _connect(fixture* f, char const* host, az_mqtt5_tls_options con
       tls);
 }
 
-/**
- * @brief Whether an MQTT CONNECT gets a CONNACK over the connected transport.
- *
- * With TLS 1.3 the client finishes its handshake before the server has judged
- * the client certificate, so a refusal can surface on the first exchange.
- */
-static bool _mqtt_exchange_works(fixture* f)
-{
-  static const uint8_t connect_v5[] = { 0x10, 0x0E, 0x00, 0x04, 'M', 'Q', 'T', 'T', 0x05,
-                                        0x02, 0x00, 0x3C, 0x00, 0x00, 0x01, 'c' };
-  if (az_result_failed(az_mqtt5_transport_send(
-          f->transport, AZ_SPAN_FROM_BUFFER(*(uint8_t(*)[sizeof(connect_v5)])connect_v5))))
-  {
-    return false;
-  }
-  uint8_t buf[8];
-  az_span got = AZ_SPAN_EMPTY;
-  az_result rc = az_mqtt5_transport_receive(f->transport, AZ_SPAN_FROM_BUFFER(buf), 3000, &got);
-  return az_result_succeeded(rc) && az_span_size(got) > 0 && buf[0] == 0x20;
-}
-
 #if defined(AZ_MQTT5_TEST_BACKEND_NONE)
 
 static void tls_requested_without_backend_is_refused(void** state)
@@ -111,6 +90,27 @@ int main(void)
 }
 
 #else
+
+/**
+ * @brief Whether an MQTT CONNECT gets a CONNACK over the connected transport.
+ *
+ * With TLS 1.3 the client finishes its handshake before the server has judged
+ * the client certificate, so a refusal can surface on the first exchange.
+ */
+static bool _mqtt_exchange_works(fixture* f)
+{
+  static uint8_t connect_v5[] = { 0x10, 0x0E, 0x00, 0x04, 'M', 'Q', 'T', 'T', 0x05,
+                                        0x02, 0x00, 0x3C, 0x00, 0x00, 0x01, 'c' };
+  if (az_result_failed(az_mqtt5_transport_send(
+          f->transport, AZ_SPAN_FROM_BUFFER(connect_v5))))
+  {
+    return false;
+  }
+  uint8_t buf[8];
+  az_span got = AZ_SPAN_EMPTY;
+  az_result rc = az_mqtt5_transport_receive(f->transport, AZ_SPAN_FROM_BUFFER(buf), 3000, &got);
+  return az_result_succeeded(rc) && az_span_size(got) > 0 && buf[0] == 0x20;
+}
 
 static void _expect_rejected(test_server_options const* o, char const* host)
 {

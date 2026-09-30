@@ -57,22 +57,22 @@ test_server* test_server_start(test_server_options const* options);
 
 void test_server_stop(test_server* server);
 
-uint16_t test_server_port(test_server const* server);
+uint16_t test_server_port(test_server* server);
 
 /** @brief PEM file with the CA the client should trust (always the good CA). */
-char const* test_server_ca_path(test_server const* server);
+char const* test_server_ca_path(test_server* server);
 
 /** @brief PEM files of a client identity issued by the trusted CA. */
-char const* test_server_client_cert_path(test_server const* server);
-char const* test_server_client_key_path(test_server const* server);
+char const* test_server_client_cert_path(test_server* server);
+char const* test_server_client_key_path(test_server* server);
 
 /** @brief TCP connections accepted so far. */
-int test_server_accepted(test_server const* server);
+int test_server_accepted(test_server* server);
 
 /** @brief TLS handshakes completed so far (server side). */
-int test_server_handshakes(test_server const* server);
+int test_server_handshakes(test_server* server);
 
 /** @brief Whether the last completed handshake carried a client certificate. */
-bool test_server_saw_client_cert(test_server const* server);
+bool test_server_saw_client_cert(test_server* server);
 
 #endif // AZ_MQTT5_TEST_SERVER_H
