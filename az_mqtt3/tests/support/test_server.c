@@ -317,8 +317,8 @@ static void _serve(test_server* s, conn* c)
   }
   // CONNECT variable header: 00 04 'M' 'Q' 'T' 'T' <level>
   bool const v5 = body[6] == 5;
-  static const uint8_t connack_v3[] = { 0x20, 0x02, 0x00, 0x00 };
-  uint8_t connack_v5[] = { 0x20, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+  uint8_t connack_v5[] = { 0x20, 0x03, 0x00, s->options.connack_code, 0x00, 0x00, 0x00, 0x00 };
+  uint8_t const connack_v3[] = { 0x20, 0x02, 0x00, s->options.connack_code };
   int connack_v5_len = 5;
   if (s->options.server_keep_alive != 0 || s->options.server_keep_alive_present)
   {
@@ -332,7 +332,7 @@ static void _serve(test_server* s, conn* c)
   }
   bool ok = v5 ? _write(c, connack_v5, connack_v5_len)
                : _write(c, connack_v3, (int)sizeof(connack_v3));
-  if (!ok)
+  if (!ok || s->options.connack_code != 0)
   {
     return;
   }
@@ -405,6 +405,30 @@ static void _serve(test_server* s, conn* c)
       s->client_closed = !s->stop;
       pthread_mutex_unlock(&s->lock);
       return;
+    }
+    if (type == 8 && len >= 2)
+    {
+      // SUBACK: same packet id, then reason codes (MQTT 5 adds an empty property length).
+      int codes = s->options.suback_codes > 0 ? s->options.suback_codes : 1;
+      if (codes > 64)
+      {
+        codes = 64; // Bounded before it sizes both the length byte and the payload.
+      }
+      uint8_t suback[4 + 1 + 64];
+      int n = 0;
+      suback[n++] = 0x90;
+      suback[n++] = (uint8_t)(2 + (v5 ? 1 : 0) + codes);
+      suback[n++] = body[0];
+      suback[n++] = body[1];
+      if (v5)
+      {
+        suback[n++] = 0x00;
+      }
+      for (int i = 0; i < codes; i++)
+      {
+        suback[n++] = 0x00;
+      }
+      (void)_write(c, suback, n);
     }
     if (type == 12)
     {

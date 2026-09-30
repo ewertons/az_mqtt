@@ -302,7 +302,9 @@ typedef struct
 typedef struct
 {
   uint16_t packet_id;
+  /** @brief One per topic filter, in order. MQTT 3.1.1 UNSUBACK carries none. */
   az_mqtt3_reason_code* reason_codes;
+  /** @brief Entries stored; never exceeds reason_code_capacity (extra codes are dropped). */
   int32_t reason_code_count;
   int32_t reason_code_capacity;
   az_span reason_string;

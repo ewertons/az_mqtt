@@ -52,6 +52,10 @@ typedef struct
   bool server_keep_alive_present;
   /** @brief QoS 0 PUBLISHes written in one burst right after the CONNACK. */
   int burst_publishes;
+  /** @brief CONNACK reason (MQTT 5) or return code (MQTT 3.1.1); 0 accepts. */
+  uint8_t connack_code;
+  /** @brief Reason codes per SUBACK; 0 answers SUBSCRIBE with one granted QoS 0. */
+  int suback_codes;
 } test_server_options;
 
 typedef struct test_server test_server;

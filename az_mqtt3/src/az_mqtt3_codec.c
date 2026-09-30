@@ -696,7 +696,9 @@ AZ_NODISCARD az_result az_mqtt3_codec_decode_connack(az_span body, az_mqtt3_conn
   rc = _read_byte(&body, &return_code);
   if (az_result_failed(rc))
     return rc;
-  out->reason_code = (return_code == 0) ? AZ_MQTT3_REASON_SUCCESS : AZ_MQTT3_REASON_PROTOCOL_ERROR;
+  // Kept verbatim (AZ_MQTT3_CONNACK_*): "not authorized" must stay distinguishable
+  // from "server unavailable".
+  out->reason_code = (az_mqtt3_reason_code)return_code;
 
   if (az_span_size(body) != 0)
   {
@@ -876,11 +878,12 @@ static az_result _decode_suback_common(az_span body, az_mqtt3_suback_data* out)
     rc = _read_byte(&body, &reason);
     if (az_result_failed(rc))
       return rc;
+    // Like user properties: keep what fits, so reason_code_count never exceeds capacity.
     if (out->reason_codes != NULL && out->reason_code_count < out->reason_code_capacity)
     {
       out->reason_codes[out->reason_code_count] = (az_mqtt3_reason_code)reason;
+      out->reason_code_count++;
     }
-    out->reason_code_count++;
   }
 
   return AZ_OK;
