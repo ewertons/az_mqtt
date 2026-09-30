@@ -258,7 +258,7 @@ static az_result _load_key_uri(SSL_CTX* ctx, az_span uri)
  * An IP literal is matched against iPAddress SANs and gets no SNI (RFC 6066);
  * anything else is matched as a DNS name and sent as SNI.
  */
-static bool _tls_set_peer_identity(SSL* ssl, char const* host)
+static bool _tls_set_peer_identity(SSL* ssl, char* host)
 {
   X509_VERIFY_PARAM* param = SSL_get0_param(ssl);
   unsigned char addr[16];

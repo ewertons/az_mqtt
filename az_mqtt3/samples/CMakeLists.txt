@@ -11,3 +11,5 @@ target_link_libraries(az_mqtt3_sample_connect
   PRIVATE
     az_mqtt3::client
 )
+
+az_mqtt3_apply_warnings(az_mqtt3_sample_connect)
