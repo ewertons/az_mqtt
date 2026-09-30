@@ -15,16 +15,18 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="${1:-${root}/build/broker}"
 mkdir -p "${work}"
 
-# Windows (Git Bash): mosquitto.exe wants native paths.
+# Windows (Git Bash): keep "/CN=..." from being rewritten as a path, and give
+# mosquitto.exe native paths.
+export MSYS_NO_PATHCONV=1
 native() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else echo "$1"; fi; }
 
 openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 30 -subj "/CN=az-mqtt-ci-ca" \
-  -keyout "${work}/ca.key" -out "${work}/ca.crt" 2>/dev/null
+  -keyout "${work}/ca.key" -out "${work}/ca.crt"
 openssl req -newkey rsa:2048 -nodes -sha256 -subj "/CN=localhost" \
-  -keyout "${work}/server.key" -out "${work}/server.csr" 2>/dev/null
+  -keyout "${work}/server.key" -out "${work}/server.csr"
 printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\n' > "${work}/san.cnf"
 openssl x509 -req -in "${work}/server.csr" -CA "${work}/ca.crt" -CAkey "${work}/ca.key" \
-  -CAcreateserial -days 30 -sha256 -extfile "${work}/san.cnf" -out "${work}/server.crt" 2>/dev/null
+  -CAcreateserial -days 30 -sha256 -extfile "${work}/san.cnf" -out "${work}/server.crt"
 
 for lib in az_mqtt5 az_mqtt3; do
   mkdir -p "${root}/${lib}/tests/broker/certs"

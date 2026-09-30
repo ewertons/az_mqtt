@@ -138,7 +138,11 @@ jobs:
           "C:\Program Files\mosquitto" | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Start broker
         shell: bash
-        run: eng/ci/start-broker.sh > broker.log 2>&1 || { tail -n 15 broker.log | sed 's/^/::error::/'; exit 1; }
+        run: |
+          eng/ci/start-broker.sh > broker.log 2>&1 && exit 0
+          echo "::error::start-broker.sh failed"
+          tail -n 15 broker.log | tr -d '\r' | sed 's/^/::error::/'
+          exit 1
       # Failures are also echoed as annotations, readable without the raw log.
       - name: Configure, build and test
         shell: pwsh
