@@ -15,7 +15,10 @@
 #include <azure/core/az_result.h>
 #include <azure/core/az_span.h>
 
+#include <stdbool.h>
 #include <stdint.h>
+
+#include <az_mqtt5/az_mqtt5_types.h>
 
 #include <azure/core/_az_cfg_prefix.h>
 
@@ -29,23 +32,63 @@ typedef struct az_mqtt5_transport az_mqtt5_transport;
 // ──────────────────────── TLS options ────────────────────────
 
 /**
+ * @brief Called with the backend's TLS configuration before the handshake.
+ *
+ * @p native_config is an `SSL_CTX*` (OpenSSL) or `mbedtls_ssl_config*`
+ * (mbedTLS), already holding what az_mqtt5_tls_options asked for. Use it for
+ * what the options do not cover, e.g. `esp_crt_bundle_attach()` on ESP-IDF.
+ * Server verification stays mandatory. A failure aborts the connect with it.
+ */
+typedef az_result (*az_mqtt5_tls_configure_fn)(void* native_config, void* context);
+
+/**
  * @brief TLS settings. The server certificate chain and host name (or IP
  * address) are always verified; there is no option to turn that off.
+ *
+ * Each item comes from at most one source (file path or in-memory PEM); a
+ * client certificate needs exactly one key source. Anything else fails with
+ * AZ_MQTT5_ERROR_INVALID_CONFIG; a source the backend cannot use fails with
+ * AZ_MQTT5_ERROR_NOT_SUPPORTED. Nothing is ever silently ignored.
  */
 typedef struct
 {
   /**
-   * @brief Path to CA certificate file (PEM). AZ_SPAN_EMPTY uses the system
-   * store (OpenSSL, Schannel); mbedTLS has none and fails with
-   * AZ_MQTT5_ERROR_NOT_SUPPORTED.
+   * @brief Path to CA certificate file (PEM). With neither this nor
+   * ca_cert_pem, OpenSSL and Schannel use the system store; mbedTLS has none
+   * and needs `configure` to install trust (else AZ_MQTT5_ERROR_NOT_SUPPORTED).
    */
   az_span ca_cert_path;
 
-  /** @brief Client certificate file (PEM) for mutual TLS. Set with client_key_path or not at all. */
+  /** @brief Client certificate file (PEM) for mutual TLS. */
   az_span client_cert_path;
 
-  /** @brief Client private key file (PEM) for mutual TLS. Set with client_cert_path or not at all. */
+  /** @brief Client private key file (PEM) for mutual TLS. */
   az_span client_key_path;
+
+  /** @brief CA certificates, PEM in memory (OpenSSL, mbedTLS). */
+  az_span ca_cert_pem;
+
+  /** @brief Client certificate (chain), PEM in memory (OpenSSL, mbedTLS). */
+  az_span client_cert_pem;
+
+  /** @brief Client private key, PEM in memory (OpenSSL, mbedTLS). */
+  az_span client_key_pem;
+
+  /**
+   * @brief Client key held by PSA and never exported (mbedTLS): an HSM,
+   * secure element or, on ESP-IDF v6, the Digital Signature peripheral. 0 = none.
+   */
+  uint32_t client_key_psa_id;
+
+  /**
+   * @brief Client key loaded through OpenSSL's OSSL_STORE and providers, e.g.
+   * "pkcs11:object=device;type=private", "tpm2:...", "file:/path/key.pem".
+   */
+  az_span client_key_uri;
+
+  /** @brief Optional; see az_mqtt5_tls_configure_fn. */
+  az_mqtt5_tls_configure_fn configure;
+  void* configure_context;
 } az_mqtt5_tls_options;
 
 AZ_NODISCARD AZ_INLINE az_mqtt5_tls_options az_mqtt5_tls_options_default(void)
@@ -54,7 +97,34 @@ AZ_NODISCARD AZ_INLINE az_mqtt5_tls_options az_mqtt5_tls_options_default(void)
   opts.ca_cert_path = AZ_SPAN_EMPTY;
   opts.client_cert_path = AZ_SPAN_EMPTY;
   opts.client_key_path = AZ_SPAN_EMPTY;
+  opts.ca_cert_pem = AZ_SPAN_EMPTY;
+  opts.client_cert_pem = AZ_SPAN_EMPTY;
+  opts.client_key_pem = AZ_SPAN_EMPTY;
+  opts.client_key_psa_id = 0;
+  opts.client_key_uri = AZ_SPAN_EMPTY;
+  opts.configure = NULL;
+  opts.configure_context = NULL;
   return opts;
+}
+
+/**
+ * @brief Backend-independent consistency check of @p o.
+ *
+ * @retval AZ_MQTT5_ERROR_INVALID_CONFIG Two sources for one item, a client
+ *         certificate without exactly one key source, or a key without a certificate.
+ */
+AZ_NODISCARD AZ_INLINE az_result az_mqtt5_tls_options_check(az_mqtt5_tls_options const* o)
+{
+  bool const cert_path = az_span_size(o->client_cert_path) > 0;
+  bool const cert_pem = az_span_size(o->client_cert_pem) > 0;
+  int const keys = (az_span_size(o->client_key_path) > 0) + (az_span_size(o->client_key_pem) > 0)
+      + (o->client_key_psa_id != 0) + (az_span_size(o->client_key_uri) > 0);
+  if ((az_span_size(o->ca_cert_path) > 0 && az_span_size(o->ca_cert_pem) > 0)
+      || (cert_path && cert_pem) || keys > 1 || (cert_path || cert_pem) != (keys == 1))
+  {
+    return AZ_MQTT5_ERROR_INVALID_CONFIG;
+  }
+  return AZ_OK;
 }
 
 // ──────────────────────── Limits ─────────────────────────────

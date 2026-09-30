@@ -26,7 +26,9 @@
 #include <arpa/inet.h>
 #include <openssl/bio.h>
 #include <openssl/err.h>
+#include <openssl/pem.h>
 #include <openssl/ssl.h>
+#include <openssl/store.h>
 #include <openssl/x509v3.h>
 #include <pthread.h>
 #include <sys/socket.h>
@@ -162,13 +164,92 @@ static BIO* _bio_new(int fd)
  */
 static az_result _check_tls_options(az_mqtt5_tls_options const* tls_options)
 {
-  if ((az_span_size(tls_options->client_cert_path) > 0)
-      != (az_span_size(tls_options->client_key_path) > 0))
+  az_result rc = az_mqtt5_tls_options_check(tls_options);
+  if (az_result_succeeded(rc) && tls_options->client_key_psa_id != 0)
   {
-    // Half a client identity would silently downgrade to server-only TLS.
-    return AZ_MQTT5_ERROR_INVALID_CONFIG;
+    rc = AZ_MQTT5_ERROR_NOT_SUPPORTED; // PSA keys are an mbedTLS feature; use client_key_uri.
   }
-  return AZ_OK;
+  return rc;
+}
+
+/** @brief A read-only memory BIO over @p pem. */
+static BIO* _pem_bio(az_span pem)
+{
+  return BIO_new_mem_buf(az_span_ptr(pem), (int)az_span_size(pem));
+}
+
+/** @brief Add every certificate in @p pem to the trust store; at least one is required. */
+static az_result _load_ca_pem(SSL_CTX* ctx, az_span pem)
+{
+  BIO* bio = _pem_bio(pem);
+  X509_STORE* store = SSL_CTX_get_cert_store(ctx);
+  int added = 0;
+  X509* cert;
+  while (bio != NULL && (cert = PEM_read_bio_X509(bio, NULL, NULL, NULL)) != NULL)
+  {
+    added += X509_STORE_add_cert(store, cert) == 1;
+    X509_free(cert);
+  }
+  ERR_clear_error(); // End of input is reported as an error.
+  BIO_free(bio);
+  return added > 0 ? AZ_OK : AZ_MQTT5_ERROR_TRANSPORT;
+}
+
+/** @brief Use the first certificate in @p pem as ours and the rest as its chain. */
+static az_result _load_cert_pem(SSL_CTX* ctx, az_span pem)
+{
+  BIO* bio = _pem_bio(pem);
+  X509* leaf = bio != NULL ? PEM_read_bio_X509(bio, NULL, NULL, NULL) : NULL;
+  bool ok = leaf != NULL && SSL_CTX_use_certificate(ctx, leaf) == 1;
+  X509_free(leaf);
+  X509* extra;
+  while (ok && (extra = PEM_read_bio_X509(bio, NULL, NULL, NULL)) != NULL)
+  {
+    ok = SSL_CTX_add0_chain_cert(ctx, extra) == 1; // Takes ownership on success.
+    if (!ok)
+    {
+      X509_free(extra);
+    }
+  }
+  ERR_clear_error();
+  BIO_free(bio);
+  return ok ? AZ_OK : AZ_MQTT5_ERROR_TRANSPORT;
+}
+
+static az_result _load_key_pem(SSL_CTX* ctx, az_span pem)
+{
+  BIO* bio = _pem_bio(pem);
+  EVP_PKEY* key = bio != NULL ? PEM_read_bio_PrivateKey(bio, NULL, NULL, NULL) : NULL;
+  bool ok = key != NULL && SSL_CTX_use_PrivateKey(ctx, key) == 1;
+  EVP_PKEY_free(key);
+  BIO_free(bio);
+  return ok ? AZ_OK : AZ_MQTT5_ERROR_TRANSPORT;
+}
+
+/** @brief Load a private key through OSSL_STORE (any provider: pkcs11, tpm2, file, ...). */
+static az_result _load_key_uri(SSL_CTX* ctx, az_span uri)
+{
+  char uri_str[1024];
+  az_result rc = _span_to_cstr(uri, uri_str, (int32_t)sizeof(uri_str));
+  if (az_result_failed(rc))
+  {
+    return rc;
+  }
+  OSSL_STORE_CTX* store = OSSL_STORE_open(uri_str, NULL, NULL, NULL, NULL);
+  EVP_PKEY* key = NULL;
+  while (store != NULL && key == NULL && !OSSL_STORE_eof(store))
+  {
+    OSSL_STORE_INFO* info = OSSL_STORE_load(store);
+    if (info != NULL && OSSL_STORE_INFO_get_type(info) == OSSL_STORE_INFO_PKEY)
+    {
+      key = OSSL_STORE_INFO_get1_PKEY(info);
+    }
+    OSSL_STORE_INFO_free(info);
+  }
+  OSSL_STORE_close(store);
+  bool ok = key != NULL && SSL_CTX_use_PrivateKey(ctx, key) == 1;
+  EVP_PKEY_free(key);
+  return ok ? AZ_OK : AZ_MQTT5_ERROR_TRANSPORT;
 }
 
 /**
@@ -206,44 +287,81 @@ static az_result _tls_prepare(
   }
 
   char path[256];
-  az_result rc;
+  az_result rc = AZ_OK;
   if (az_span_size(tls_options->ca_cert_path) > 0)
   {
     rc = _span_to_cstr(tls_options->ca_cert_path, path, (int32_t)sizeof(path));
-    if (az_result_failed(rc))
+    if (az_result_succeeded(rc) && SSL_CTX_load_verify_locations(ctx, path, NULL) != 1)
     {
-      return rc;
+      rc = AZ_MQTT5_ERROR_TRANSPORT;
     }
-    if (SSL_CTX_load_verify_locations(ctx, path, NULL) != 1)
-    {
-      return AZ_MQTT5_ERROR_TRANSPORT;
-    }
+  }
+  else if (az_span_size(tls_options->ca_cert_pem) > 0)
+  {
+    rc = _load_ca_pem(ctx, tls_options->ca_cert_pem);
   }
   else if (SSL_CTX_set_default_verify_paths(ctx) != 1)
   {
-    return AZ_MQTT5_ERROR_TRANSPORT;
+    rc = AZ_MQTT5_ERROR_TRANSPORT;
+  }
+  if (az_result_failed(rc))
+  {
+    return rc;
   }
 
+  bool has_cert = true;
   if (az_span_size(tls_options->client_cert_path) > 0)
   {
     rc = _span_to_cstr(tls_options->client_cert_path, path, (int32_t)sizeof(path));
+    if (az_result_succeeded(rc) && SSL_CTX_use_certificate_chain_file(ctx, path) != 1)
+    {
+      rc = AZ_MQTT5_ERROR_TRANSPORT;
+    }
+  }
+  else if (az_span_size(tls_options->client_cert_pem) > 0)
+  {
+    rc = _load_cert_pem(ctx, tls_options->client_cert_pem);
+  }
+  else
+  {
+    has_cert = false;
+  }
+
+  if (az_result_succeeded(rc) && has_cert)
+  {
+    // az_mqtt5_tls_options_check() guaranteed exactly one key source.
+    if (az_span_size(tls_options->client_key_path) > 0)
+    {
+      rc = _span_to_cstr(tls_options->client_key_path, path, (int32_t)sizeof(path));
+      if (az_result_succeeded(rc) && SSL_CTX_use_PrivateKey_file(ctx, path, SSL_FILETYPE_PEM) != 1)
+      {
+        rc = AZ_MQTT5_ERROR_TRANSPORT;
+      }
+    }
+    else if (az_span_size(tls_options->client_key_pem) > 0)
+    {
+      rc = _load_key_pem(ctx, tls_options->client_key_pem);
+    }
+    else
+    {
+      rc = _load_key_uri(ctx, tls_options->client_key_uri);
+    }
+    if (az_result_succeeded(rc) && SSL_CTX_check_private_key(ctx) != 1)
+    {
+      rc = AZ_MQTT5_ERROR_TRANSPORT;
+    }
+  }
+  if (az_result_failed(rc))
+  {
+    return rc;
+  }
+
+  if (tls_options->configure != NULL)
+  {
+    rc = tls_options->configure(ctx, tls_options->configure_context);
     if (az_result_failed(rc))
     {
       return rc;
-    }
-    if (SSL_CTX_use_certificate_chain_file(ctx, path) != 1)
-    {
-      return AZ_MQTT5_ERROR_TRANSPORT;
-    }
-    rc = _span_to_cstr(tls_options->client_key_path, path, (int32_t)sizeof(path));
-    if (az_result_failed(rc))
-    {
-      return rc;
-    }
-    if (SSL_CTX_use_PrivateKey_file(ctx, path, SSL_FILETYPE_PEM) != 1
-        || SSL_CTX_check_private_key(ctx) != 1)
-    {
-      return AZ_MQTT5_ERROR_TRANSPORT;
     }
   }
 
