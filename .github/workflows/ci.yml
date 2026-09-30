@@ -106,6 +106,7 @@ jobs:
   windows:
     name: ${{ matrix.lib }} / Schannel / MSVC
     runs-on: windows-2022
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -116,7 +117,9 @@ jobs:
           submodules: recursive
       - name: Install Mosquitto
         shell: pwsh
+        timeout-minutes: 5
         run: |
+          $ProgressPreference = 'SilentlyContinue' # the progress bar slows Invoke-WebRequest badly
           # Official installer, newest 2.0.x (the Chocolatey package is gone).
           $base = "https://mosquitto.org/files/binary/win64/"
           $list = (Invoke-WebRequest -UseBasicParsing $base).Content
@@ -125,7 +128,9 @@ jobs:
           if (-not $file) { "::error::No mosquitto 2.0.x installer found at $base"; exit 1 }
           "::notice::Installing $file"
           Invoke-WebRequest -UseBasicParsing "$base$file" -OutFile mosquitto-setup.exe
-          Start-Process .\mosquitto-setup.exe -ArgumentList '/S' -Wait
+          "::notice::Downloaded $((Get-Item mosquitto-setup.exe).Length) bytes"
+          $p = Start-Process .\mosquitto-setup.exe -ArgumentList '/S' -PassThru
+          if (-not $p.WaitForExit(120000)) { "::error::installer did not finish in 2 min"; exit 1 }
           if (-not (Test-Path "C:\Program Files\mosquitto\mosquitto.exe")) { "::error::mosquitto.exe not installed"; exit 1 }
           "C:\Program Files\mosquitto" | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Start broker
