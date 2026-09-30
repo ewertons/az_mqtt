@@ -1,8 +1,8 @@
 # Copyright (c) Microsoft. All rights reserved.
 # Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-# Build and test az_mqtt5 and az_mqtt3. Every job treats warnings in our code as
-# errors. The Linux steps are scripts in eng/ci, so they run the same way locally.
+# Build and test az_mqtt (mqttv3 and mqttv5 codecs). Every job treats warnings in
+# our code as errors. The Linux steps are scripts in eng/ci, so they run the same way locally.
 name: CI
 
 on:
@@ -20,20 +20,12 @@ concurrency:
 
 
 jobs:
-  sync:
-    name: az_mqtt3 in sync with az_mqtt5
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - run: eng/sync-az_mqtt3.sh --check
-
   linux:
-    name: ${{ matrix.lib }} / ${{ matrix.tls }} / ${{ matrix.cc }}
+    name: ${{ matrix.tls }} / ${{ matrix.cc }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        lib: [az_mqtt5, az_mqtt3]
         # mbedtls-4.x is what ESP-IDF v6 ships.
         tls: [openssl, mbedtls-3.6.7, mbedtls-4.1.1, mbedtls-4.2.0, none]
         cc: [gcc, clang]
@@ -63,17 +55,40 @@ jobs:
       - name: Start broker
         run: eng/ci/start-broker.sh
       - name: Build and test
-        run: eng/ci/build-and-test.sh ${{ matrix.lib }} "${TLS%%-*}" debug
+        run: eng/ci/build-and-test.sh "${TLS%%-*}" debug
         env:
           TLS: ${{ matrix.tls }}
 
-  sanitizers:
-    name: ${{ matrix.lib }} / ASan + UBSan
+  # Builds and tests with only one MQTT version enabled.
+  single-version:
+    name: mqttv${{ matrix.only }} only
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        lib: [az_mqtt5, az_mqtt3]
+        include:
+          - only: 3
+            disable: MQTT5
+          - only: 5
+            disable: MQTT3
+    env:
+      CMAKE_ARGS: -DAZ_MQTT_ENABLE_${{ matrix.disable }}=OFF
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Install packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build libssl-dev mosquitto mosquitto-clients
+      - name: Start broker
+        run: eng/ci/start-broker.sh
+      - name: Build and test
+        run: eng/ci/build-and-test.sh openssl debug
+
+  sanitizers:
+    name: ASan + UBSan
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -91,15 +106,11 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
           UBSAN_OPTIONS: print_stacktrace=1
-        run: eng/ci/build-and-test.sh ${{ matrix.lib }} openssl asan
+        run: eng/ci/build-and-test.sh openssl asan
 
   hardened:
-    name: ${{ matrix.lib }} / hardened release
+    name: hardened release
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        lib: [az_mqtt5, az_mqtt3]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -111,16 +122,12 @@ jobs:
       - name: Start broker
         run: eng/ci/start-broker.sh
       - name: Build, check and test
-        run: eng/ci/build-and-test.sh ${{ matrix.lib }} openssl hardened
+        run: eng/ci/build-and-test.sh openssl hardened
 
   windows:
-    name: ${{ matrix.lib }} / Schannel / MSVC
+    name: Schannel / MSVC
     runs-on: windows-2022
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        lib: [az_mqtt5, az_mqtt3]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -157,7 +164,6 @@ jobs:
       - name: Configure, build and test
         shell: pwsh
         run: |
-          $opt = "${{ matrix.lib }}".Substring(3).ToUpper()
           function Step([string]$label, [scriptblock]$cmd) {
             & $cmd *> step.log
             $code = $LASTEXITCODE
@@ -168,10 +174,9 @@ jobs:
               exit $code
             }
           }
-          Step configure { cmake -S ${{ matrix.lib }} -B build/win -A x64 "-DAZ_${opt}_BUILD_TESTS=ON" "-DAZ_${opt}_BUILD_SAMPLES=ON" "-DAZ_${opt}_WARNINGS_AS_ERRORS=ON" }
+          Step configure { cmake -S . -B build/win -A x64 -DAZ_MQTT_BUILD_TESTS=ON -DAZ_MQTT_BUILD_SAMPLES=ON -DAZ_MQTT_WARNINGS_AS_ERRORS=ON }
           Step build { cmake --build build/win --config Debug }
-          $env:AZ_MQTT5_RUN_TLS_E2E = '1' # test_ssl_win32 is opt-in
-          $env:AZ_MQTT3_RUN_TLS_E2E = '1'
+          $env:AZ_MQTT_RUN_TLS_E2E = '1' # test_ssl_win32 is opt-in
           Step test { ctest --test-dir build/win -C Debug --output-on-failure --timeout 300 }
           $summary = Select-String -Path step.log -Pattern 'tests passed' | Select-Object -First 1
-          "::notice title=${{ matrix.lib }} schannel::$($summary.Line)"
+          "::notice title=schannel::$($summary.Line)"

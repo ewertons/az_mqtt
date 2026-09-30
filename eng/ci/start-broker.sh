@@ -7,7 +7,7 @@
 #   eng/ci/start-broker.sh [work-dir]
 #
 # Mints a CA and a server certificate (SAN localhost, 127.0.0.1) and copies the
-# CA to <lib>/tests/broker/certs/ca.crt, where the e2e tests look for it.
+# CA to tests/broker/certs/ca.crt, where the e2e tests look for it.
 # Needs openssl, mosquitto and mosquitto_pub on PATH.
 set -euo pipefail
 
@@ -30,10 +30,8 @@ openssl x509 -req -in "${w}/server.csr" -CA "${w}/ca.crt" -CAkey "${w}/ca.key" \
   -CAcreateserial -days 30 -sha256 -extfile "${w}/san.cnf" -out "${w}/server.crt"
 [ -s "${work}/server.crt" ] || { echo "certificate generation failed" >&2; exit 1; }
 
-for lib in az_mqtt5 az_mqtt3; do
-  mkdir -p "${root}/${lib}/tests/broker/certs"
-  cp "${work}/ca.crt" "${root}/${lib}/tests/broker/certs/ca.crt"
-done
+mkdir -p "${root}/tests/broker/certs"
+cp "${work}/ca.crt" "${root}/tests/broker/certs/ca.crt"
 
 cat > "${work}/mosquitto.conf" <<CONF
 per_listener_settings false

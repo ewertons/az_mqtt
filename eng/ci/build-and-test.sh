@@ -2,9 +2,9 @@
 # Copyright (c) Microsoft. All rights reserved.
 # Licensed under the MIT license. See LICENSE file in the project root for full license information.
 #
-# Configure, build (warnings are errors) and test one library/backend.
+# Configure, build (warnings are errors) and test one TLS backend.
 #
-#   eng/ci/build-and-test.sh <az_mqtt5|az_mqtt3> <openssl|mbedtls|none> [profile]
+#   eng/ci/build-and-test.sh <openssl|mbedtls|none> [profile]
 #
 # profile: debug (default), asan (ASan + UBSan), hardened (release with
 # fortify, stack protector, CET, full RELRO; binaries are checked afterwards).
@@ -13,13 +13,11 @@
 # eng/ci/start-broker.sh first.
 set -euo pipefail
 
-[ "$#" -ge 2 ] || { echo "usage: ${0##*/} <az_mqtt5|az_mqtt3> <openssl|mbedtls|none> [debug|asan|hardened]" >&2; exit 1; }
-lib="$1"
-tls="$2"
-profile="${3:-debug}"
+[ "$#" -ge 1 ] || { echo "usage: ${0##*/} <openssl|mbedtls|none> [debug|asan|hardened]" >&2; exit 1; }
+tls="$1"
+profile="${2:-debug}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-opt="$(echo "${lib#az_}" | tr '[:lower:]' '[:upper:]')" # MQTT5 / MQTT3
-build="${root}/build/${lib}-${tls}-${profile}"
+build="${root}/build/${tls}-${profile}"
 
 build_type=Debug
 c_flags=""
@@ -39,12 +37,12 @@ case "${profile}" in
 esac
 
 args=(
-  -S "${root}/${lib}" -B "${build}" -G Ninja
+  -S "${root}" -B "${build}" -G Ninja
   -DCMAKE_BUILD_TYPE="${build_type}"
-  -D"AZ_${opt}_BUILD_TESTS=ON"
-  -D"AZ_${opt}_BUILD_SAMPLES=ON"
-  -D"AZ_${opt}_TLS_BACKEND=${tls}"
-  -D"AZ_${opt}_WARNINGS_AS_ERRORS=ON"
+  -DAZ_MQTT_BUILD_TESTS=ON
+  -DAZ_MQTT_BUILD_SAMPLES=ON
+  -DAZ_MQTT_TLS_BACKEND="${tls}"
+  -DAZ_MQTT_WARNINGS_AS_ERRORS=ON
   -DCMAKE_C_FLAGS="${c_flags}"
   -DCMAKE_EXE_LINKER_FLAGS="${link_flags}"
 )
@@ -56,6 +54,26 @@ args+=(${CMAKE_ARGS:-})
 
 cmake "${args[@]}"
 cmake --build "${build}"
+
+# Link isolation: the core must not reference either codec, and an app linking
+# one MQTT version must not contain code from the other.
+status=0
+core="$(find "${build}" -path "${build}/_deps" -prune -o -name 'libaz_mqtt.a' -print -quit)"
+if grep -E ' az_mqtt[35]_' <<<"$(nm "${core}")"; then
+  echo "${core}: references version-specific symbols" >&2; status=1
+fi
+for v in 3 5; do
+  other=$((8 - v))
+  exe="${build}/samples/az_mqtt${v}_sample_connect"
+  [ -f "${exe}" ] || continue
+  syms="$(nm "${exe}")"
+  grep -q " az_mqtt${v}_codec" <<<"${syms}" || { echo "${exe}: no mqttv${v} codec" >&2; status=1; }
+  if grep -E " az_mqtt${other}_" <<<"${syms}"; then
+    echo "${exe}: contains mqttv${other} symbols" >&2; status=1
+  fi
+done
+[ "${status}" -eq 0 ] || exit 1
+echo "Link isolation checks passed"
 
 if [ "${profile}" = hardened ]; then
   # Every executable we link must be PIE with full RELRO and a non-executable stack.
@@ -79,5 +97,5 @@ ctest --test-dir "${build}" --output-on-failure --timeout 300 2>&1 | tee "${log}
 rc=${PIPESTATUS[0]}
 set -e
 # Summary as a GitHub annotation (harmless elsewhere).
-echo "::notice title=${lib} ${tls} ${profile}::$(grep -E 'tests passed' "${log}" || echo 'no ctest summary')"
+echo "::notice title=${tls} ${profile}::$(grep -E 'tests passed' "${log}" || echo 'no ctest summary')"
 exit "${rc}"
