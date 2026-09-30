@@ -35,7 +35,7 @@ jobs:
     env:
       CC: ${{ matrix.cc }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - name: Install packages
@@ -45,7 +45,7 @@ jobs:
       - name: Cache mbedTLS
         if: matrix.tls == 'mbedtls'
         id: mbedtls-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.MBEDTLS_PREFIX }}
           key: mbedtls-${{ env.MBEDTLS_VERSION }}-${{ runner.os }}-${{ matrix.cc }}-v1
@@ -65,7 +65,7 @@ jobs:
       matrix:
         lib: [az_mqtt5, az_mqtt3]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - name: Install packages
@@ -91,7 +91,7 @@ jobs:
       matrix:
         lib: [az_mqtt5, az_mqtt3]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - name: Install packages
@@ -111,24 +111,36 @@ jobs:
       matrix:
         lib: [az_mqtt5, az_mqtt3]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - name: Install Mosquitto
         shell: pwsh
         run: |
-          choco install mosquitto -y --no-progress
+          choco install mosquitto -y --no-progress *> choco.log
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content choco.log -Tail 15 | ForEach-Object { "::error::$_" }
+            exit 1
+          }
           "C:\Program Files\mosquitto" | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Start broker
         shell: bash
-        run: eng/ci/start-broker.sh
-      - name: Configure
+        run: eng/ci/start-broker.sh > broker.log 2>&1 || { tail -n 15 broker.log | sed 's/^/::error::/'; exit 1; }
+      # Failures are also echoed as annotations, readable without the raw log.
+      - name: Configure, build and test
         shell: pwsh
         run: |
           $opt = "${{ matrix.lib }}".Substring(3).ToUpper()
-          cmake -S ${{ matrix.lib }} -B build/win -A x64 `
-            "-DAZ_${opt}_BUILD_TESTS=ON" "-DAZ_${opt}_BUILD_SAMPLES=ON" "-DAZ_${opt}_WARNINGS_AS_ERRORS=ON"
-      - name: Build
-        run: cmake --build build/win --config Debug
-      - name: Test
-        run: ctest --test-dir build/win -C Debug --output-on-failure --timeout 300
+          function Step([string]$label, [scriptblock]$cmd) {
+            & $cmd *> step.log
+            $code = $LASTEXITCODE
+            Get-Content step.log
+            if ($code -ne 0) {
+              Select-String -Path step.log -Pattern 'error|warning C|Failed|FAILED|ERROR' |
+                Select-Object -First 25 | ForEach-Object { "::error title=$label::$($_.Line.Trim())" }
+              exit $code
+            }
+          }
+          Step configure { cmake -S ${{ matrix.lib }} -B build/win -A x64 "-DAZ_${opt}_BUILD_TESTS=ON" "-DAZ_${opt}_BUILD_SAMPLES=ON" "-DAZ_${opt}_WARNINGS_AS_ERRORS=ON" }
+          Step build { cmake --build build/win --config Debug }
+          Step test { ctest --test-dir build/win -C Debug --output-on-failure --timeout 300 }
