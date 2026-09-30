@@ -11,3 +11,5 @@ target_link_libraries(az_mqtt5_sample_connect
   PRIVATE
     az_mqtt5::client
 )
+
+az_mqtt5_apply_warnings(az_mqtt5_sample_connect)
