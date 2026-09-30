@@ -9,7 +9,7 @@ set(CMAKE_C_STANDARD 99)
 # configured with -DAZ_MQTT_BUILD_TESTS=ON or the library target is available).
 # When built standalone, the library root must be passed via AZ_MQTT_ROOT.
 
-if(NOT TARGET az_mqtt::mqtt5)
+if(NOT TARGET az_mqtt::mqttv5)
   if(DEFINED AZ_MQTT_ROOT)
     add_subdirectory(${AZ_MQTT_ROOT} ${CMAKE_BINARY_DIR}/_az_mqtt EXCLUDE_FROM_ALL)
   else()
@@ -19,7 +19,7 @@ if(NOT TARGET az_mqtt::mqtt5)
 endif()
 
 add_executable(perf_az_mqtt5 perf_az_mqtt5.c)
-target_link_libraries(perf_az_mqtt5 PRIVATE az_mqtt::mqtt5)
+target_link_libraries(perf_az_mqtt5 PRIVATE az_mqtt::mqttv5)
 
 if(UNIX)
   target_link_libraries(perf_az_mqtt5 PRIVATE rt)

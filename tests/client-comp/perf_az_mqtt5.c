@@ -3,7 +3,7 @@
 
 /**
  * @file perf_az_mqtt5.c
- * @brief Performance test for az_mqtt_client (MQTT 5.0 codec).
+ * @brief Performance test for az_mqtt5_client (MQTT 5.0 codec).
  *
  * Connects to a broker, subscribes to its own topic, publishes N messages at
  * QoS 0 and QoS 1, counts how many it sends/receives, then prints a JSON
@@ -15,8 +15,7 @@
  * Defaults: localhost 1883 10000 128 30
  */
 
-#include <az_mqtt/az_mqtt5.h>
-#include <az_mqtt/az_mqtt_client.h>
+#include <az_mqtt5/az_mqtt5_client.h>
 #include <azure/core/az_span.h>
 
 #include <stdio.h>
@@ -45,7 +44,7 @@
 #define MAX_SUBACK_REASON_CODES 4
 #define MAX_PAYLOAD_SIZE 8192
 
-#define AZ_MQTT_SPAN_FROM_ARRAY(ARRAY) \
+#define AZ_MQTT5_SPAN_FROM_ARRAY(ARRAY) \
   AZ_SPAN_FROM_BUFFER(*(uint8_t(*)[sizeof(ARRAY)])(ARRAY))
 
 // ─────────────── static buffers (zero-allocation) ────────────
@@ -57,12 +56,12 @@ static uint8_t s_recv_buf[RECV_BUFFER_SIZE];
 // ssl_config, entropy, ctr_drbg, x509_crt, pk_context).
 static uint8_t s_transport_buf[16384];
 
-static az_mqtt_user_property s_connack_up[MAX_USER_PROPERTIES];
-static az_mqtt_user_property s_pub_up[MAX_USER_PROPERTIES];
-static az_mqtt_user_property s_sub_up[MAX_USER_PROPERTIES];
-static az_mqtt_user_property s_ack_up[MAX_USER_PROPERTIES];
-static az_mqtt_user_property s_disc_up[MAX_USER_PROPERTIES];
-static az_mqtt_reason_code s_sub_rc[MAX_SUBACK_REASON_CODES];
+static az_mqtt5_user_property s_connack_up[MAX_USER_PROPERTIES];
+static az_mqtt5_user_property s_pub_up[MAX_USER_PROPERTIES];
+static az_mqtt5_user_property s_sub_up[MAX_USER_PROPERTIES];
+static az_mqtt5_user_property s_ack_up[MAX_USER_PROPERTIES];
+static az_mqtt5_user_property s_disc_up[MAX_USER_PROPERTIES];
+static az_mqtt5_reason_code s_sub_rc[MAX_SUBACK_REASON_CODES];
 static int32_t s_pub_sub_ids[MAX_USER_PROPERTIES];
 
 static uint8_t s_payload[MAX_PAYLOAD_SIZE];
@@ -167,14 +166,14 @@ static resource_snapshot _snap(void)
 
 // ─────────────── callbacks ───────────────────────────────────
 
-static void on_publish(az_mqtt_client* client, az_mqtt_publish_data const* pub)
+static void on_publish(az_mqtt5_client* client, az_mqtt5_publish_data const* pub)
 {
   (void)client;
   (void)pub;
   g_pub_received++;
 }
 
-static void on_puback(az_mqtt_client* client, az_mqtt_ack_data const* ack)
+static void on_puback(az_mqtt5_client* client, az_mqtt5_ack_data const* ack)
 {
   (void)client;
   (void)ack;
@@ -221,12 +220,12 @@ int main(int argc, char* argv[])
   }
 
   // ── configure client ──
-  az_mqtt_connect_options conn_opts = az_mqtt_connect_options_default();
+  az_mqtt5_connect_options conn_opts = az_mqtt5_connect_options_default();
   conn_opts.client_id = AZ_SPAN_FROM_STR("perf-az-mqtt5");
   conn_opts.keep_alive_seconds = 60;
   conn_opts.clean_start = true;
 
-  az_mqtt_client_options opts;
+  az_mqtt5_client_options opts;
   memset(&opts, 0, sizeof(opts));
   opts.transport = transport;
   opts.send_buffer = AZ_SPAN_FROM_BUFFER(s_send_buf);
@@ -237,16 +236,16 @@ int main(int argc, char* argv[])
   opts.on_publish = on_publish;
   opts.on_puback = on_puback;
 
-  opts.buffers.connack_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_connack_up);
-  opts.buffers.publish_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_pub_up);
-  opts.buffers.publish_subscription_identifiers = AZ_MQTT_SPAN_FROM_ARRAY(s_pub_sub_ids);
-  opts.buffers.suback_reason_codes = AZ_MQTT_SPAN_FROM_ARRAY(s_sub_rc);
-  opts.buffers.suback_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_sub_up);
-  opts.buffers.ack_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_ack_up);
-  opts.buffers.disconnect_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_disc_up);
+  opts.buffers.connack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_connack_up);
+  opts.buffers.publish_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_pub_up);
+  opts.buffers.publish_subscription_identifiers = AZ_MQTT5_SPAN_FROM_ARRAY(s_pub_sub_ids);
+  opts.buffers.suback_reason_codes = AZ_MQTT5_SPAN_FROM_ARRAY(s_sub_rc);
+  opts.buffers.suback_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_sub_up);
+  opts.buffers.ack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_ack_up);
+  opts.buffers.disconnect_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_disc_up);
 
-  az_mqtt_client client;
-  rc = az_mqtt_client_init(&client, &opts);
+  az_mqtt5_client client;
+  rc = az_mqtt5_client_init(&client, &opts);
   if (az_result_failed(rc))
   {
     fprintf(stderr, "client init failed: 0x%08X\n", (unsigned)rc);
@@ -254,7 +253,7 @@ int main(int argc, char* argv[])
   }
 
   // ── connect ──
-  rc = az_mqtt_client_connect(&client, 10000);
+  rc = az_mqtt5_client_connect(&client, 10000);
   if (az_result_failed(rc))
   {
     fprintf(stderr, "connect failed: 0x%08X\n", (unsigned)rc);
@@ -263,31 +262,31 @@ int main(int argc, char* argv[])
   fprintf(stderr, "[az_mqtt5] connected\n");
 
   // ── subscribe ──
-  az_mqtt_subscription sub;
+  az_mqtt5_subscription sub;
   memset(&sub, 0, sizeof(sub));
   sub.topic_filter = AZ_SPAN_FROM_STR("perf/az_mqtt5/#");
   sub.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
 
   uint16_t sub_pid;
-  rc = az_mqtt_client_subscribe(&client, &sub, 1, &sub_pid);
+  rc = az_mqtt5_client_subscribe(&client, &sub, 1, &sub_pid);
   if (az_result_failed(rc))
   {
     fprintf(stderr, "subscribe failed: 0x%08X\n", (unsigned)rc);
-    az_mqtt_client_disconnect(&client, AZ_MQTT_REASON_NORMAL_DISCONNECTION);
+    az_mqtt5_client_disconnect(&client, AZ_MQTT5_REASON_NORMAL_DISCONNECTION);
     return 1;
   }
 
   // Drain SUBACK
   for (int i = 0; i < 10; i++)
   {
-    az_mqtt_client_process_loop(&client, 500);
+    az_mqtt5_client_process_loop(&client, 500);
   }
 
   // ── publish loop ──
   resource_snapshot snap_start = _snap();
   double deadline = _now_sec() + (double)duration_sec;
 
-  az_mqtt_publish_options pub_opts = az_mqtt_publish_options_default();
+  az_mqtt5_publish_options pub_opts = az_mqtt5_publish_options_default();
   pub_opts.topic = AZ_SPAN_FROM_STR("perf/az_mqtt5/data");
   pub_opts.payload = az_span_create(s_payload, payload_bytes);
   pub_opts.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
@@ -295,7 +294,7 @@ int main(int argc, char* argv[])
   while (g_pub_sent < msg_count && _now_sec() < deadline)
   {
     uint16_t pid;
-    rc = az_mqtt_client_publish(&client, &pub_opts, &pid);
+    rc = az_mqtt5_client_publish(&client, &pub_opts, &pid);
     if (az_result_succeeded(rc))
     {
       g_pub_sent++;
@@ -312,7 +311,7 @@ int main(int argc, char* argv[])
     {
       for (int i = 0; i < 5; i++)
       {
-        az_mqtt_client_process_loop(&client, 1);
+        az_mqtt5_client_process_loop(&client, 1);
       }
     }
   }
@@ -340,7 +339,7 @@ int main(int argc, char* argv[])
       fprintf(stderr, "[az_mqtt5] drain idle %.1fs, stopping\n", idle_budget);
       break;
     }
-    rc = az_mqtt_client_process_loop(&client, 100);
+    rc = az_mqtt5_client_process_loop(&client, 100);
     if (az_result_failed(rc))
       break;
     if (g_pub_received > last_received)
@@ -353,7 +352,7 @@ int main(int argc, char* argv[])
   resource_snapshot snap_end = _snap();
 
   // ── disconnect ──
-  az_mqtt_client_disconnect(&client, AZ_MQTT_REASON_NORMAL_DISCONNECTION);
+  az_mqtt5_client_disconnect(&client, AZ_MQTT5_REASON_NORMAL_DISCONNECTION);
 
   // ── report (JSON to stdout) ──
   double elapsed = snap_end.wall_sec - snap_start.wall_sec;

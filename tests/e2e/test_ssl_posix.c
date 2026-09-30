@@ -3,7 +3,7 @@
 
 /**
  * @file test_ssl_posix.c
- * @brief POSIX TLS integration test for az_mqtt_client.
+ * @brief POSIX TLS integration test for AZ_MQTT_T(client).
  */
 
 #include <setjmp.h>
@@ -13,7 +13,6 @@
 
 #include <cmocka.h>
 
-#include <az_mqtt/az_mqtt_client.h>
 #include <azure/core/az_span.h>
 
 #include "test_common.h"
@@ -27,22 +26,22 @@
 static az_mqtt_e2e_fixture s_fixture;
 
 static bool s_connack_received;
-static az_mqtt_reason_code s_connack_reason;
+static int s_connack_reason;
 
-static void on_connack(az_mqtt_client* client, az_mqtt_connack_data const* connack)
+static void on_connack(AZ_MQTT_T(client)* client, AZ_MQTT_T(connack_data) const* connack)
 {
   (void)client;
   s_connack_received = true;
-  s_connack_reason = connack->reason_code;
+  s_connack_reason = AZ_MQTT_TEST_CONNACK_CODE(connack);
 }
 
 static void reset_state(void)
 {
   s_connack_received = false;
-  s_connack_reason = AZ_MQTT_REASON_UNSPECIFIED_ERROR;
+  s_connack_reason = -1;
 }
 
-static az_result init_tls_client(az_mqtt_client* client, az_span client_id)
+static az_result init_tls_client(AZ_MQTT_T(client)* client, az_span client_id)
 {
   az_mqtt_e2e_fixture_reset(&s_fixture);
 
@@ -68,16 +67,16 @@ static void test_tls_connect_and_disconnect_posix(void** state)
   (void)state;
   reset_state();
 
-  az_mqtt_client client;
+  AZ_MQTT_T(client) client;
   az_result rc = init_tls_client(&client, AZ_SPAN_FROM_STR("test-tls-posix-01"));
   assert_int_equal(rc, AZ_OK);
 
-  rc = az_mqtt_client_connect(&client, 5000);
+  rc = AZ_MQTT_T(client_connect)(&client, 5000);
   assert_int_equal(rc, AZ_OK);
   assert_true(s_connack_received);
-  assert_int_equal(s_connack_reason, AZ_MQTT_REASON_SUCCESS);
+  assert_int_equal(s_connack_reason, AZ_MQTT_TEST_CONNACK_ACCEPTED);
 
-  rc = az_mqtt_client_disconnect(&client, AZ_MQTT_REASON_NORMAL_DISCONNECTION);
+  rc = AZ_MQTT_TEST_DISCONNECT(&client);
   assert_int_equal(rc, AZ_OK);
 }
 

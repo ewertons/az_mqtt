@@ -23,11 +23,8 @@
 
 // cmocka must be included after the standard headers above
 
-#define AZ_MQTT_SPAN_FROM_ARRAY(ARRAY) \
-  AZ_SPAN_FROM_BUFFER(*(uint8_t(*)[sizeof(ARRAY)])(ARRAY))
 #include <cmocka.h>
 
-#include <az_mqtt/az_mqtt_client.h>
 #include <azure/core/az_span.h>
 
 #include "test_common.h"
@@ -39,27 +36,27 @@ static az_mqtt_e2e_fixture s_fixture;
 // ──────────────────────── Callback tracking ──────────────────
 
 static bool s_connack_received;
-static az_mqtt_reason_code s_connack_reason;
+static int s_connack_reason;
 static bool s_connack_session_present;
 
 static void reset_callback_state(void)
 {
   s_connack_received = false;
-  s_connack_reason = AZ_MQTT_REASON_UNSPECIFIED_ERROR;
+  s_connack_reason = -1;
   s_connack_session_present = false;
 }
 
-static void on_connack(az_mqtt_client* client, az_mqtt_connack_data const* connack)
+static void on_connack(AZ_MQTT_T(client)* client, AZ_MQTT_T(connack_data) const* connack)
 {
   (void)client;
   s_connack_received = true;
-  s_connack_reason = connack->reason_code;
+  s_connack_reason = AZ_MQTT_TEST_CONNACK_CODE(connack);
   s_connack_session_present = connack->session_present;
 }
 
 // ──────────────────────── Helper: init a client ──────────────
 
-static az_result init_client(az_mqtt_client* client, az_span client_id)
+static az_result init_client(AZ_MQTT_T(client)* client, az_span client_id)
 {
   az_mqtt_e2e_fixture_reset(&s_fixture);
 
@@ -86,29 +83,29 @@ static void test_connect_and_disconnect(void** state)
   (void)state;
   reset_callback_state();
 
-  az_mqtt_client client;
+  AZ_MQTT_T(client) client;
   az_result rc = init_client(&client, AZ_SPAN_FROM_STR("test-connect-01"));
   assert_int_equal(rc, AZ_OK);
 
   // Connect (5 second timeout)
-  rc = az_mqtt_client_connect(&client, 5000);
+  rc = AZ_MQTT_T(client_connect)(&client, 5000);
   assert_int_equal(rc, AZ_OK);
 
   // Verify CONNACK
   assert_true(s_connack_received);
-  assert_int_equal(s_connack_reason, AZ_MQTT_REASON_SUCCESS);
-  assert_int_equal(az_mqtt_client_get_state(&client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+  assert_int_equal(s_connack_reason, AZ_MQTT_TEST_CONNACK_ACCEPTED);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&client), AZ_MQTT_CLIENT_STATE_CONNECTED);
 
   // Clean start = true, so no previous session
   assert_false(s_connack_session_present);
 
   // Disconnect
-  rc = az_mqtt_client_disconnect(&client, AZ_MQTT_REASON_NORMAL_DISCONNECTION);
+  rc = AZ_MQTT_TEST_DISCONNECT(&client);
   assert_int_equal(rc, AZ_OK);
-  assert_int_equal(az_mqtt_client_get_state(&client), AZ_MQTT_CLIENT_STATE_DISCONNECTED);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&client), AZ_MQTT_CLIENT_STATE_DISCONNECTED);
 
   // Disconnecting an already disconnected client is idempotent.
-  rc = az_mqtt_client_disconnect(&client, AZ_MQTT_REASON_NORMAL_DISCONNECTION);
+  rc = AZ_MQTT_TEST_DISCONNECT(&client);
   assert_int_equal(rc, AZ_OK);
 }
 
@@ -120,17 +117,17 @@ static void test_connect_when_already_connected(void** state)
   (void)state;
   reset_callback_state();
 
-  az_mqtt_client client;
+  AZ_MQTT_T(client) client;
   az_result rc = init_client(&client, AZ_SPAN_FROM_STR("test-connect-dup-01"));
   assert_int_equal(rc, AZ_OK);
 
-  rc = az_mqtt_client_connect(&client, 5000);
+  rc = AZ_MQTT_T(client_connect)(&client, 5000);
   assert_int_equal(rc, AZ_OK);
 
-  rc = az_mqtt_client_connect(&client, 5000);
+  rc = AZ_MQTT_T(client_connect)(&client, 5000);
   assert_int_equal(rc, AZ_MQTT_ERROR_INVALID_STATE);
 
-  rc = az_mqtt_client_disconnect(&client, AZ_MQTT_REASON_NORMAL_DISCONNECTION);
+  rc = AZ_MQTT_TEST_DISCONNECT(&client);
   assert_int_equal(rc, AZ_OK);
 }
 
@@ -144,33 +141,34 @@ static void test_reconnect_with_session(void** state)
   az_span client_id = AZ_SPAN_FROM_STR("test-session-01");
 
   // First connection: clean start
-  az_mqtt_client client;
+  AZ_MQTT_T(client) client;
   az_result rc = init_client(&client, client_id);
   assert_int_equal(rc, AZ_OK);
 
+#if AZ_MQTT_TEST_VERSION == 5
   // Override session expiry to keep the session
-  client.options.connect_options.session_expiry_interval = 300;
-#if AZ_MQTT_TEST_VERSION == 3
+  client._internal.connect_options.session_expiry_interval = 300;
+#else
   // MQTT 3.1.1 has no session expiry: a Clean Session 1 session ends at
   // disconnect. Clear any old session with one clean connect, then keep the
   // next one with Clean Session 0.
-  rc = az_mqtt_client_connect(&client, 5000);
+  rc = AZ_MQTT_T(client_connect)(&client, 5000);
   assert_int_equal(rc, AZ_OK);
-  rc = az_mqtt_client_disconnect(&client, AZ_MQTT_REASON_NORMAL_DISCONNECTION);
+  rc = AZ_MQTT_TEST_DISCONNECT(&client);
   assert_int_equal(rc, AZ_OK);
   s_connack_received = false;
   rc = init_client(&client, client_id);
   assert_int_equal(rc, AZ_OK);
-  client.options.connect_options.clean_start = false;
+  client._internal.connect_options.clean_session = false;
 #endif
 
-  rc = az_mqtt_client_connect(&client, 5000);
+  rc = AZ_MQTT_T(client_connect)(&client, 5000);
   assert_int_equal(rc, AZ_OK);
   assert_true(s_connack_received);
-  assert_int_equal(s_connack_reason, AZ_MQTT_REASON_SUCCESS);
+  assert_int_equal(s_connack_reason, AZ_MQTT_TEST_CONNACK_ACCEPTED);
   assert_false(s_connack_session_present);
 
-  rc = az_mqtt_client_disconnect(&client, AZ_MQTT_REASON_NORMAL_DISCONNECTION);
+  rc = AZ_MQTT_TEST_DISCONNECT(&client);
   assert_int_equal(rc, AZ_OK);
 
   // Second connection: resume session
@@ -178,16 +176,18 @@ static void test_reconnect_with_session(void** state)
   rc = init_client(&client, client_id);
   assert_int_equal(rc, AZ_OK);
 
-  client.options.connect_options.clean_start = false;
-  client.options.connect_options.session_expiry_interval = 300;
+  client._internal.connect_options.AZ_MQTT_TEST_CLEAN = false;
+#if AZ_MQTT_TEST_VERSION == 5
+  client._internal.connect_options.session_expiry_interval = 300;
+#endif
 
-  rc = az_mqtt_client_connect(&client, 5000);
+  rc = AZ_MQTT_T(client_connect)(&client, 5000);
   assert_int_equal(rc, AZ_OK);
   assert_true(s_connack_received);
-  assert_int_equal(s_connack_reason, AZ_MQTT_REASON_SUCCESS);
+  assert_int_equal(s_connack_reason, AZ_MQTT_TEST_CONNACK_ACCEPTED);
   assert_true(s_connack_session_present);
 
-  rc = az_mqtt_client_disconnect(&client, AZ_MQTT_REASON_NORMAL_DISCONNECTION);
+  rc = AZ_MQTT_TEST_DISCONNECT(&client);
   assert_int_equal(rc, AZ_OK);
 }
 
@@ -205,34 +205,26 @@ static void test_connect_failure(void** state)
   az_result rc = az_mqtt_transport_init(transport);
   assert_int_equal(rc, AZ_OK);
 
-  az_mqtt_connect_options connect_opts = az_mqtt_connect_options_default();
+  AZ_MQTT_T(connect_options) connect_opts = AZ_MQTT_T(connect_options_default)();
   connect_opts.client_id = AZ_SPAN_FROM_STR("test-fail-01");
 
-  az_mqtt_client_options opts;
+  AZ_MQTT_T(client_options) opts;
   memset(&opts, 0, sizeof(opts));
   opts.transport = transport;
-  opts.protocol_version = AZ_MQTT_TEST_PROTOCOL_VERSION;
   opts.send_buffer = AZ_SPAN_FROM_BUFFER(s_fixture.send_buf);
   opts.receive_buffer = AZ_SPAN_FROM_BUFFER(s_fixture.recv_buf);
   opts.connect_options = connect_opts;
   opts.hostname = AZ_SPAN_FROM_STR("127.0.0.1");
   opts.port = 19999; // Nothing is listening here
   opts.tls_options = NULL;
-  opts.buffers.connack_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_fixture.connack_props);
-  opts.buffers.publish_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_fixture.publish_props);
-  opts.buffers.publish_subscription_identifiers = AZ_MQTT_SPAN_FROM_ARRAY(s_fixture.publish_subscription_ids);
-  opts.buffers.suback_reason_codes = AZ_MQTT_SPAN_FROM_ARRAY(s_fixture.suback_reasons);
-  opts.buffers.suback_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_fixture.suback_props);
-  opts.buffers.ack_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_fixture.ack_props);
-  opts.buffers.disconnect_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_fixture.disconnect_props);
 
-  az_mqtt_client client;
-  rc = az_mqtt_client_init(&client, &opts);
+  AZ_MQTT_T(client) client;
+  rc = AZ_MQTT_T(client_init)(&client, &opts);
   assert_int_equal(rc, AZ_OK);
 
-  rc = az_mqtt_client_connect(&client, 3000);
+  rc = AZ_MQTT_T(client_connect)(&client, 3000);
   assert_true(az_result_failed(rc));
-  assert_int_equal(az_mqtt_client_get_state(&client), AZ_MQTT_CLIENT_STATE_DISCONNECTED);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&client), AZ_MQTT_CLIENT_STATE_DISCONNECTED);
 }
 
 /**
@@ -243,11 +235,11 @@ static void test_process_loop_while_disconnected(void** state)
   (void)state;
   reset_callback_state();
 
-  az_mqtt_client client;
+  AZ_MQTT_T(client) client;
   az_result rc = init_client(&client, AZ_SPAN_FROM_STR("test-loop-disc-01"));
   assert_int_equal(rc, AZ_OK);
 
-  rc = az_mqtt_client_process_loop(&client, 10);
+  rc = AZ_MQTT_T(client_process_loop)(&client, 10);
   assert_int_equal(rc, AZ_MQTT_ERROR_NOT_CONNECTED);
 }
 

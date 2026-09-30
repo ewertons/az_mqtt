@@ -5,8 +5,10 @@
 
 #include <string.h>
 
-#define AZ_MQTT_SPAN_FROM_ARRAY(ARRAY) \
+#if AZ_MQTT_TEST_VERSION == 5
+#define AZ_MQTT5_SPAN_FROM_ARRAY(ARRAY) \
   AZ_SPAN_FROM_BUFFER(*(uint8_t(*)[sizeof(ARRAY)])(ARRAY))
+#endif
 
 void az_mqtt_e2e_fixture_reset(az_mqtt_e2e_fixture* fixture)
 {
@@ -15,7 +17,7 @@ void az_mqtt_e2e_fixture_reset(az_mqtt_e2e_fixture* fixture)
 
 az_result az_mqtt_e2e_init_client(
     az_mqtt_e2e_fixture* fixture,
-    az_mqtt_client* client,
+    AZ_MQTT_T(client)* client,
     az_mqtt_e2e_client_params const* params)
 {
   if (az_mqtt_transport_sizeof() > E2E_TRANSPORT_BUF_SIZE)
@@ -30,15 +32,14 @@ az_result az_mqtt_e2e_init_client(
     return rc;
   }
 
-  az_mqtt_connect_options connect_opts = az_mqtt_connect_options_default();
+  AZ_MQTT_T(connect_options) connect_opts = AZ_MQTT_T(connect_options_default)();
   connect_opts.client_id = params->client_id;
   connect_opts.keep_alive_seconds = params->keep_alive_seconds;
-  connect_opts.clean_start = params->clean_start;
+  connect_opts.AZ_MQTT_TEST_CLEAN = params->clean_start;
 
-  az_mqtt_client_options opts;
+  AZ_MQTT_T(client_options) opts;
   memset(&opts, 0, sizeof(opts));
   opts.transport = transport;
-  opts.protocol_version = AZ_MQTT_TEST_PROTOCOL_VERSION;
   opts.send_buffer = AZ_SPAN_FROM_BUFFER(fixture->send_buf);
   opts.receive_buffer = AZ_SPAN_FROM_BUFFER(fixture->recv_buf);
   opts.connect_options = connect_opts;
@@ -52,21 +53,23 @@ az_result az_mqtt_e2e_init_client(
   opts.on_unsuback = params->on_unsuback;
   opts.on_puback = params->on_puback;
   opts.on_pubcomp = params->on_pubcomp;
+#if AZ_MQTT_TEST_VERSION == 5
   opts.on_disconnect = params->on_disconnect;
 
-  opts.buffers.connack_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(fixture->connack_props);
-  opts.buffers.publish_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(fixture->publish_props);
-  opts.buffers.publish_subscription_identifiers = AZ_MQTT_SPAN_FROM_ARRAY(fixture->publish_subscription_ids);
-  opts.buffers.suback_reason_codes = AZ_MQTT_SPAN_FROM_ARRAY(fixture->suback_reasons);
-  opts.buffers.suback_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(fixture->suback_props);
-  opts.buffers.ack_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(fixture->ack_props);
-  opts.buffers.disconnect_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(fixture->disconnect_props);
+  opts.buffers.connack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->connack_props);
+  opts.buffers.publish_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->publish_props);
+  opts.buffers.publish_subscription_identifiers = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->publish_subscription_ids);
+  opts.buffers.suback_reason_codes = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->suback_reasons);
+  opts.buffers.suback_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->suback_props);
+  opts.buffers.ack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->ack_props);
+  opts.buffers.disconnect_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->disconnect_props);
+#endif
 
-  return az_mqtt_client_init(client, &opts);
+  return AZ_MQTT_T(client_init)(client, &opts);
 }
 
 az_result az_mqtt_e2e_wait_until(
-    az_mqtt_client* client,
+    AZ_MQTT_T(client)* client,
     int32_t max_iterations,
     int32_t process_loop_timeout_ms,
     bool (*condition)(void))
@@ -78,7 +81,7 @@ az_result az_mqtt_e2e_wait_until(
       return AZ_OK;
     }
 
-    az_result rc = az_mqtt_client_process_loop(client, process_loop_timeout_ms);
+    az_result rc = AZ_MQTT_T(client_process_loop)(client, process_loop_timeout_ms);
     if (az_result_failed(rc))
     {
       return rc;

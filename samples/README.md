@@ -4,9 +4,9 @@ This guide is for first-time readers of this repository. It walks you through st
 
 ## What the samples do
 
-[az_mqtt5_sample_connect.c](az_mqtt5_sample_connect.c) (mqttv5) and
-[az_mqtt3_sample_connect.c](az_mqtt3_sample_connect.c) (mqttv3) are the same program; each
-links only its own codec (`az_mqtt::mqtt5` / `az_mqtt::mqtt3`). Each one:
+[az_mqtt5_sample_connect.c](az_mqtt5_sample_connect.c) (mqttv5, `az_mqtt::mqttv5`) and
+[az_mqtt3_sample_connect.c](az_mqtt3_sample_connect.c) (mqttv3, `az_mqtt::mqttv3`) do the same
+thing, each with its own API. Each one:
 
 - Connects to the broker
 - Subscribes to mqtt5/test/# (mqttv3: mqtt3/test/#)
@@ -99,7 +99,7 @@ az_mqtt5_sample_connect localhost 1883
 
 ## Expected successful output
 
-A successful mqttv5 run looks similar to this (mqttv3 prints `MQTT3 Sample` and uses `mqtt3/test/...`):
+A successful mqttv5 run looks similar to this (mqttv3 prints `MQTT3 Sample`, uses `mqtt3/test/...` and shows return codes instead of reason codes):
 
 ```text
 MQTT5 Sample: Connecting to localhost:1883
@@ -112,7 +112,7 @@ Processing events (10 iterations)...
 [SUBACK] packet_id=1 reason_codes=[0x01]
 [PUBACK] packet_id=2 reason=0
 [PUBLISH received] topic="mqtt5/test/hello" qos=1 payload_len=45
-  payload: "Hello from az_mqtt_client! Zero allocations."
+  payload: "Hello from az_mqtt5_client! Zero allocations."
 Disconnecting...
 Done.
 ```

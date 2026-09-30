@@ -6,29 +6,21 @@
 file(TO_CMAKE_PATH "${PROJECT_SOURCE_DIR}/tests/broker/certs/ca.crt" E2E_CA_CERT_PATH)
 
 # add_az_mqtt_e2e_test(<name> <source> [<compile definition>...]): per enabled
-# version N, az_mqttN_test_<name> on az_mqtt::mqttN and, when both are enabled,
-# az_mqtt_multiN_test_<name> on az_mqtt::multi.
+# version N, az_mqttN_test_<name> on az_mqtt::mqttvN.
 function(add_az_mqtt_e2e_test name source_file)
   foreach(version 3 5)
-    if(AZ_MQTT_ENABLE_MQTT${version})
-      _az_mqtt_e2e_test(az_mqtt${version}_test_${name} ${source_file} az_mqtt::mqtt${version}
-        AZ_MQTT_TEST_VERSION=${version} ${ARGN})
+    if(NOT AZ_MQTT_ENABLE_MQTTV${version})
+      continue()
     endif()
-    if(TARGET az_mqtt::multi)
-      _az_mqtt_e2e_test(az_mqtt_multi${version}_test_${name} ${source_file} az_mqtt::multi
-        AZ_MQTT_TEST_VERSION=${version} AZ_MQTT_TEST_MULTI ${ARGN})
-    endif()
+    set(target az_mqtt${version}_test_${name})
+    add_executable(${target} ${source_file} test_common.c)
+    target_include_directories(${target} PRIVATE
+      ${cmocka_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/tests)
+    target_compile_definitions(${target} PRIVATE AZ_MQTT_TEST_VERSION=${version} ${ARGN})
+    target_link_libraries(${target} PRIVATE az_mqtt::mqttv${version} cmocka)
+    az_mqtt_apply_warnings(${target})
+    add_test(NAME ${target} COMMAND ${target})
   endforeach()
-endfunction()
-
-function(_az_mqtt_e2e_test target source_file library)
-  add_executable(${target} ${source_file} test_common.c)
-  target_include_directories(${target} PRIVATE
-    ${cmocka_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/tests)
-  target_compile_definitions(${target} PRIVATE ${ARGN})
-  target_link_libraries(${target} PRIVATE ${library} cmocka)
-  az_mqtt_apply_warnings(${target})
-  add_test(NAME ${target} COMMAND ${target})
 endfunction()
 
 # ── Plain TCP ────────────────────────────────────────────────
@@ -36,6 +28,15 @@ endfunction()
 add_az_mqtt_e2e_test(connect test_connect.c)
 add_az_mqtt_e2e_test(publish test_publish.c)
 add_az_mqtt_e2e_test(subscribe test_subscribe.c)
+
+# Both version libraries in one program.
+if(AZ_MQTT_ENABLE_MQTTV3 AND AZ_MQTT_ENABLE_MQTTV5)
+  add_executable(az_mqtt_test_both_versions test_both_versions.c)
+  target_include_directories(az_mqtt_test_both_versions PRIVATE ${cmocka_SOURCE_DIR}/include)
+  target_link_libraries(az_mqtt_test_both_versions PRIVATE az_mqtt::mqttv3 az_mqtt::mqttv5 cmocka)
+  az_mqtt_apply_warnings(az_mqtt_test_both_versions)
+  add_test(NAME az_mqtt_test_both_versions COMMAND az_mqtt_test_both_versions)
+endif()
 
 # ── TLS ──────────────────────────────────────────────────────
 

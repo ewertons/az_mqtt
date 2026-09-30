@@ -4,9 +4,8 @@
 #ifndef AZ_MQTT_E2E_TEST_COMMON_H
 #define AZ_MQTT_E2E_TEST_COMMON_H
 
-#include <az_mqtt/az_mqtt_client.h>
 
-#include "az_mqtt_test_version.h"
+#include "az_mqtt_test_api.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -24,13 +23,15 @@ typedef struct
   uint8_t recv_buf[E2E_RECV_BUF_SIZE];
   uint8_t transport_buf[E2E_TRANSPORT_BUF_SIZE];
 
-  az_mqtt_user_property connack_props[E2E_MAX_USER_PROPS];
-  az_mqtt_user_property publish_props[E2E_MAX_USER_PROPS];
-  az_mqtt_user_property suback_props[E2E_MAX_USER_PROPS];
-  az_mqtt_user_property ack_props[E2E_MAX_USER_PROPS];
-  az_mqtt_user_property disconnect_props[E2E_MAX_USER_PROPS];
-  az_mqtt_reason_code suback_reasons[E2E_MAX_REASON_CODES];
+#if AZ_MQTT_TEST_VERSION == 5
+  AZ_MQTT_T(user_property) connack_props[E2E_MAX_USER_PROPS];
+  AZ_MQTT_T(user_property) publish_props[E2E_MAX_USER_PROPS];
+  AZ_MQTT_T(user_property) suback_props[E2E_MAX_USER_PROPS];
+  AZ_MQTT_T(user_property) ack_props[E2E_MAX_USER_PROPS];
+  AZ_MQTT_T(user_property) disconnect_props[E2E_MAX_USER_PROPS];
+  AZ_MQTT_T(reason_code) suback_reasons[E2E_MAX_REASON_CODES];
   int32_t publish_subscription_ids[E2E_MAX_USER_PROPS];
+#endif
 } az_mqtt_e2e_fixture;
 
 typedef struct
@@ -39,27 +40,30 @@ typedef struct
   az_span hostname;
   uint16_t port;
   uint16_t keep_alive_seconds;
+  /** @brief Clean start (MQTT 5) / clean session (MQTT 3.1.1). */
   bool clean_start;
   az_mqtt_tls_options const* tls_options;
 
-  az_mqtt_on_connack_fn on_connack;
-  az_mqtt_on_publish_received_fn on_publish;
-  az_mqtt_on_suback_fn on_suback;
-  az_mqtt_on_unsuback_fn on_unsuback;
-  az_mqtt_on_puback_fn on_puback;
-  az_mqtt_on_pubcomp_fn on_pubcomp;
-  az_mqtt_on_disconnect_fn on_disconnect;
+  AZ_MQTT_T(on_connack_fn) on_connack;
+  AZ_MQTT_T(on_publish_received_fn) on_publish;
+  AZ_MQTT_T(on_suback_fn) on_suback;
+  AZ_MQTT_T(on_unsuback_fn) on_unsuback;
+  AZ_MQTT_T(on_puback_fn) on_puback;
+  AZ_MQTT_T(on_pubcomp_fn) on_pubcomp;
+#if AZ_MQTT_TEST_VERSION == 5
+  AZ_MQTT_T(on_disconnect_fn) on_disconnect;
+#endif
 } az_mqtt_e2e_client_params;
 
 void az_mqtt_e2e_fixture_reset(az_mqtt_e2e_fixture* fixture);
 
 az_result az_mqtt_e2e_init_client(
     az_mqtt_e2e_fixture* fixture,
-    az_mqtt_client* client,
+    AZ_MQTT_T(client)* client,
     az_mqtt_e2e_client_params const* params);
 
 az_result az_mqtt_e2e_wait_until(
-    az_mqtt_client* client,
+    AZ_MQTT_T(client)* client,
     int32_t max_iterations,
     int32_t process_loop_timeout_ms,
     bool (*condition)(void));

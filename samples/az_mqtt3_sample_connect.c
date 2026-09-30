@@ -17,8 +17,7 @@
  * - Deterministic memory footprint
  */
 
-#include <az_mqtt/az_mqtt_client.h>
-#include <az_mqtt/az_mqtt3.h>
+#include <az_mqtt3/az_mqtt3_client.h>
 
 #include "az_mqtt_sample_config.h"
 
@@ -31,16 +30,16 @@
 
 // ──────────────────────── Callbacks ──────────────────────────
 
-static void on_connack(az_mqtt_client* client, az_mqtt_connack_data const* connack)
+static void on_connack(az_mqtt3_client* client, az_mqtt3_connack_data const* connack)
 {
   (void)client;
   printf(
-      "[CONNACK] reason=%d session_present=%d\n",
-      (int)connack->reason_code,
+      "[CONNACK] return_code=%d session_present=%d\n",
+      (int)connack->return_code,
       connack->session_present);
 }
 
-static void on_publish(az_mqtt_client* client, az_mqtt_publish_data const* publish)
+static void on_publish(az_mqtt3_client* client, az_mqtt3_publish_data const* publish)
 {
   (void)client;
   printf(
@@ -59,41 +58,21 @@ static void on_publish(az_mqtt_client* client, az_mqtt_publish_data const* publi
   }
 }
 
-static void on_suback(az_mqtt_client* client, az_mqtt_suback_data const* suback)
+static void on_suback(az_mqtt3_client* client, az_mqtt3_suback_data const* suback)
 {
   (void)client;
-  printf("[SUBACK] packet_id=%d reason_codes=[", suback->packet_id);
-  if (suback->reason_codes != NULL)
+  printf("[SUBACK] packet_id=%d return_codes=[", suback->packet_id);
+  for (int32_t i = 0; i < az_span_size(suback->return_codes); i++)
   {
-    for (int32_t i = 0; i < suback->reason_code_count; i++)
-    {
-      printf("%s0x%02X", i > 0 ? ", " : "", (unsigned)suback->reason_codes[i]);
-    }
-  }
-  else
-  {
-    printf("NULL");
+    printf("%s0x%02X", i > 0 ? ", " : "", (unsigned)az_span_ptr(suback->return_codes)[i]);
   }
   printf("]\n");
 }
 
-static void on_puback(az_mqtt_client* client, az_mqtt_ack_data const* ack)
+static void on_puback(az_mqtt3_client* client, az_mqtt3_ack_data const* ack)
 {
   (void)client;
-  printf("[PUBACK] packet_id=%d reason=%d\n", ack->packet_id, (int)ack->reason_code);
-}
-
-static void on_disconnect(az_mqtt_client* client, az_mqtt_disconnect_data const* disc)
-{
-  (void)client;
-  printf("[DISCONNECT from broker] reason=%d\n", (int)disc->reason_code);
-  if (az_span_size(disc->reason_string) > 0)
-  {
-    printf(
-        "  reason_string: \"%.*s\"\n",
-        az_span_size(disc->reason_string),
-        (char const*)az_span_ptr(disc->reason_string));
-  }
+  printf("[PUBACK] packet_id=%d\n", ack->packet_id);
 }
 
 // ──────────────────────── Main ───────────────────────────────
@@ -136,12 +115,12 @@ int main(int argc, char* argv[])
   }
 
   // Configure the client for MQTT 3.1.1
-  az_mqtt_connect_options connect_opts = az_mqtt_connect_options_default();
+  az_mqtt3_connect_options connect_opts = az_mqtt3_connect_options_default();
   connect_opts.client_id = AZ_SPAN_FROM_STR("mqtt3-c-sample");
   connect_opts.keep_alive_seconds = 30;
-  connect_opts.clean_start = true;
+  connect_opts.clean_session = true;
 
-  az_mqtt_client_options client_opts;
+  az_mqtt3_client_options client_opts;
   memset(&client_opts, 0, sizeof(client_opts));
   client_opts.transport = transport;
   client_opts.send_buffer = AZ_SPAN_FROM_BUFFER(s_send_buffer);
@@ -156,20 +135,10 @@ int main(int argc, char* argv[])
   client_opts.on_publish = on_publish;
   client_opts.on_suback = on_suback;
   client_opts.on_puback = on_puback;
-  client_opts.on_disconnect = on_disconnect;
-
-  // Pre-allocated buffers for received properties
-  client_opts.buffers.connack_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_connack_user_props);
-  client_opts.buffers.publish_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_publish_user_props);
-  client_opts.buffers.publish_subscription_identifiers = AZ_MQTT_SPAN_FROM_ARRAY(s_publish_sub_ids);
-  client_opts.buffers.suback_reason_codes = AZ_MQTT_SPAN_FROM_ARRAY(s_suback_reason_codes);
-  client_opts.buffers.suback_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_suback_user_props);
-  client_opts.buffers.ack_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_ack_user_props);
-  client_opts.buffers.disconnect_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_disconnect_user_props);
 
   // Initialize client
-  az_mqtt_client client;
-  rc = az_mqtt_client_init(&client, &client_opts);
+  az_mqtt3_client client;
+  rc = az_mqtt3_client_init(&client, &client_opts);
   if (az_result_failed(rc))
   {
     printf("ERROR: client init failed: 0x%08X\n", (unsigned)rc);
@@ -178,7 +147,7 @@ int main(int argc, char* argv[])
 
   // Connect (blocks until CONNACK or timeout)
   printf("Connecting...\n");
-  rc = az_mqtt_client_connect(&client, 10000 /* 10 second timeout */);
+  rc = az_mqtt3_client_connect(&client, 10000 /* 10 second timeout */);
   if (az_result_failed(rc))
   {
     printf("ERROR: connect failed: 0x%08X\n", (unsigned)rc);
@@ -187,19 +156,16 @@ int main(int argc, char* argv[])
   printf("Connected!\n");
 
   // Subscribe to a test topic
-  az_mqtt_subscription sub;
+  az_mqtt3_subscription sub;
   sub.topic_filter = AZ_SPAN_FROM_STR("mqtt3/test/#");
   sub.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
-  sub.no_local = false;
-  sub.retain_as_published = false;
-  sub.retain_handling = AZ_MQTT_RETAIN_HANDLING_SEND_AT_SUBSCRIBE;
 
   uint16_t sub_packet_id;
-  rc = az_mqtt_client_subscribe(&client, &sub, 1, &sub_packet_id);
+  rc = az_mqtt3_client_subscribe(&client, &sub, 1, &sub_packet_id);
   if (az_result_failed(rc))
   {
     printf("ERROR: subscribe failed: 0x%08X\n", (unsigned)rc);
-    if (az_result_failed(az_mqtt_client_disconnect(&client, AZ_MQTT_REASON_NORMAL_DISCONNECTION)))
+    if (az_result_failed(az_mqtt3_client_disconnect(&client)))
     {
       printf("WARNING: disconnect failed\n");
     }
@@ -208,18 +174,17 @@ int main(int argc, char* argv[])
   printf("Subscribe sent (packet_id=%d)\n", sub_packet_id);
 
   // Publish a test message
-  az_mqtt_publish_options pub_opts = az_mqtt_publish_options_default();
+  az_mqtt3_publish_options pub_opts = az_mqtt3_publish_options_default();
   pub_opts.topic = AZ_SPAN_FROM_STR("mqtt3/test/hello");
-  pub_opts.payload = AZ_SPAN_FROM_STR("Hello from az_mqtt_client! Zero allocations.");
+  pub_opts.payload = AZ_SPAN_FROM_STR("Hello from az_mqtt3_client! Zero allocations.");
   pub_opts.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
-  pub_opts.payload_format_indicator = 1; // UTF-8 string
 
   uint16_t pub_packet_id;
-  rc = az_mqtt_client_publish(&client, &pub_opts, &pub_packet_id);
+  rc = az_mqtt3_client_publish(&client, &pub_opts, &pub_packet_id);
   if (az_result_failed(rc))
   {
     printf("ERROR: publish failed: 0x%08X\n", (unsigned)rc);
-    if (az_result_failed(az_mqtt_client_disconnect(&client, AZ_MQTT_REASON_NORMAL_DISCONNECTION)))
+    if (az_result_failed(az_mqtt3_client_disconnect(&client)))
     {
       printf("WARNING: disconnect failed\n");
     }
@@ -231,7 +196,7 @@ int main(int argc, char* argv[])
   printf("Processing events (10 iterations)...\n");
   for (int i = 0; i < 10; i++)
   {
-    rc = az_mqtt_client_process_loop(&client, 1000 /* 1 second timeout */);
+    rc = az_mqtt3_client_process_loop(&client, 1000 /* 1 second timeout */);
     if (az_result_failed(rc))
     {
       printf("ERROR: process_loop failed: 0x%08X\n", (unsigned)rc);
@@ -241,7 +206,7 @@ int main(int argc, char* argv[])
 
   // Disconnect
   printf("Disconnecting...\n");
-  rc = az_mqtt_client_disconnect(&client, AZ_MQTT_REASON_NORMAL_DISCONNECTION);
+  rc = az_mqtt3_client_disconnect(&client);
   if (az_result_failed(rc))
   {
     printf("ERROR: disconnect failed: 0x%08X\n", (unsigned)rc);

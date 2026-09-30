@@ -16,9 +16,8 @@
 
 #include <cmocka.h>
 
-#include <az_mqtt/az_mqtt_client.h>
 
-#include "az_mqtt_test_version.h"
+#include "az_mqtt_test_api.h"
 
 #include "test_server.h"
 
@@ -29,14 +28,16 @@ static void _ignore(az_result rc) { (void)rc; }
 
 typedef struct
 {
-  az_mqtt_client client;
+  AZ_MQTT_T(client) client;
   az_mqtt_transport* transport;
   test_server* server;
   uint8_t send_buf[1024];
   uint8_t recv_buf[1024];
-  az_mqtt_user_property props[4][4];
+#if AZ_MQTT_TEST_VERSION == 5
+  AZ_MQTT_T(user_property) props[4][4];
   int32_t sub_ids[4];
-  az_mqtt_reason_code reasons[4];
+  AZ_MQTT_T(reason_code) reasons[4];
+#endif
 } fixture;
 
 static struct
@@ -55,49 +56,63 @@ static struct
   az_result reconnect_rc;
 } g;
 
-static void _on_connack(az_mqtt_client* c, az_mqtt_connack_data const* d)
+static void _on_connack(AZ_MQTT_T(client)* c, AZ_MQTT_T(connack_data) const* d)
 {
   (void)c;
   g.connacks++;
-  g.connack_reason = (int)d->reason_code;
+  g.connack_reason = AZ_MQTT_TEST_CONNACK_CODE(d);
 }
 
-static void _on_suback(az_mqtt_client* c, az_mqtt_suback_data const* d)
+static void _on_suback(AZ_MQTT_T(client)* c, AZ_MQTT_T(suback_data) const* d)
 {
   (void)c;
   g.subacks++;
+#if AZ_MQTT_TEST_VERSION == 5
   g.suback_count = d->reason_code_count;
   for (int32_t i = 0; i < d->reason_code_count; i++)
   {
     assert_int_equal(d->reason_codes[i], 0);
   }
+#else
+  g.suback_count = az_span_size(d->return_codes);
+  for (int32_t i = 0; i < g.suback_count; i++)
+  {
+    assert_int_equal(az_span_ptr(d->return_codes)[i], AZ_MQTT3_SUBACK_GRANTED_QOS_0);
+  }
+#endif
 }
 
-static void _on_publish(az_mqtt_client* c, az_mqtt_publish_data const* p)
+static void _on_publish(AZ_MQTT_T(client)* c, AZ_MQTT_T(publish_data) const* p)
 {
   (void)c;
   g.publishes++;
+#if AZ_MQTT_TEST_VERSION == 5
   g.publish_user_properties = p->user_property_count;
   g.publish_subscription_identifiers = p->subscription_identifier_count;
+#else
+  (void)p;
+#endif
 }
 
-static void _on_disconnect(az_mqtt_client* c, az_mqtt_disconnect_data const* d)
+#if AZ_MQTT_TEST_VERSION == 5
+static void _on_disconnect(AZ_MQTT_T(client)* c, AZ_MQTT_T(disconnect_data) const* d)
 {
   (void)c;
   (void)d;
   g.disconnects++;
 }
+#endif
 
-static void _on_closed(az_mqtt_client* c, az_result reason)
+static void _on_closed(AZ_MQTT_T(client)* c, az_result reason)
 {
   // The transport is already closed: the client must look disconnected.
-  assert_int_equal(az_mqtt_client_get_state(c), AZ_MQTT_CLIENT_STATE_DISCONNECTED);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(c), AZ_MQTT_CLIENT_STATE_DISCONNECTED);
   g.closed++;
   g.closed_reason = reason;
   if (g.reconnects_left > 0)
   {
     g.reconnects_left--;
-    g.reconnect_rc = az_mqtt_client_connect(c, 3000);
+    g.reconnect_rc = AZ_MQTT_T(client_connect)(c, 3000);
   }
 }
 
@@ -124,13 +139,12 @@ static void _setup(fixture* f, test_server_options const* so, uint16_t keep_aliv
   assert_non_null(f->transport);
   assert_int_equal(az_mqtt_transport_init(f->transport), AZ_OK);
 
-  az_mqtt_client_options o;
+  AZ_MQTT_T(client_options) o;
   memset(&o, 0, sizeof(o));
   o.transport = f->transport;
-  o.protocol_version = AZ_MQTT_TEST_PROTOCOL_VERSION;
   o.send_buffer = ARRAY_SPAN(f->send_buf);
   o.receive_buffer = ARRAY_SPAN(f->recv_buf);
-  o.connect_options = az_mqtt_connect_options_default();
+  o.connect_options = AZ_MQTT_T(connect_options_default)();
   o.connect_options.client_id = AZ_SPAN_FROM_STR("session-test");
   o.connect_options.keep_alive_seconds = keep_alive_s;
   o.hostname = AZ_SPAN_FROM_STR("127.0.0.1");
@@ -138,8 +152,9 @@ static void _setup(fixture* f, test_server_options const* so, uint16_t keep_aliv
   o.on_connack = _on_connack;
   o.on_publish = _on_publish;
   o.on_suback = _on_suback;
-  o.on_disconnect = _on_disconnect;
   o.on_connection_closed = _on_closed;
+#if AZ_MQTT_TEST_VERSION == 5
+  o.on_disconnect = _on_disconnect;
   o.buffers.connack_user_properties = ARRAY_SPAN(f->props[0]);
   o.buffers.publish_user_properties = ARRAY_SPAN(f->props[1]);
   o.buffers.publish_subscription_identifiers = ARRAY_SPAN(f->sub_ids);
@@ -147,12 +162,13 @@ static void _setup(fixture* f, test_server_options const* so, uint16_t keep_aliv
   o.buffers.suback_user_properties = ARRAY_SPAN(f->props[2]);
   o.buffers.ack_user_properties = ARRAY_SPAN(f->props[3]);
   o.buffers.disconnect_user_properties = ARRAY_SPAN(f->props[3]);
-  assert_int_equal(az_mqtt_client_init(&f->client, &o), AZ_OK);
+#endif
+  assert_int_equal(AZ_MQTT_T(client_init)(&f->client, &o), AZ_OK);
 }
 
 static void _teardown(fixture* f)
 {
-  _ignore(az_mqtt_client_disconnect(&f->client, AZ_MQTT_REASON_NORMAL_DISCONNECTION));
+  _ignore(AZ_MQTT_TEST_DISCONNECT(&f->client));
   free(f->transport);
   test_server_stop(f->server);
 }
@@ -169,10 +185,10 @@ static az_result _pump_until_closed(fixture* f, int budget_ms)
 {
   az_result rc = AZ_OK;
   int64_t const end = _now_ms() + budget_ms;
-  while (az_mqtt_client_get_state(&f->client) != AZ_MQTT_CLIENT_STATE_DISCONNECTED
+  while (AZ_MQTT_T(client_get_state)(&f->client) != AZ_MQTT_CLIENT_STATE_DISCONNECTED
          && _now_ms() < end)
   {
-    rc = az_mqtt_client_process_loop(&f->client, 100);
+    rc = AZ_MQTT_T(client_process_loop)(&f->client, 100);
   }
   return rc;
 }
@@ -183,19 +199,19 @@ static void a_long_process_loop_wait_still_pings_on_time(void** state)
   test_server_options so = _plain();
   fixture f;
   _setup(&f, &so, 1);
-  assert_int_equal(az_mqtt_client_connect(&f.client, 3000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
 
   // One call asked to wait 5 s must return at the 1 s keep-alive, having pinged.
   int64_t t0 = _now_ms();
-  assert_int_equal(az_mqtt_client_process_loop(&f.client, 5000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_process_loop)(&f.client, 5000), AZ_OK);
   int64_t elapsed = _now_ms() - t0;
   assert_true(elapsed >= 900 && elapsed < 2500);
   for (int i = 0; i < 20 && test_server_pingreqs(f.server) == 0; i++)
   {
-    _ignore(az_mqtt_client_process_loop(&f.client, 50));
+    _ignore(AZ_MQTT_T(client_process_loop)(&f.client, 50));
   }
   assert_int_equal(test_server_pingreqs(f.server), 1);
-  assert_int_equal(az_mqtt_client_get_state(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
   _teardown(&f);
 }
 
@@ -205,11 +221,11 @@ static void an_idle_session_with_answered_pings_stays_up(void** state)
   test_server_options so = _plain();
   fixture f;
   _setup(&f, &so, 1);
-  assert_int_equal(az_mqtt_client_connect(&f.client, 3000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
   int64_t const end = _now_ms() + 3500;
   while (_now_ms() < end)
   {
-    assert_int_equal(az_mqtt_client_process_loop(&f.client, 100), AZ_OK);
+    assert_int_equal(AZ_MQTT_T(client_process_loop)(&f.client, 100), AZ_OK);
   }
   assert_true(test_server_pingreqs(f.server) >= 2);
   assert_int_equal(g.closed, 0);
@@ -223,7 +239,7 @@ static void a_missing_pingresp_ends_the_session(void** state)
   so.no_pingresp = true;
   fixture f;
   _setup(&f, &so, 1);
-  assert_int_equal(az_mqtt_client_connect(&f.client, 3000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
 
   int64_t t0 = _now_ms();
   assert_int_equal(_pump_until_closed(&f, 5000), AZ_MQTT_ERROR_KEEP_ALIVE_TIMEOUT);
@@ -231,7 +247,7 @@ static void a_missing_pingresp_ends_the_session(void** state)
   assert_true(_now_ms() - t0 < 3000);
   assert_int_equal(g.closed, 1);
   assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_KEEP_ALIVE_TIMEOUT);
-  assert_int_equal(az_mqtt_client_process_loop(&f.client, 0), AZ_MQTT_ERROR_NOT_CONNECTED);
+  assert_int_equal(AZ_MQTT_T(client_process_loop)(&f.client, 0), AZ_MQTT_ERROR_NOT_CONNECTED);
   _teardown(&f);
 }
 
@@ -242,19 +258,19 @@ static void server_keep_alive_overrides_the_clients(void** state)
   so.server_keep_alive = 1;
   fixture f;
   _setup(&f, &so, 60);
-  assert_int_equal(az_mqtt_client_connect(&f.client, 3000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
   int64_t const end = _now_ms() + 2500;
   while (_now_ms() < end)
   {
-    _ignore(az_mqtt_client_process_loop(&f.client, 100));
+    _ignore(AZ_MQTT_T(client_process_loop)(&f.client, 100));
   }
 #if AZ_MQTT_TEST_VERSION == 5
   assert_true(test_server_pingreqs(f.server) >= 1);
-  assert_int_equal(f.client.keep_alive_seconds, 1);
+  assert_int_equal(f.client._internal.core._internal.keep_alive_seconds, 1);
 #else
   // MQTT 3.1.1 has no Server Keep Alive: the client's 60 s stands.
   assert_int_equal(test_server_pingreqs(f.server), 0);
-  assert_int_equal(f.client.keep_alive_seconds, 60);
+  assert_int_equal(f.client._internal.core._internal.keep_alive_seconds, 60);
 #endif
   _teardown(&f);
 }
@@ -266,10 +282,10 @@ static void a_server_disconnect_closes_the_connection(void** state)
   so.behavior = TEST_SERVER_DISCONNECT_AFTER_CONNACK;
   fixture f;
   _setup(&f, &so, 30);
-  assert_int_equal(az_mqtt_client_connect(&f.client, 3000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
   (void)_pump_until_closed(&f, 3000);
 
-  assert_int_equal(az_mqtt_client_get_state(&f.client), AZ_MQTT_CLIENT_STATE_DISCONNECTED);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_DISCONNECTED);
   assert_int_equal(g.closed, 1);
 #if AZ_MQTT_TEST_VERSION == 5
   assert_int_equal(g.disconnects, 1);
@@ -287,9 +303,9 @@ static void one_process_loop_drains_a_burst(void** state)
   so.burst_publishes = 10;
   fixture f;
   _setup(&f, &so, 30);
-  assert_int_equal(az_mqtt_client_connect(&f.client, 3000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
   _sleep_ms(200); // Let the burst arrive; one call must then handle all of it.
-  assert_int_equal(az_mqtt_client_process_loop(&f.client, 1000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_process_loop)(&f.client, 1000), AZ_OK);
   assert_int_equal(g.publishes, 10);
   _teardown(&f);
 }
@@ -300,11 +316,11 @@ static void a_local_disconnect_reports_closed_once(void** state)
   test_server_options so = _plain();
   fixture f;
   _setup(&f, &so, 30);
-  assert_int_equal(az_mqtt_client_connect(&f.client, 3000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
   assert_int_equal(
-      az_mqtt_client_disconnect(&f.client, AZ_MQTT_REASON_NORMAL_DISCONNECTION), AZ_OK);
+      AZ_MQTT_TEST_DISCONNECT(&f.client), AZ_OK);
   assert_int_equal(
-      az_mqtt_client_disconnect(&f.client, AZ_MQTT_REASON_NORMAL_DISCONNECTION), AZ_OK);
+      AZ_MQTT_TEST_DISCONNECT(&f.client), AZ_OK);
   assert_int_equal(g.closed, 1);
   assert_int_equal(g.closed_reason, AZ_OK);
   for (int i = 0; i < 40 && !test_server_client_closed(f.server); i++)
@@ -323,11 +339,11 @@ static void connect_to_a_silent_peer_times_out(void** state)
   fixture f;
   _setup(&f, &so, 30);
   int64_t t0 = _now_ms();
-  assert_int_equal(az_mqtt_client_connect(&f.client, 500), AZ_MQTT_ERROR_TIMEOUT);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 500), AZ_MQTT_ERROR_TIMEOUT);
   assert_true(_now_ms() - t0 < 1500);
   assert_int_equal(g.closed, 1);
   assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_TIMEOUT);
-  assert_int_equal(az_mqtt_client_get_state(&f.client), AZ_MQTT_CLIENT_STATE_DISCONNECTED);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_DISCONNECTED);
   _teardown(&f);
 }
 
@@ -338,9 +354,9 @@ static void reconnect_after_a_lost_session_works(void** state)
   so.no_pingresp = true;
   fixture f;
   _setup(&f, &so, 1);
-  assert_int_equal(az_mqtt_client_connect(&f.client, 3000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
   assert_int_equal(_pump_until_closed(&f, 5000), AZ_MQTT_ERROR_KEEP_ALIVE_TIMEOUT);
-  assert_int_equal(az_mqtt_client_connect(&f.client, 3000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
   assert_int_equal(g.connacks, 2);
   _teardown(&f);
 }
@@ -353,7 +369,7 @@ static void a_refused_connack_code_is_reported_verbatim(void** state)
   so.connack_code = AZ_MQTT_TEST_VERSION == 5 ? 0x87 : 0x05;
   fixture f;
   _setup(&f, &so, 30);
-  assert_int_equal(az_mqtt_client_connect(&f.client, 3000), AZ_MQTT_ERROR_NOT_CONNECTED);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_MQTT_ERROR_NOT_CONNECTED);
   assert_int_equal(g.connacks, 1);
   assert_int_equal(g.connack_reason, so.connack_code);
   assert_int_equal(g.closed, 1);
@@ -368,17 +384,21 @@ static void suback_reason_codes_never_exceed_the_buffer(void** state)
   so.suback_codes = 10; // The fixture holds 4.
   fixture f;
   _setup(&f, &so, 30);
-  assert_int_equal(az_mqtt_client_connect(&f.client, 3000), AZ_OK);
-  az_mqtt_subscription sub;
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  AZ_MQTT_T(subscription) sub;
   memset(&sub, 0, sizeof(sub));
   sub.topic_filter = AZ_SPAN_FROM_STR("t");
-  assert_int_equal(az_mqtt_client_subscribe(&f.client, &sub, 1, NULL), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_subscribe)(&f.client, &sub, 1, NULL), AZ_OK);
   for (int i = 0; i < 20 && g.subacks == 0; i++)
   {
-    assert_int_equal(az_mqtt_client_process_loop(&f.client, 50), AZ_OK);
+    assert_int_equal(AZ_MQTT_T(client_process_loop)(&f.client, 50), AZ_OK);
   }
   assert_int_equal(g.subacks, 1);
+#if AZ_MQTT_TEST_VERSION == 5
   assert_int_equal(g.suback_count, 4);
+#else
+  assert_int_equal(g.suback_count, 10); // A view of the packet: no buffer to overflow.
+#endif
   _teardown(&f);
 }
 
@@ -390,10 +410,10 @@ static void publish_properties_never_exceed_the_buffers(void** state)
   so.publish_properties = 10; // The fixture holds 4 of each.
   fixture f;
   _setup(&f, &so, 30);
-  assert_int_equal(az_mqtt_client_connect(&f.client, 3000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
   for (int i = 0; i < 20 && g.publishes == 0; i++)
   {
-    assert_int_equal(az_mqtt_client_process_loop(&f.client, 50), AZ_OK);
+    assert_int_equal(AZ_MQTT_T(client_process_loop)(&f.client, 50), AZ_OK);
   }
   assert_int_equal(g.publishes, 1);
   assert_int_equal(g.publish_user_properties, 4);
@@ -413,15 +433,15 @@ static void an_auth_packet_is_a_protocol_error_only_in_mqttv3(void** state)
   so.send_auth = true;
   fixture f;
   _setup(&f, &so, 30);
-  assert_int_equal(az_mqtt_client_connect(&f.client, 3000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
   az_result rc = AZ_OK;
   for (int i = 0; i < 10 && rc == AZ_OK; i++)
   {
-    rc = az_mqtt_client_process_loop(&f.client, 50);
+    rc = AZ_MQTT_T(client_process_loop)(&f.client, 50);
   }
 #if AZ_MQTT_TEST_VERSION == 5
   assert_int_equal(rc, AZ_OK);
-  assert_int_equal(az_mqtt_client_get_state(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
 #else
   assert_int_equal(rc, AZ_MQTT_ERROR_PROTOCOL);
 #endif
@@ -436,18 +456,18 @@ static void an_explicit_server_keep_alive_of_zero_disables_pings(void** state)
   so.server_keep_alive_present = true;
   fixture f;
   _setup(&f, &so, 1);
-  assert_int_equal(az_mqtt_client_connect(&f.client, 3000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
   int64_t const end = _now_ms() + 2500;
   while (_now_ms() < end)
   {
-    assert_int_equal(az_mqtt_client_process_loop(&f.client, 100), AZ_OK);
+    assert_int_equal(AZ_MQTT_T(client_process_loop)(&f.client, 100), AZ_OK);
   }
 #if AZ_MQTT_TEST_VERSION == 5
-  assert_int_equal(f.client.keep_alive_seconds, 0);
+  assert_int_equal(f.client._internal.core._internal.keep_alive_seconds, 0);
   assert_int_equal(test_server_pingreqs(f.server), 0);
 #else
   // No such property in MQTT 3.1.1: the client's 1 s stands.
-  assert_int_equal(f.client.keep_alive_seconds, 1);
+  assert_int_equal(f.client._internal.core._internal.keep_alive_seconds, 1);
   assert_true(test_server_pingreqs(f.server) >= 1);
 #endif
   _teardown(&f);
@@ -462,12 +482,12 @@ static void reconnecting_from_on_connection_closed_is_safe(void** state)
   fixture f;
   _setup(&f, &so, 30);
   g.reconnects_left = 1;
-  assert_int_equal(az_mqtt_client_connect(&f.client, 3000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
 
   // First end: the callback reconnects synchronously.
   for (int i = 0; i < 30 && g.closed == 0; i++)
   {
-    _ignore(az_mqtt_client_process_loop(&f.client, 100));
+    _ignore(AZ_MQTT_T(client_process_loop)(&f.client, 100));
   }
   assert_int_equal(g.closed, 1);
   assert_int_equal(g.reconnect_rc, AZ_OK);

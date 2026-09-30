@@ -11,7 +11,7 @@
 
 #include "az_mqtt_codec_internal.h"
 
-#include <az_mqtt/az_mqtt3.h>
+#include <az_mqtt3/az_mqtt3_codec.h>
 
 #include <azure/core/internal/az_precondition_internal.h>
 #include <azure/core/az_result.h>
@@ -20,19 +20,11 @@
 #include <string.h>
 
 // ============================================================================
-// Internal helpers
-// ============================================================================
-
-// ============================================================================
-// Property encoding helpers
-// ============================================================================
-
-// ============================================================================
 // CONNECT encoding
 // ============================================================================
 
 // Calculate the variable header + payload length of a CONNECT packet.
-static int32_t _connect_remaining_length(az_mqtt_connect_options const* opts)
+static int32_t _connect_remaining_length(az_mqtt3_connect_options const* opts)
 {
   // Protocol Name (2+4) + Protocol Level (1) + Connect Flags (1) + Keep Alive (2)
   int32_t len = 10;
@@ -63,7 +55,7 @@ static int32_t _connect_remaining_length(az_mqtt_connect_options const* opts)
 }
 
 AZ_NODISCARD az_result
-az_mqtt3_codec_encode_connect(az_span* dest, az_mqtt_connect_options const* opts)
+az_mqtt3_codec_encode_connect(az_span* dest, az_mqtt3_connect_options const* opts)
 {
   _az_PRECONDITION_NOT_NULL(dest);
   _az_PRECONDITION_NOT_NULL(opts);
@@ -90,7 +82,7 @@ az_mqtt3_codec_encode_connect(az_span* dest, az_mqtt_connect_options const* opts
 
   // Connect Flags
   uint8_t flags = 0;
-  if (opts->clean_start)
+  if (opts->clean_session)
   {
     flags |= 0x02;
   }
@@ -161,7 +153,7 @@ az_mqtt3_codec_encode_connect(az_span* dest, az_mqtt_connect_options const* opts
 
 AZ_NODISCARD az_result az_mqtt3_codec_encode_publish(
     az_span* dest,
-    az_mqtt_publish_options const* opts,
+    az_mqtt3_publish_options const* opts,
     uint16_t packet_id)
 {
   _az_PRECONDITION_NOT_NULL(dest);
@@ -221,60 +213,37 @@ AZ_NODISCARD az_result az_mqtt3_codec_encode_publish(
 // Simple ACK encoding (PUBACK, PUBREC, PUBREL, PUBCOMP)
 // ============================================================================
 
-static az_result _encode_simple_ack(
-    az_span* dest,
-    az_mqtt_packet_type type,
-    uint8_t fixed_flags,
-    uint16_t packet_id,
-    az_mqtt_reason_code reason_code)
+static az_result
+_encode_simple_ack(az_span* dest, az_mqtt_packet_type type, uint8_t fixed_flags, uint16_t packet_id)
 {
-  (void)reason_code;
-  int32_t remaining = 2; // MQTT 3.1.1 ACK packets are packet-id only.
-
   az_result rc = _az_mqtt_write_byte(dest, (uint8_t)((uint8_t)(type << 4) | fixed_flags));
   if (az_result_failed(rc))
     return rc;
-  rc = _az_mqtt_write_vbi(dest, remaining);
+  rc = _az_mqtt_write_byte(dest, 2); // Remaining Length: packet identifier only.
   if (az_result_failed(rc))
     return rc;
-  rc = _az_mqtt_write_uint16(dest, packet_id);
-  if (az_result_failed(rc))
-    return rc;
-
-  return AZ_OK;
+  return _az_mqtt_write_uint16(dest, packet_id);
 }
 
-AZ_NODISCARD az_result az_mqtt3_codec_encode_puback(
-    az_span* dest,
-    uint16_t packet_id,
-    az_mqtt_reason_code reason_code)
+AZ_NODISCARD az_result az_mqtt3_codec_encode_puback(az_span* dest, uint16_t packet_id)
 {
-  return _encode_simple_ack(dest, AZ_MQTT_PACKET_TYPE_PUBACK, 0, packet_id, reason_code);
+  return _encode_simple_ack(dest, AZ_MQTT_PACKET_TYPE_PUBACK, 0, packet_id);
 }
 
-AZ_NODISCARD az_result az_mqtt3_codec_encode_pubrec(
-    az_span* dest,
-    uint16_t packet_id,
-    az_mqtt_reason_code reason_code)
+AZ_NODISCARD az_result az_mqtt3_codec_encode_pubrec(az_span* dest, uint16_t packet_id)
 {
-  return _encode_simple_ack(dest, AZ_MQTT_PACKET_TYPE_PUBREC, 0, packet_id, reason_code);
+  return _encode_simple_ack(dest, AZ_MQTT_PACKET_TYPE_PUBREC, 0, packet_id);
 }
 
-AZ_NODISCARD az_result az_mqtt3_codec_encode_pubrel(
-    az_span* dest,
-    uint16_t packet_id,
-    az_mqtt_reason_code reason_code)
+AZ_NODISCARD az_result az_mqtt3_codec_encode_pubrel(az_span* dest, uint16_t packet_id)
 {
   // PUBREL has fixed flags = 0x02
-  return _encode_simple_ack(dest, AZ_MQTT_PACKET_TYPE_PUBREL, 0x02, packet_id, reason_code);
+  return _encode_simple_ack(dest, AZ_MQTT_PACKET_TYPE_PUBREL, 0x02, packet_id);
 }
 
-AZ_NODISCARD az_result az_mqtt3_codec_encode_pubcomp(
-    az_span* dest,
-    uint16_t packet_id,
-    az_mqtt_reason_code reason_code)
+AZ_NODISCARD az_result az_mqtt3_codec_encode_pubcomp(az_span* dest, uint16_t packet_id)
 {
-  return _encode_simple_ack(dest, AZ_MQTT_PACKET_TYPE_PUBCOMP, 0, packet_id, reason_code);
+  return _encode_simple_ack(dest, AZ_MQTT_PACKET_TYPE_PUBCOMP, 0, packet_id);
 }
 
 // ============================================================================
@@ -283,7 +252,7 @@ AZ_NODISCARD az_result az_mqtt3_codec_encode_pubcomp(
 
 AZ_NODISCARD az_result az_mqtt3_codec_encode_subscribe(
     az_span* dest,
-    az_mqtt_subscription const* subs,
+    az_mqtt3_subscription const* subs,
     int32_t sub_count,
     uint16_t packet_id)
 {
@@ -374,21 +343,12 @@ AZ_NODISCARD az_result az_mqtt3_codec_encode_unsubscribe(
 }
 
 // ============================================================================
-// PINGREQ encoding
-// ============================================================================
-
-// ============================================================================
 // DISCONNECT encoding
 // ============================================================================
 
-AZ_NODISCARD az_result az_mqtt3_codec_encode_disconnect(
-    az_span* dest,
-    az_mqtt_reason_code reason_code,
-    uint32_t session_expiry_interval)
+AZ_NODISCARD az_result az_mqtt3_codec_encode_disconnect(az_span* dest)
 {
   _az_PRECONDITION_NOT_NULL(dest);
-  (void)reason_code;
-  (void)session_expiry_interval;
 
   az_result rc = _az_mqtt_write_byte(dest, (uint8_t)(AZ_MQTT_PACKET_TYPE_DISCONNECT << 4));
   if (az_result_failed(rc))
@@ -400,77 +360,42 @@ AZ_NODISCARD az_result az_mqtt3_codec_encode_disconnect(
 }
 
 // ============================================================================
-// Fixed header decoding
+// Decoding
 // ============================================================================
 
-// ============================================================================
-// CONNACK decoding
-// ============================================================================
-
-AZ_NODISCARD az_result az_mqtt3_codec_decode_connack(az_span body, az_mqtt_connack_data* out)
+AZ_NODISCARD az_result az_mqtt3_codec_decode_connack(az_span body, az_mqtt3_connack_data* out)
 {
   _az_PRECONDITION_NOT_NULL(out);
 
-  // Save caller-provided buffers before clearing
-  az_mqtt_user_property* user_properties = out->user_properties;
-  int32_t user_property_capacity = out->user_property_capacity;
-
-  // Initialize defaults and preserve caller buffers.
-  memset(out, 0, sizeof(*out));
-  out->user_properties = user_properties;
-  out->user_property_capacity = user_property_capacity;
-
-  // Acknowledge Flags
   uint8_t ack_flags;
   az_result rc = _az_mqtt_read_byte(&body, &ack_flags);
   if (az_result_failed(rc))
     return rc;
   out->session_present = (ack_flags & 0x01) != 0;
 
-  // Return Code (MQTT 3.1.1)
   uint8_t return_code;
   rc = _az_mqtt_read_byte(&body, &return_code);
   if (az_result_failed(rc))
     return rc;
-  // Kept verbatim (AZ_MQTT3_CONNACK_*): "not authorized" must stay distinguishable
-  // from "server unavailable".
-  out->reason_code = (az_mqtt_reason_code)return_code;
+  out->return_code = (az_mqtt3_connack_return_code)return_code;
 
-  if (az_span_size(body) != 0)
-  {
-    return AZ_MQTT_ERROR_MALFORMED_PACKET;
-  }
-
-  return AZ_OK;
+  return az_span_size(body) == 0 ? AZ_OK : AZ_MQTT_ERROR_MALFORMED_PACKET;
 }
 
-// ============================================================================
-// PUBLISH decoding
-// ============================================================================
-
 AZ_NODISCARD az_result
-az_mqtt3_codec_decode_publish(az_span body, uint8_t flags, az_mqtt_publish_data* out)
+az_mqtt3_codec_decode_publish(az_span body, uint8_t flags, az_mqtt3_publish_data* out)
 {
   _az_PRECONDITION_NOT_NULL(out);
-
-  // Save caller-provided buffers before clearing
-  az_mqtt_user_property* user_properties = out->user_properties;
-  int32_t* subscription_identifiers = out->subscription_identifiers;
-
-  memset(out, 0, sizeof(*out));
-  out->user_properties = user_properties;
-  out->subscription_identifiers = subscription_identifiers;
 
   out->dup = (flags & 0x08) != 0;
   out->qos = (az_mqtt_qos)((flags >> 1) & 0x03);
   out->retain = (flags & 0x01) != 0;
+  out->packet_id = 0;
 
-  // Topic Name
   az_result rc = _az_mqtt_read_utf8_string(&body, &out->topic);
   if (az_result_failed(rc))
     return rc;
 
-  // Packet Identifier (QoS > 0)
   if (out->qos != AZ_MQTT_QOS_AT_MOST_ONCE)
   {
     rc = _az_mqtt_read_uint16(&body, &out->packet_id);
@@ -478,153 +403,27 @@ az_mqtt3_codec_decode_publish(az_span body, uint8_t flags, az_mqtt_publish_data*
       return rc;
   }
 
-  // The rest is the payload
   out->payload = body;
-
   return AZ_OK;
 }
 
-// ============================================================================
-// ACK decoding (PUBACK, PUBREC, PUBREL, PUBCOMP)
-// ============================================================================
-
-AZ_NODISCARD az_result az_mqtt3_codec_decode_ack(az_span body, az_mqtt_ack_data* out)
+AZ_NODISCARD az_result az_mqtt3_codec_decode_ack(az_span body, az_mqtt3_ack_data* out)
 {
   _az_PRECONDITION_NOT_NULL(out);
-
-  // Save caller-provided buffers before clearing
-  az_mqtt_user_property* user_properties = out->user_properties;
-  int32_t user_property_capacity = out->user_property_capacity;
-
-  memset(out, 0, sizeof(*out));
-  out->user_properties = user_properties;
-  out->user_property_capacity = user_property_capacity;
 
   az_result rc = _az_mqtt_read_uint16(&body, &out->packet_id);
   if (az_result_failed(rc))
     return rc;
-
-  // MQTT 3.1.1 acks carry the packet identifier only.
-  if (az_span_size(body) != 0)
-    return AZ_MQTT_ERROR_MALFORMED_PACKET;
-
-  out->reason_code = AZ_MQTT_REASON_SUCCESS;
-  return AZ_OK;
+  return az_span_size(body) == 0 ? AZ_OK : AZ_MQTT_ERROR_MALFORMED_PACKET;
 }
 
-// ============================================================================
-// SUBACK / UNSUBACK decoding
-// ============================================================================
-
-static az_result _decode_suback_common(az_span body, az_mqtt_suback_data* out)
+AZ_NODISCARD az_result az_mqtt3_codec_decode_suback(az_span body, az_mqtt3_suback_data* out)
 {
   _az_PRECONDITION_NOT_NULL(out);
-
-  // Save caller-provided buffers before clearing
-  az_mqtt_reason_code* reason_codes = out->reason_codes;
-  int32_t reason_code_capacity = out->reason_code_capacity;
-  az_mqtt_user_property* user_properties = out->user_properties;
-  int32_t user_property_capacity = out->user_property_capacity;
-
-  memset(out, 0, sizeof(*out));
-  out->reason_codes = reason_codes;
-  out->reason_code_capacity = reason_code_capacity;
-  out->user_properties = user_properties;
-  out->user_property_capacity = user_property_capacity;
 
   az_result rc = _az_mqtt_read_uint16(&body, &out->packet_id);
   if (az_result_failed(rc))
     return rc;
-
-  // Remaining bytes are reason codes
-  out->reason_code_count = 0;
-  while (az_span_size(body) > 0)
-  {
-    uint8_t reason;
-    rc = _az_mqtt_read_byte(&body, &reason);
-    if (az_result_failed(rc))
-      return rc;
-    // Like user properties: keep what fits, so reason_code_count never exceeds capacity.
-    if (out->reason_codes != NULL && out->reason_code_count < out->reason_code_capacity)
-    {
-      out->reason_codes[out->reason_code_count] = (az_mqtt_reason_code)reason;
-      out->reason_code_count++;
-    }
-  }
-
+  out->return_codes = body;
   return AZ_OK;
-}
-
-AZ_NODISCARD az_result az_mqtt3_codec_decode_suback(az_span body, az_mqtt_suback_data* out)
-{
-  return _decode_suback_common(body, out);
-}
-
-AZ_NODISCARD az_result az_mqtt3_codec_decode_unsuback(az_span body, az_mqtt_suback_data* out)
-{
-  _az_PRECONDITION_NOT_NULL(out);
-
-  az_mqtt_reason_code* reason_codes = out->reason_codes;
-  int32_t reason_code_capacity = out->reason_code_capacity;
-  az_mqtt_user_property* user_properties = out->user_properties;
-  int32_t user_property_capacity = out->user_property_capacity;
-
-  memset(out, 0, sizeof(*out));
-  out->reason_codes = reason_codes;
-  out->reason_code_capacity = reason_code_capacity;
-  out->user_properties = user_properties;
-  out->user_property_capacity = user_property_capacity;
-
-  az_result rc = _az_mqtt_read_uint16(&body, &out->packet_id);
-  if (az_result_failed(rc))
-  {
-    return rc;
-  }
-
-  if (az_span_size(body) != 0)
-  {
-    return AZ_MQTT_ERROR_MALFORMED_PACKET;
-  }
-
-  return AZ_OK;
-}
-
-// ============================================================================
-// DISCONNECT decoding
-// ============================================================================
-
-AZ_NODISCARD az_result az_mqtt3_codec_decode_disconnect(az_span body, az_mqtt_disconnect_data* out)
-{
-  _az_PRECONDITION_NOT_NULL(out);
-
-  // Save caller-provided buffers before clearing
-  az_mqtt_user_property* user_properties = out->user_properties;
-  int32_t user_property_capacity = out->user_property_capacity;
-
-  memset(out, 0, sizeof(*out));
-  out->user_properties = user_properties;
-  out->user_property_capacity = user_property_capacity;
-
-  // MQTT 3.1.1 DISCONNECT has no variable header or payload.
-  if (az_span_size(body) != 0)
-  {
-    return AZ_MQTT_ERROR_MALFORMED_PACKET;
-  }
-
-  out->reason_code = AZ_MQTT_REASON_NORMAL_DISCONNECTION;
-  return AZ_OK;
-}
-
-AZ_NODISCARD az_result az_mqtt3_codec_decode_fixed_header(
-    az_span* src,
-    az_mqtt_packet_type* out_packet_type,
-    uint8_t* out_flags,
-    int32_t* out_remaining)
-{
-  return _az_mqtt_decode_fixed_header(src, out_packet_type, out_flags, out_remaining);
-}
-
-AZ_NODISCARD az_result az_mqtt3_codec_encode_pingreq(az_span* dest)
-{
-  return _az_mqtt_encode_pingreq(dest);
 }

@@ -3,7 +3,7 @@
 
 /**
  * @file test_subscribe.c
- * @brief Integration tests for subscribe flows in az_mqtt_client.
+ * @brief Integration tests for subscribe flows in AZ_MQTT_T(client).
  *
  * Requires a running broker on localhost:1883 (plain TCP).
  */
@@ -16,7 +16,6 @@
 // cmocka must be included after the standard headers above
 #include <cmocka.h>
 
-#include <az_mqtt/az_mqtt_client.h>
 #include <azure/core/az_span.h>
 
 #include "test_common.h"
@@ -34,11 +33,11 @@ static char s_publish_payload[128];
 
 static bool s_suback_received;
 static uint16_t s_suback_packet_id;
-static az_mqtt_reason_code s_suback_reason;
+static int s_suback_reason;
 
 static bool s_unsuback_received;
 static uint16_t s_unsuback_packet_id;
-static az_mqtt_reason_code s_unsuback_reason;
+static int s_unsuback_reason;
 
 static void reset_callback_state(void)
 {
@@ -49,11 +48,11 @@ static void reset_callback_state(void)
 
   s_suback_received = false;
   s_suback_packet_id = 0;
-  s_suback_reason = AZ_MQTT_REASON_UNSPECIFIED_ERROR;
+  s_suback_reason = -1;
 
   s_unsuback_received = false;
   s_unsuback_packet_id = 0;
-  s_unsuback_reason = AZ_MQTT_REASON_UNSPECIFIED_ERROR;
+  s_unsuback_reason = -1;
 }
 
 static bool cond_suback_received(void)
@@ -71,7 +70,7 @@ static bool cond_publish_received(void)
   return s_publish_received;
 }
 
-static void on_publish(az_mqtt_client* client, az_mqtt_publish_data const* publish)
+static void on_publish(AZ_MQTT_T(client)* client, AZ_MQTT_T(publish_data) const* publish)
 {
   (void)client;
   s_publish_received = true;
@@ -80,24 +79,37 @@ static void on_publish(az_mqtt_client* client, az_mqtt_publish_data const* publi
   az_mqtt_e2e_copy_span_to_cstr(publish->payload, s_publish_payload, sizeof(s_publish_payload));
 }
 
-static void on_suback(az_mqtt_client* client, az_mqtt_suback_data const* suback)
+static void on_suback(AZ_MQTT_T(client)* client, AZ_MQTT_T(suback_data) const* suback)
 {
   (void)client;
   s_suback_received = true;
   s_suback_packet_id = suback->packet_id;
-  s_suback_reason = (suback->reason_code_count > 0) ? suback->reason_codes[0] : AZ_MQTT_REASON_UNSPECIFIED_ERROR;
+#if AZ_MQTT_TEST_VERSION == 5
+  s_suback_reason = (suback->reason_code_count > 0) ? (int)suback->reason_codes[0] : -1;
+#else
+  s_suback_reason
+      = az_span_size(suback->return_codes) > 0 ? (int)az_span_ptr(suback->return_codes)[0] : -1;
+#endif
 }
 
-static void on_unsuback(az_mqtt_client* client, az_mqtt_suback_data const* unsuback)
+#if AZ_MQTT_TEST_VERSION == 5
+static void on_unsuback(AZ_MQTT_T(client)* client, AZ_MQTT_T(suback_data) const* unsuback)
 {
   (void)client;
   s_unsuback_received = true;
   s_unsuback_packet_id = unsuback->packet_id;
-  s_unsuback_reason
-      = (unsuback->reason_code_count > 0) ? unsuback->reason_codes[0] : AZ_MQTT_REASON_UNSPECIFIED_ERROR;
+  s_unsuback_reason = (unsuback->reason_code_count > 0) ? (int)unsuback->reason_codes[0] : -1;
 }
+#else
+static void on_unsuback(AZ_MQTT_T(client)* client, AZ_MQTT_T(ack_data) const* unsuback)
+{
+  (void)client;
+  s_unsuback_received = true;
+  s_unsuback_packet_id = unsuback->packet_id;
+}
+#endif
 
-static az_result init_client(az_mqtt_client* client, az_span client_id)
+static az_result init_client(AZ_MQTT_T(client)* client, az_span client_id)
 {
   az_mqtt_e2e_fixture_reset(&s_fixture);
 
@@ -121,16 +133,16 @@ static void test_subscribe_while_disconnected(void** state)
   (void)state;
   reset_callback_state();
 
-  az_mqtt_client client;
+  AZ_MQTT_T(client) client;
   az_result rc = init_client(&client, AZ_SPAN_FROM_STR("test-sub-disc"));
   assert_int_equal(rc, AZ_OK);
 
-  az_mqtt_subscription sub;
+  AZ_MQTT_T(subscription) sub;
   memset(&sub, 0, sizeof(sub));
   sub.topic_filter = AZ_SPAN_FROM_STR("az/e2e/subscribe/disconnected");
   sub.qos = AZ_MQTT_QOS_AT_MOST_ONCE;
 
-  rc = az_mqtt_client_subscribe(&client, &sub, 1, NULL);
+  rc = AZ_MQTT_T(client_subscribe)(&client, &sub, 1, NULL);
   assert_int_equal(rc, AZ_MQTT_ERROR_NOT_CONNECTED);
 }
 
@@ -139,14 +151,14 @@ static void test_unsubscribe_while_disconnected(void** state)
   (void)state;
   reset_callback_state();
 
-  az_mqtt_client client;
+  AZ_MQTT_T(client) client;
   az_result rc = init_client(&client, AZ_SPAN_FROM_STR("test-unsub-disc"));
   assert_int_equal(rc, AZ_OK);
 
   az_span topics[1];
   topics[0] = AZ_SPAN_FROM_STR("az/e2e/unsubscribe/disconnected");
 
-  rc = az_mqtt_client_unsubscribe(&client, topics, 1, NULL);
+  rc = AZ_MQTT_T(client_unsubscribe)(&client, topics, 1, NULL);
   assert_int_equal(rc, AZ_MQTT_ERROR_NOT_CONNECTED);
 }
 
@@ -155,37 +167,33 @@ static void test_subscribe_and_unsubscribe_callbacks(void** state)
   (void)state;
   reset_callback_state();
 
-  az_mqtt_client client;
+  AZ_MQTT_T(client) client;
   az_result rc = init_client(&client, AZ_SPAN_FROM_STR("test-sub-unsub-cb"));
   assert_int_equal(rc, AZ_OK);
 
-  rc = az_mqtt_client_connect(&client, 5000);
+  rc = AZ_MQTT_T(client_connect)(&client, 5000);
   assert_int_equal(rc, AZ_OK);
 
-  az_mqtt_subscription sub;
+  AZ_MQTT_T(subscription) sub;
   memset(&sub, 0, sizeof(sub));
   sub.topic_filter = AZ_SPAN_FROM_STR("az/e2e/sub/callback");
   sub.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
-  sub.no_local = false;
-  sub.retain_as_published = false;
-  sub.retain_handling = AZ_MQTT_RETAIN_HANDLING_SEND_AT_SUBSCRIBE;
 
   uint16_t sub_packet_id = 0;
-  rc = az_mqtt_client_subscribe(&client, &sub, 1, &sub_packet_id);
+  rc = AZ_MQTT_T(client_subscribe)(&client, &sub, 1, &sub_packet_id);
   assert_int_equal(rc, AZ_OK);
   assert_true(sub_packet_id > 0);
 
   rc = az_mqtt_e2e_wait_until(&client, WAIT_ITERATIONS, PROCESS_LOOP_TIMEOUT_MS, cond_suback_received);
   assert_int_equal(rc, AZ_OK);
   assert_int_equal(s_suback_packet_id, sub_packet_id);
-  assert_true(
-      s_suback_reason == AZ_MQTT_REASON_GRANTED_QOS_1 || s_suback_reason == AZ_MQTT_REASON_GRANTED_QOS_0);
+  assert_true(s_suback_reason == 1 || s_suback_reason == 0); // Granted QoS 1 or 0.
 
   az_span topic_filters[1];
   topic_filters[0] = sub.topic_filter;
 
   uint16_t unsub_packet_id = 0;
-  rc = az_mqtt_client_unsubscribe(&client, topic_filters, 1, &unsub_packet_id);
+  rc = AZ_MQTT_T(client_unsubscribe)(&client, topic_filters, 1, &unsub_packet_id);
   assert_int_equal(rc, AZ_OK);
   assert_true(unsub_packet_id > 0);
 
@@ -194,10 +202,10 @@ static void test_subscribe_and_unsubscribe_callbacks(void** state)
   assert_int_equal(s_unsuback_packet_id, unsub_packet_id);
 #if AZ_MQTT_TEST_VERSION == 5
   assert_true(
-      s_unsuback_reason == AZ_MQTT_REASON_SUCCESS || s_unsuback_reason == AZ_MQTT_REASON_NO_SUBSCRIPTION_EXISTED);
+      s_unsuback_reason == AZ_MQTT5_REASON_SUCCESS || s_unsuback_reason == AZ_MQTT5_REASON_NO_SUBSCRIPTION_EXISTED);
 #endif
 
-  rc = az_mqtt_client_disconnect(&client, AZ_MQTT_REASON_NORMAL_DISCONNECTION);
+  rc = AZ_MQTT_TEST_DISCONNECT(&client);
   assert_int_equal(rc, AZ_OK);
 }
 
@@ -206,35 +214,32 @@ static void test_subscribe_then_publish_receive(void** state)
   (void)state;
   reset_callback_state();
 
-  az_mqtt_client client;
+  AZ_MQTT_T(client) client;
   az_result rc = init_client(&client, AZ_SPAN_FROM_STR("test-sub-pub-recv"));
   assert_int_equal(rc, AZ_OK);
 
-  rc = az_mqtt_client_connect(&client, 5000);
+  rc = AZ_MQTT_T(client_connect)(&client, 5000);
   assert_int_equal(rc, AZ_OK);
 
-  az_mqtt_subscription sub;
+  AZ_MQTT_T(subscription) sub;
   memset(&sub, 0, sizeof(sub));
   sub.topic_filter = AZ_SPAN_FROM_STR("az/e2e/sub/publish-receive");
   sub.qos = AZ_MQTT_QOS_AT_MOST_ONCE;
-  sub.no_local = false;
-  sub.retain_as_published = false;
-  sub.retain_handling = AZ_MQTT_RETAIN_HANDLING_SEND_AT_SUBSCRIBE;
 
   uint16_t sub_packet_id = 0;
-  rc = az_mqtt_client_subscribe(&client, &sub, 1, &sub_packet_id);
+  rc = AZ_MQTT_T(client_subscribe)(&client, &sub, 1, &sub_packet_id);
   assert_int_equal(rc, AZ_OK);
   assert_true(sub_packet_id > 0);
 
   rc = az_mqtt_e2e_wait_until(&client, WAIT_ITERATIONS, PROCESS_LOOP_TIMEOUT_MS, cond_suback_received);
   assert_int_equal(rc, AZ_OK);
 
-  az_mqtt_publish_options pub = az_mqtt_publish_options_default();
+  AZ_MQTT_T(publish_options) pub = AZ_MQTT_T(publish_options_default)();
   pub.topic = sub.topic_filter;
   pub.payload = AZ_SPAN_FROM_STR("hello-from-subscribe-test");
   pub.qos = AZ_MQTT_QOS_AT_MOST_ONCE;
 
-  rc = az_mqtt_client_publish(&client, &pub, NULL);
+  rc = AZ_MQTT_T(client_publish)(&client, &pub, NULL);
   assert_int_equal(rc, AZ_OK);
 
   rc = az_mqtt_e2e_wait_until(&client, WAIT_ITERATIONS, PROCESS_LOOP_TIMEOUT_MS, cond_publish_received);
@@ -243,7 +248,7 @@ static void test_subscribe_then_publish_receive(void** state)
   assert_string_equal(s_publish_payload, "hello-from-subscribe-test");
   assert_int_equal((int)s_publish_qos, (int)AZ_MQTT_QOS_AT_MOST_ONCE);
 
-  rc = az_mqtt_client_disconnect(&client, AZ_MQTT_REASON_NORMAL_DISCONNECTION);
+  rc = AZ_MQTT_TEST_DISCONNECT(&client);
   assert_int_equal(rc, AZ_OK);
 }
 

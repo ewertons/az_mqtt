@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft. All rights reserved.
 # Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-# Build and test az_mqtt (mqttv3 and mqttv5 codecs). Every job treats warnings in
+# Build and test az_mqtt_core, az_mqttv3 and az_mqttv5. Every job treats warnings in
 # our code as errors. The Linux steps are scripts in eng/ci, so they run the same way locally.
 name: CI
 
@@ -68,9 +68,9 @@ jobs:
       matrix:
         include:
           - only: 3
-            disable: MQTT5
+            disable: MQTTV5
           - only: 5
-            disable: MQTT3
+            disable: MQTTV3
     env:
       CMAKE_ARGS: -DAZ_MQTT_ENABLE_${{ matrix.disable }}=OFF
     steps:
