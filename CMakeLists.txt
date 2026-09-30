@@ -18,6 +18,10 @@ option(AZ_MQTT_WARNINGS_AS_ERRORS "Treat warnings in az_mqtt code (libraries, sa
 #   openssl: require OpenSSL 3.0+.  mbedtls: require mbedTLS.  none: no TLS.
 # Windows always uses Schannel.
 set(AZ_MQTT_TLS_BACKEND "auto" CACHE STRING "TLS backend: auto | openssl | mbedtls | none")
+set_property(CACHE AZ_MQTT_TLS_BACKEND PROPERTY STRINGS auto openssl mbedtls none)
+if(NOT AZ_MQTT_TLS_BACKEND MATCHES "^(auto|openssl|mbedtls|none)$")
+  message(FATAL_ERROR "AZ_MQTT_TLS_BACKEND must be auto, openssl, mbedtls or none (got '${AZ_MQTT_TLS_BACKEND}')")
+endif()
 
 if(NOT AZ_MQTT_ENABLE_MQTT3 AND NOT AZ_MQTT_ENABLE_MQTT5)
   message(FATAL_ERROR "Enable at least one of AZ_MQTT_ENABLE_MQTT3 and AZ_MQTT_ENABLE_MQTT5")

@@ -143,6 +143,8 @@ AZ_NODISCARD az_result az_mqtt5_codec_decode_connack(az_span body, az_mqtt_conna
 /**
  * @brief Decode a PUBLISH packet body (after fixed header).
  * @param[in] flags  Fixed header flags.
+ * @param[in,out] out  In: user_properties / subscription_identifiers (may be NULL) and
+ * their capacities. Out: every other field; entries beyond a capacity are dropped.
  */
 AZ_NODISCARD az_result
 az_mqtt5_codec_decode_publish(az_span body, uint8_t flags, az_mqtt_publish_data* out);
