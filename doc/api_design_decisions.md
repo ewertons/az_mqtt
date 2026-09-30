@@ -16,16 +16,17 @@ Current call pattern in the sample is effectively:
 
     az_mqtt_client_options client_opts = {0};
     client_opts.transport = transport;
+    client_opts.codec = &az_mqtt5_codec;
     client_opts.send_buffer = AZ_SPAN_FROM_BUFFER(s_send_buffer);
     client_opts.receive_buffer = AZ_SPAN_FROM_BUFFER(s_recv_buffer);
 
-    client_opts.connack_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_connack_user_props);
-    client_opts.publish_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_publish_user_props);
-    client_opts.publish_subscription_identifiers = AZ_MQTT_SPAN_FROM_ARRAY(s_publish_sub_ids);
-    client_opts.suback_reason_codes = AZ_MQTT_SPAN_FROM_ARRAY(s_suback_reason_codes);
-    client_opts.suback_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_suback_user_props);
-    client_opts.ack_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_ack_user_props);
-    client_opts.disconnect_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_disconnect_user_props);
+    client_opts.buffers.connack_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_connack_user_props);
+    client_opts.buffers.publish_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_publish_user_props);
+    client_opts.buffers.publish_subscription_identifiers = AZ_MQTT_SPAN_FROM_ARRAY(s_publish_sub_ids);
+    client_opts.buffers.suback_reason_codes = AZ_MQTT_SPAN_FROM_ARRAY(s_suback_reason_codes);
+    client_opts.buffers.suback_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_suback_user_props);
+    client_opts.buffers.ack_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_ack_user_props);
+    client_opts.buffers.disconnect_user_properties = AZ_MQTT_SPAN_FROM_ARRAY(s_disconnect_user_props);
 
     az_mqtt_client_init(&client, &client_opts);
     az_mqtt_client_connect(&client, 10000);

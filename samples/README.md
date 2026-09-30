@@ -16,7 +16,7 @@ links only its own codec (`az_mqtt::mqtt5` / `az_mqtt::mqtt3`). Each one:
 
 ## Prerequisites
 
-- CMake 3.10+
+- CMake 3.14+
 - A C compiler toolchain (MSVC, clang, or gcc)
 - Docker
 - OpenSSL command-line tool (optional, only needed if you want the broker TLS listener/certs from the helper scripts)
