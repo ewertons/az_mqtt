@@ -24,11 +24,21 @@
 #include <unistd.h>
 
 #ifdef AZ_MQTT3_TLS_MBEDTLS
-#include <mbedtls/ctr_drbg.h>
-#include <mbedtls/entropy.h>
+#include <mbedtls/build_info.h>
 #include <mbedtls/net_sockets.h>
 #include <mbedtls/ssl.h>
 #include <mbedtls/x509_crt.h>
+#if MBEDTLS_VERSION_MAJOR >= 4
+// mbedTLS 4 (ESP-IDF v6): randomness comes from PSA; ctr_drbg/entropy are gone.
+#define _AZ_MQTT3_MBEDTLS_LEGACY_RNG 0
+#else
+#define _AZ_MQTT3_MBEDTLS_LEGACY_RNG 1
+#include <mbedtls/ctr_drbg.h>
+#include <mbedtls/entropy.h>
+#endif
+#if defined(MBEDTLS_PSA_CRYPTO_C) || MBEDTLS_VERSION_MAJOR >= 4
+#include <psa/crypto.h>
+#endif
 #endif
 
 // ──────────────────────── Platform-specific transport ────────
@@ -50,8 +60,10 @@ struct az_mqtt3_transport
 #ifdef AZ_MQTT3_TLS_MBEDTLS
   mbedtls_ssl_context ssl;
   mbedtls_ssl_config conf;
+#if _AZ_MQTT3_MBEDTLS_LEGACY_RNG
   mbedtls_entropy_context entropy;
   mbedtls_ctr_drbg_context ctr_drbg;
+#endif
   mbedtls_x509_crt ca_chain;
   mbedtls_x509_crt client_cert;
   mbedtls_pk_context client_key;
@@ -69,8 +81,10 @@ static void _tls_contexts_init(az_mqtt3_transport* transport)
   transport->tls_contexts_ready = true;
   mbedtls_ssl_init(&transport->ssl);
   mbedtls_ssl_config_init(&transport->conf);
+#if _AZ_MQTT3_MBEDTLS_LEGACY_RNG
   mbedtls_entropy_init(&transport->entropy);
   mbedtls_ctr_drbg_init(&transport->ctr_drbg);
+#endif
   mbedtls_x509_crt_init(&transport->ca_chain);
   mbedtls_x509_crt_init(&transport->client_cert);
   mbedtls_pk_init(&transport->client_key);
@@ -94,8 +108,10 @@ static void _tls_contexts_free(az_mqtt3_transport* transport)
   mbedtls_x509_crt_free(&transport->ca_chain);
   mbedtls_x509_crt_free(&transport->client_cert);
   mbedtls_pk_free(&transport->client_key);
+#if _AZ_MQTT3_MBEDTLS_LEGACY_RNG
   mbedtls_ctr_drbg_free(&transport->ctr_drbg);
   mbedtls_entropy_free(&transport->entropy);
+#endif
 }
 #endif
 
@@ -180,6 +196,14 @@ static az_result _tls_prepare(
     az_span host,
     az_mqtt3_tls_options const* tls_options)
 {
+#if defined(MBEDTLS_PSA_CRYPTO_C) || MBEDTLS_VERSION_MAJOR >= 4
+  // Required by mbedTLS 4 and by 3.x TLS 1.3; idempotent.
+  if (psa_crypto_init() != PSA_SUCCESS)
+  {
+    return AZ_MQTT3_ERROR_TRANSPORT;
+  }
+#endif
+#if _AZ_MQTT3_MBEDTLS_LEGACY_RNG
   static const char pers[] = "az_mqtt3_mbedtls";
   if (mbedtls_ctr_drbg_seed(
           &transport->ctr_drbg,
@@ -187,17 +211,23 @@ static az_result _tls_prepare(
           &transport->entropy,
           (const unsigned char*)pers,
           sizeof(pers) - 1)
-          != 0
-      || mbedtls_ssl_config_defaults(
-             &transport->conf,
-             MBEDTLS_SSL_IS_CLIENT,
-             MBEDTLS_SSL_TRANSPORT_STREAM,
-             MBEDTLS_SSL_PRESET_DEFAULT)
-          != 0)
+      != 0)
   {
     return AZ_MQTT3_ERROR_TRANSPORT;
   }
+#endif
+  if (mbedtls_ssl_config_defaults(
+          &transport->conf,
+          MBEDTLS_SSL_IS_CLIENT,
+          MBEDTLS_SSL_TRANSPORT_STREAM,
+          MBEDTLS_SSL_PRESET_DEFAULT)
+      != 0)
+  {
+    return AZ_MQTT3_ERROR_TRANSPORT;
+  }
+#if _AZ_MQTT3_MBEDTLS_LEGACY_RNG
   mbedtls_ssl_conf_rng(&transport->conf, mbedtls_ctr_drbg_random, &transport->ctr_drbg);
+#endif
 
   char path[256];
   az_result rc = _span_to_cstr(tls_options->ca_cert_path, path, (int32_t)sizeof(path));
@@ -228,10 +258,10 @@ static az_result _tls_prepare(
     {
       return rc;
     }
-#if MBEDTLS_VERSION_MAJOR >= 3
+#if MBEDTLS_VERSION_MAJOR == 3
     int const key_rc = mbedtls_pk_parse_keyfile(
         &transport->client_key, path, NULL, mbedtls_ctr_drbg_random, &transport->ctr_drbg);
-#else
+#else // 2.x and 4.x take no RNG
     int const key_rc = mbedtls_pk_parse_keyfile(&transport->client_key, path, NULL);
 #endif
     if (key_rc != 0
@@ -268,6 +298,12 @@ static az_result _tls_prepare(
  */
 static int _tls_wait(az_mqtt3_transport* transport, int ret, int64_t deadline)
 {
+#ifdef MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET
+  if (ret == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET)
+  {
+    return 1; // TLS 1.3 ticket consumed; not an error, retry at once.
+  }
+#endif
   if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE)
   {
     return -1;

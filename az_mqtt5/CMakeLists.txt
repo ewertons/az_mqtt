@@ -67,16 +67,23 @@ if(WIN32)
   set(AZ_MQTT5_TLS_BACKEND_RESOLVED "schannel")
   message(STATUS "az_mqtt5_client: TLS backend = Schannel")
 elseif(AZ_MQTT5_TLS_BACKEND STREQUAL "mbedtls")
-  find_library(MBEDTLS_SSL_LIB    NAMES mbedtls    REQUIRED)
-  find_library(MBEDTLS_X509_LIB   NAMES mbedx509   REQUIRED)
-  find_library(MBEDTLS_CRYPTO_LIB NAMES mbedcrypto REQUIRED)
-  find_path(MBEDTLS_INCLUDE_DIR NAMES mbedtls/ssl.h REQUIRED)
-  target_include_directories(az_mqtt5_client PRIVATE ${MBEDTLS_INCLUDE_DIR})
   target_compile_definitions(az_mqtt5_client PRIVATE AZ_MQTT5_TLS_MBEDTLS)
   set(AZ_MQTT5_TLS_BACKEND_RESOLVED "mbedtls")
-  # Order matters: ssl depends on x509 depends on crypto.
-  target_link_libraries(az_mqtt5_client PRIVATE
-      ${MBEDTLS_SSL_LIB} ${MBEDTLS_X509_LIB} ${MBEDTLS_CRYPTO_LIB})
+  # mbedTLS 3.x/4.x install a CMake package; its MbedTLS::mbedtls target brings
+  # x509 and crypto (mbedcrypto in 3.x, tfpsacrypto in 4.x).
+  find_package(MbedTLS CONFIG QUIET)
+  if(TARGET MbedTLS::mbedtls)
+    target_link_libraries(az_mqtt5_client PRIVATE MbedTLS::mbedtls)
+  else()
+    find_library(MBEDTLS_SSL_LIB    NAMES mbedtls    REQUIRED)
+    find_library(MBEDTLS_X509_LIB   NAMES mbedx509   REQUIRED)
+    find_library(MBEDTLS_CRYPTO_LIB NAMES mbedcrypto REQUIRED)
+    find_path(MBEDTLS_INCLUDE_DIR NAMES mbedtls/ssl.h REQUIRED)
+    target_include_directories(az_mqtt5_client PRIVATE ${MBEDTLS_INCLUDE_DIR})
+    # Order matters: ssl depends on x509 depends on crypto.
+    target_link_libraries(az_mqtt5_client PRIVATE
+        ${MBEDTLS_SSL_LIB} ${MBEDTLS_X509_LIB} ${MBEDTLS_CRYPTO_LIB})
+  endif()
   message(STATUS "az_mqtt5_client: TLS backend = mbedTLS")
 elseif(AZ_MQTT5_TLS_BACKEND STREQUAL "openssl"
   OR AZ_MQTT5_TLS_BACKEND STREQUAL "auto")
