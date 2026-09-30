@@ -12,6 +12,7 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -321,10 +322,31 @@ static void _serve(test_server* s, conn* c)
   {
     return;
   }
-  if (s->options.behavior == TEST_SERVER_RESET_AFTER_CONNACK)
+  if (s->options.behavior == TEST_SERVER_PARTIAL_TLS_RECORD)
   {
-    struct linger lg = { 1, 0 };
-    setsockopt(c->fd, SOL_SOCKET, SO_LINGER, &lg, sizeof(lg));
+    // Application-data record header announcing 64 bytes, then only 5 of them,
+    // written under OpenSSL so the client sees a record that never completes.
+    static const uint8_t partial[] = { 0x17, 0x03, 0x03, 0x00, 0x40, 1, 2, 3, 4, 5 };
+    (void)send(c->fd, partial, sizeof(partial), MSG_NOSIGNAL);
+    while (!_stopping(s))
+    {
+      usleep(20 * 1000);
+    }
+    return;
+  }
+  if (s->options.behavior == TEST_SERVER_STOP_READING)
+  {
+    while (!_stopping(s))
+    {
+      usleep(20 * 1000);
+    }
+    return;
+  }
+  if (s->options.behavior == TEST_SERVER_CLOSE_AFTER_CONNACK)
+  {
+    // Plain close (FIN). The client's next write draws an RST and the one after
+    // that fails with EPIPE, which is what raises SIGPIPE.
+    usleep(200 * 1000);
     return;
   }
   for (;;)
@@ -345,6 +367,12 @@ static void _serve(test_server* s, conn* c)
 static void* _run(void* arg)
 {
   test_server* s = (test_server*)arg;
+  // SIGPIPE from write() goes to the writing thread: blocking it here keeps the
+  // server's own writes from masking or causing one in the client under test.
+  sigset_t pipe_set;
+  sigemptyset(&pipe_set);
+  sigaddset(&pipe_set, SIGPIPE);
+  pthread_sigmask(SIG_BLOCK, &pipe_set, NULL);
   while (!_stopping(s))
   {
     struct pollfd p = { s->listen_fd, POLLIN, 0 };
@@ -421,6 +449,11 @@ test_server* test_server_start(test_server_options const* options)
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   socklen_t alen = sizeof(addr);
   s->listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (s->listen_fd >= 0 && s->options.behavior == TEST_SERVER_STOP_READING)
+  {
+    int small = 4096; // Inherited by accepted sockets: backs the client up quickly.
+    setsockopt(s->listen_fd, SOL_SOCKET, SO_RCVBUF, &small, sizeof(small));
+  }
   if (s->listen_fd < 0 || bind(s->listen_fd, (struct sockaddr*)&addr, sizeof(addr)) != 0
       || listen(s->listen_fd, 8) != 0
       || getsockname(s->listen_fd, (struct sockaddr*)&addr, &alen) != 0)

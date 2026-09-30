@@ -22,8 +22,12 @@ typedef enum
   TEST_SERVER_MQTT = 0,
   /** @brief Accept TCP and never read or write (a peer that stops answering). */
   TEST_SERVER_SILENT,
-  /** @brief Answer CONNECT, then reset the connection. */
-  TEST_SERVER_RESET_AFTER_CONNACK,
+  /** @brief Answer CONNECT, then close the connection. */
+  TEST_SERVER_CLOSE_AFTER_CONNACK,
+  /** @brief Answer CONNECT, then write only the start of a TLS record (TLS only). */
+  TEST_SERVER_PARTIAL_TLS_RECORD,
+  /** @brief Answer CONNECT, then never read again (the client's sends back up). */
+  TEST_SERVER_STOP_READING,
 } test_server_behavior;
 
 typedef struct

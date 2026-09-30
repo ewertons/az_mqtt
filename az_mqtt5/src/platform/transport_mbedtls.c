@@ -1,25 +1,26 @@
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-// POSIX TCP transport with optional mbedTLS TLS layer (alternative to
-// transport_posix.c which uses OpenSSL). Selected via the
-// `AZ_MQTT5_TLS_BACKEND=mbedtls` CMake option; the compile-time macro
-// `AZ_MQTT5_TLS_MBEDTLS` gates the TLS code-paths.
+/**
+ * @file transport_mbedtls.c
+ * @brief POSIX sockets transport, with TLS through mbedTLS when AZ_MQTT5_TLS_MBEDTLS is defined.
+ */
+
+#if defined(__linux__) && !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE // inet_pton, ssize_t, recv under -std=c99
+#endif
+
+#include "az_mqtt5_socket_posix.h"
 
 #include <az_mqtt5/az_mqtt5_transport.h>
 #include <az_mqtt5/az_mqtt5_types.h>
 
-#include <azure/core/internal/az_precondition_internal.h>
 #include <azure/core/az_span.h>
+#include <azure/core/internal/az_precondition_internal.h>
 
-#include <errno.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <poll.h>
-#include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <sys/types.h>
 #include <unistd.h>
 
 #ifdef AZ_MQTT5_TLS_MBEDTLS
@@ -32,34 +33,37 @@
 
 // ──────────────────────── Platform-specific transport ────────
 
+/** @brief Connection progress. */
+typedef enum
+{
+  _TRANSPORT_IDLE = 0,
+  _TRANSPORT_TCP,
+  _TRANSPORT_TLS,
+  _TRANSPORT_CONNECTED,
+} _transport_state;
+
 struct az_mqtt5_transport
 {
   int socket_fd;
+  _az_mqtt5_tcp_connect tcp;
+  _transport_state state;
 #ifdef AZ_MQTT5_TLS_MBEDTLS
   mbedtls_ssl_context ssl;
-  mbedtls_ssl_config  conf;
+  mbedtls_ssl_config conf;
   mbedtls_entropy_context entropy;
   mbedtls_ctr_drbg_context ctr_drbg;
   mbedtls_x509_crt ca_chain;
   mbedtls_x509_crt client_cert;
   mbedtls_pk_context client_key;
-  mbedtls_net_context net_ctx;
-  bool tls_initialized;
+  bool use_tls;
   /** @brief Contexts are initialized (and own resources, e.g. mutexes) until freed. */
   bool tls_contexts_ready;
 #endif
   bool connected;
 };
 
-AZ_NODISCARD int32_t az_mqtt5_transport_sizeof(void) { return (int32_t)sizeof(az_mqtt5_transport); }
-
 #ifdef AZ_MQTT5_TLS_MBEDTLS
-/**
- * @brief Initialize every TLS context; called per connect, undone by _tls_contexts_free().
- *
- * The socket is owned by az_mqtt5_transport::socket_fd, so the net context
- * never closes it.
- */
+/** @brief Initialize every TLS context; called per connect, undone by _tls_contexts_free(). */
 static void _tls_contexts_init(az_mqtt5_transport* transport)
 {
   transport->tls_contexts_ready = true;
@@ -70,8 +74,7 @@ static void _tls_contexts_init(az_mqtt5_transport* transport)
   mbedtls_x509_crt_init(&transport->ca_chain);
   mbedtls_x509_crt_init(&transport->client_cert);
   mbedtls_pk_init(&transport->client_key);
-  mbedtls_net_init(&transport->net_ctx);
-  transport->tls_initialized = false;
+  transport->use_tls = false;
 }
 
 /**
@@ -85,7 +88,7 @@ static void _tls_contexts_free(az_mqtt5_transport* transport)
     return;
   }
   transport->tls_contexts_ready = false;
-  transport->tls_initialized = false;
+  transport->use_tls = false;
   mbedtls_ssl_free(&transport->ssl);
   mbedtls_ssl_config_free(&transport->conf);
   mbedtls_x509_crt_free(&transport->ca_chain);
@@ -96,15 +99,15 @@ static void _tls_contexts_free(az_mqtt5_transport* transport)
 }
 #endif
 
+AZ_NODISCARD int32_t az_mqtt5_transport_sizeof(void) { return (int32_t)sizeof(az_mqtt5_transport); }
+
 AZ_NODISCARD az_result az_mqtt5_transport_init(az_mqtt5_transport* transport)
 {
   _az_PRECONDITION_NOT_NULL(transport);
+  memset(transport, 0, sizeof(*transport));
   transport->socket_fd = -1;
-#ifdef AZ_MQTT5_TLS_MBEDTLS
-  transport->tls_initialized = false;
-  transport->tls_contexts_ready = false;
-#endif
-  transport->connected = false;
+  _az_mqtt5_tcp_connect_init(&transport->tcp);
+  transport->state = _TRANSPORT_IDLE;
   return AZ_OK;
 }
 
@@ -121,59 +124,35 @@ static az_result _span_to_cstr(az_span src, char* buf, int32_t buf_size)
   return AZ_OK;
 }
 
-static az_result _tcp_connect(az_mqtt5_transport* transport, az_span host, uint16_t port)
-{
-  char host_str[256];
-  az_result rc = _span_to_cstr(host, host_str, (int32_t)sizeof(host_str));
-  if (az_result_failed(rc))
-  {
-    return rc;
-  }
-
-  char port_str[6];
-  snprintf(port_str, sizeof(port_str), "%u", (unsigned)port);
-
-  struct addrinfo hints;
-  memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-
-  struct addrinfo* res = NULL;
-  if (getaddrinfo(host_str, port_str, &hints, &res) != 0 || res == NULL)
-  {
-    return AZ_MQTT5_ERROR_TRANSPORT;
-  }
-
-  int fd = -1;
-  for (struct addrinfo* rp = res; rp != NULL; rp = rp->ai_next)
-  {
-    fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-    if (fd < 0)
-    {
-      continue;
-    }
-    if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0)
-    {
-      break;
-    }
-    close(fd);
-    fd = -1;
-  }
-  freeaddrinfo(res);
-
-  if (fd < 0)
-  {
-    return AZ_MQTT5_ERROR_TRANSPORT;
-  }
-
-  transport->socket_fd = fd;
 #ifdef AZ_MQTT5_TLS_MBEDTLS
-  transport->net_ctx.fd = fd;
-#endif
-  return AZ_OK;
+// ──────────────────────── mbedTLS I/O callbacks ──────────────
+//
+// mbedtls_net_send() writes with write(), which raises SIGPIPE when the peer has
+// reset the connection; these use send(MSG_NOSIGNAL) on the non-blocking socket.
+
+static int _tls_send(void* ctx, unsigned char const* data, size_t size)
+{
+  int32_t const chunk = size > (size_t)INT32_MAX ? INT32_MAX : (int32_t)size;
+  int32_t n = _az_mqtt5_send_nosignal(*(int*)ctx, data, chunk);
+  if (n > 0)
+  {
+    return (int)n;
+  }
+  return n == 0 ? MBEDTLS_ERR_SSL_WANT_WRITE : MBEDTLS_ERR_NET_SEND_FAILED;
 }
 
-#ifdef AZ_MQTT5_TLS_MBEDTLS
+static int _tls_recv(void* ctx, unsigned char* buffer, size_t size)
+{
+  ssize_t n = recv(*(int*)ctx, buffer, size, 0);
+  if (n >= 0)
+  {
+    return (int)n; // 0 is an orderly close.
+  }
+  return _az_mqtt5_would_block() ? MBEDTLS_ERR_SSL_WANT_READ : MBEDTLS_ERR_NET_RECV_FAILED;
+}
+
+// ──────────────────────── TLS setup ──────────────────────────
+
 /**
  * @brief Reject TLS options this backend cannot honour, before any socket work.
  */
@@ -193,12 +172,14 @@ static az_result _check_tls_options(az_mqtt5_tls_options const* tls_options)
   return AZ_OK;
 }
 
-static az_result _tls_setup(
+/**
+ * @brief Build the TLS configuration and session for @p host; the socket is attached later.
+ */
+static az_result _tls_prepare(
     az_mqtt5_transport* transport,
     az_span host,
     az_mqtt5_tls_options const* tls_options)
 {
-  bool const has_cert = az_span_size(tls_options->client_cert_path) > 0;
   static const char pers[] = "az_mqtt5_mbedtls";
   if (mbedtls_ctr_drbg_seed(
           &transport->ctr_drbg,
@@ -231,7 +212,7 @@ static az_result _tls_setup(
   mbedtls_ssl_conf_ca_chain(&transport->conf, &transport->ca_chain, NULL);
   mbedtls_ssl_conf_authmode(&transport->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
 
-  if (has_cert)
+  if (az_span_size(tls_options->client_cert_path) > 0)
   {
     rc = _span_to_cstr(tls_options->client_cert_path, path, (int32_t)sizeof(path));
     if (az_result_failed(rc))
@@ -278,30 +259,53 @@ static az_result _tls_setup(
   {
     return AZ_MQTT5_ERROR_TRANSPORT;
   }
+  transport->use_tls = true;
+  return AZ_OK;
+}
 
-  mbedtls_ssl_set_bio(
-      &transport->ssl, &transport->net_ctx, mbedtls_net_send, mbedtls_net_recv, NULL);
-
-  int hs;
-  while ((hs = mbedtls_ssl_handshake(&transport->ssl)) != 0)
+/**
+ * @brief Wait for what an mbedTLS call asked for: 1 retry, 0 timed out, -1 failed.
+ */
+static int _tls_wait(az_mqtt5_transport* transport, int ret, int64_t deadline)
+{
+  if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE)
   {
-    if (hs != MBEDTLS_ERR_SSL_WANT_READ && hs != MBEDTLS_ERR_SSL_WANT_WRITE)
+    return -1;
+  }
+  return _az_mqtt5_wait_fd(
+      transport->socket_fd,
+      ret == MBEDTLS_ERR_SSL_WANT_READ ? _AZ_MQTT5_WAIT_READ : _AZ_MQTT5_WAIT_WRITE,
+      _az_mqtt5_remaining_ms(deadline));
+}
+
+/** @brief Drive the handshake until done, failed or @p deadline. */
+static az_result _tls_handshake(az_mqtt5_transport* transport, int64_t deadline)
+{
+  for (;;)
+  {
+    int ret = mbedtls_ssl_handshake(&transport->ssl);
+    if (ret == 0)
+    {
+      // VERIFY_REQUIRED already fails the handshake; checked again so it stays so.
+      return mbedtls_ssl_get_verify_result(&transport->ssl) == 0 ? AZ_OK
+                                                                 : AZ_MQTT5_ERROR_TRANSPORT;
+    }
+    int w = _tls_wait(transport, ret, deadline);
+    if (w == 0)
+    {
+      return AZ_MQTT5_ERROR_TIMEOUT;
+    }
+    if (w < 0)
     {
       return AZ_MQTT5_ERROR_TRANSPORT;
     }
   }
-  // VERIFY_REQUIRED already fails the handshake; checked again so it stays so.
-  if (mbedtls_ssl_get_verify_result(&transport->ssl) != 0)
-  {
-    return AZ_MQTT5_ERROR_TRANSPORT;
-  }
-
-  transport->tls_initialized = true;
-  return AZ_OK;
 }
 #endif // AZ_MQTT5_TLS_MBEDTLS
 
-AZ_NODISCARD az_result az_mqtt5_transport_connect(
+// ──────────────────────── Connect ────────────────────────────
+
+AZ_NODISCARD az_result az_mqtt5_transport_connect_start(
     az_mqtt5_transport* transport,
     az_span host,
     uint16_t port,
@@ -309,13 +313,21 @@ AZ_NODISCARD az_result az_mqtt5_transport_connect(
 {
   _az_PRECONDITION_NOT_NULL(transport);
 
+  az_mqtt5_transport_close(transport);
+
 #ifdef AZ_MQTT5_TLS_MBEDTLS
   if (tls_options != NULL)
   {
-    az_result const check = _check_tls_options(tls_options);
-    if (az_result_failed(check))
+    az_result rc = _check_tls_options(tls_options);
+    if (az_result_succeeded(rc))
     {
-      return check;
+      _tls_contexts_init(transport);
+      rc = _tls_prepare(transport, host, tls_options);
+    }
+    if (az_result_failed(rc))
+    {
+      az_mqtt5_transport_close(transport);
+      return rc;
     }
   }
 #else
@@ -326,67 +338,141 @@ AZ_NODISCARD az_result az_mqtt5_transport_connect(
   }
 #endif
 
-  az_result rc = _tcp_connect(transport, host, port);
+  az_result rc = _az_mqtt5_tcp_connect_start(&transport->tcp, host, port);
   if (az_result_failed(rc))
   {
+    az_mqtt5_transport_close(transport);
     return rc;
+  }
+  transport->state = _TRANSPORT_TCP;
+  return AZ_OK;
+}
+
+AZ_NODISCARD az_result
+az_mqtt5_transport_connect_poll(az_mqtt5_transport* transport, int32_t timeout_ms)
+{
+  _az_PRECONDITION_NOT_NULL(transport);
+  int64_t const deadline = _az_mqtt5_deadline(timeout_ms);
+  az_result rc = AZ_OK;
+
+  if (transport->state == _TRANSPORT_TCP)
+  {
+    rc = _az_mqtt5_tcp_connect_poll(&transport->tcp, _az_mqtt5_remaining_ms(deadline));
+    if (rc == AZ_MQTT5_ERROR_TIMEOUT)
+    {
+      return rc;
+    }
+    if (az_result_succeeded(rc))
+    {
+      transport->socket_fd = transport->tcp.fd;
+      _az_mqtt5_tcp_connect_init(&transport->tcp);
+      transport->state = _TRANSPORT_CONNECTED;
+#ifdef AZ_MQTT5_TLS_MBEDTLS
+      if (transport->use_tls)
+      {
+        mbedtls_ssl_set_bio(&transport->ssl, &transport->socket_fd, _tls_send, _tls_recv, NULL);
+        transport->state = _TRANSPORT_TLS;
+      }
+#endif
+    }
   }
 
 #ifdef AZ_MQTT5_TLS_MBEDTLS
-  if (tls_options != NULL)
+  if (az_result_succeeded(rc) && transport->state == _TRANSPORT_TLS)
   {
-    _tls_contexts_free(transport);
-    _tls_contexts_init(transport);
-    transport->net_ctx.fd = transport->socket_fd; // Init reset it.
-    rc = _tls_setup(transport, host, tls_options);
-    if (az_result_failed(rc))
+    rc = _tls_handshake(transport, deadline);
+    if (rc == AZ_MQTT5_ERROR_TIMEOUT)
     {
-      _tls_contexts_free(transport);
-      close(transport->socket_fd);
-      transport->socket_fd = -1;
       return rc;
+    }
+    if (az_result_succeeded(rc))
+    {
+      transport->state = _TRANSPORT_CONNECTED;
     }
   }
 #endif
 
+  if (az_result_succeeded(rc) && transport->state != _TRANSPORT_CONNECTED)
+  {
+    rc = AZ_MQTT5_ERROR_INVALID_STATE;
+  }
+  if (az_result_failed(rc))
+  {
+    az_mqtt5_transport_close(transport);
+    return rc;
+  }
   transport->connected = true;
   return AZ_OK;
 }
 
+AZ_NODISCARD az_result az_mqtt5_transport_connect(
+    az_mqtt5_transport* transport,
+    az_span host,
+    uint16_t port,
+    az_mqtt5_tls_options const* tls_options)
+{
+  az_result rc = az_mqtt5_transport_connect_start(transport, host, port, tls_options);
+  if (az_result_succeeded(rc))
+  {
+    rc = az_mqtt5_transport_connect_poll(transport, AZ_MQTT5_TRANSPORT_CONNECT_TIMEOUT_MS);
+    if (rc == AZ_MQTT5_ERROR_TIMEOUT)
+    {
+      az_mqtt5_transport_close(transport);
+    }
+  }
+  return rc;
+}
+
+// ──────────────────────── I/O ────────────────────────────────
+
 AZ_NODISCARD az_result az_mqtt5_transport_send(az_mqtt5_transport* transport, az_span data)
 {
   _az_PRECONDITION_NOT_NULL(transport);
+  if (!transport->connected)
+  {
+    return AZ_MQTT5_ERROR_TRANSPORT;
+  }
 
-  uint8_t* ptr = az_span_ptr(data);
+  int64_t const deadline = _az_mqtt5_deadline(AZ_MQTT5_TRANSPORT_SEND_TIMEOUT_MS);
+  uint8_t const* ptr = az_span_ptr(data);
   int32_t remaining = az_span_size(data);
 
   while (remaining > 0)
   {
-    ssize_t sent;
+    int w;
 #ifdef AZ_MQTT5_TLS_MBEDTLS
-    if (transport->tls_initialized)
+    if (transport->use_tls)
     {
-      int w = mbedtls_ssl_write(&transport->ssl, ptr, (size_t)remaining);
-      if (w == MBEDTLS_ERR_SSL_WANT_READ || w == MBEDTLS_ERR_SSL_WANT_WRITE)
+      int n = mbedtls_ssl_write(&transport->ssl, ptr, (size_t)remaining);
+      if (n > 0)
       {
+        ptr += n;
+        remaining -= n;
         continue;
       }
-      sent = (ssize_t)w;
+      w = _tls_wait(transport, n, deadline);
     }
     else
 #endif
     {
-      sent = send(transport->socket_fd, ptr, (size_t)remaining, 0);
+      int32_t n = _az_mqtt5_send_nosignal(transport->socket_fd, ptr, remaining);
+      if (n > 0)
+      {
+        ptr += n;
+        remaining -= n;
+        continue;
+      }
+      w = n < 0 ? -1
+                : _az_mqtt5_wait_fd(
+                    transport->socket_fd, _AZ_MQTT5_WAIT_WRITE, _az_mqtt5_remaining_ms(deadline));
     }
-
-    if (sent <= 0)
+    if (w <= 0)
     {
-      return AZ_MQTT5_ERROR_TRANSPORT;
+      // A partial packet may be on the wire: the connection is unusable.
+      transport->connected = false;
+      return w == 0 ? AZ_MQTT5_ERROR_TIMEOUT : AZ_MQTT5_ERROR_TRANSPORT;
     }
-    ptr += sent;
-    remaining -= (int32_t)sent;
   }
-
   return AZ_OK;
 }
 
@@ -400,69 +486,55 @@ AZ_NODISCARD az_result az_mqtt5_transport_receive(
   _az_PRECONDITION_NOT_NULL(out_received);
 
   *out_received = AZ_SPAN_EMPTY;
-
-#ifdef AZ_MQTT5_TLS_MBEDTLS
-  // Check for pending TLS data first
-  if (transport->tls_initialized
-      && mbedtls_ssl_get_bytes_avail(&transport->ssl) > 0)
+  if (!transport->connected)
   {
-    int n = mbedtls_ssl_read(
-        &transport->ssl, az_span_ptr(buffer), (size_t)az_span_size(buffer));
-    if (n > 0)
+    return AZ_MQTT5_ERROR_TRANSPORT;
+  }
+
+  int64_t const deadline = _az_mqtt5_deadline(timeout_ms);
+  for (;;)
+  {
+    int w;
+#ifdef AZ_MQTT5_TLS_MBEDTLS
+    if (transport->use_tls)
     {
-      *out_received = az_span_slice(buffer, 0, n);
-      return AZ_OK;
+      // Read first: decrypted bytes may already be buffered inside mbedTLS.
+      int n = mbedtls_ssl_read(&transport->ssl, az_span_ptr(buffer), (size_t)az_span_size(buffer));
+      if (n > 0)
+      {
+        *out_received = az_span_slice(buffer, 0, n);
+        return AZ_OK;
+      }
+      // A partial TLS record returns WANT_READ; wait for the rest within the deadline.
+      w = _tls_wait(transport, n, deadline);
+    }
+    else
+#endif
+    {
+      w = _az_mqtt5_wait_fd(
+          transport->socket_fd, _AZ_MQTT5_WAIT_READ, _az_mqtt5_remaining_ms(deadline));
+      if (w > 0)
+      {
+        int32_t n = _az_mqtt5_recv_nonblocking(
+            transport->socket_fd, az_span_ptr(buffer), az_span_size(buffer));
+        if (n > 0)
+        {
+          *out_received = az_span_slice(buffer, 0, n);
+          return AZ_OK;
+        }
+        w = n < 0 ? -1 : 1;
+      }
+    }
+    if (w == 0)
+    {
+      return AZ_OK; // Timed out: out_received stays empty.
+    }
+    if (w < 0)
+    {
+      transport->connected = false;
+      return AZ_MQTT5_ERROR_TRANSPORT;
     }
   }
-#endif
-
-  struct pollfd pfd;
-  pfd.fd = transport->socket_fd;
-  pfd.events = POLLIN;
-  pfd.revents = 0;
-
-  int poll_result = poll(&pfd, 1, timeout_ms);
-  if (poll_result < 0)
-  {
-    return AZ_MQTT5_ERROR_TRANSPORT;
-  }
-  if (poll_result == 0)
-  {
-    // Timeout: out_received is already empty
-    return AZ_OK;
-  }
-
-  ssize_t n;
-#ifdef AZ_MQTT5_TLS_MBEDTLS
-  if (transport->tls_initialized)
-  {
-    int r = mbedtls_ssl_read(
-        &transport->ssl, az_span_ptr(buffer), (size_t)az_span_size(buffer));
-    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE)
-    {
-      return AZ_OK;
-    }
-    n = (ssize_t)r;
-  }
-  else
-#endif
-  {
-    n = recv(transport->socket_fd, az_span_ptr(buffer), (size_t)az_span_size(buffer), 0);
-  }
-
-  if (n < 0)
-  {
-    return AZ_MQTT5_ERROR_TRANSPORT;
-  }
-  if (n == 0)
-  {
-    // Connection closed
-    transport->connected = false;
-    return AZ_MQTT5_ERROR_TRANSPORT;
-  }
-
-  *out_received = az_span_slice(buffer, 0, (int32_t)n);
-  return AZ_OK;
 }
 
 void az_mqtt5_transport_close(az_mqtt5_transport* transport)
@@ -472,16 +544,18 @@ void az_mqtt5_transport_close(az_mqtt5_transport* transport)
     return;
   }
 #ifdef AZ_MQTT5_TLS_MBEDTLS
-  if (transport->tls_initialized)
+  if (transport->use_tls && transport->connected)
   {
-    (void)mbedtls_ssl_close_notify(&transport->ssl);
+    (void)mbedtls_ssl_close_notify(&transport->ssl); // Best effort; non-blocking.
   }
   _tls_contexts_free(transport);
 #endif
+  _az_mqtt5_tcp_connect_cancel(&transport->tcp);
   if (transport->socket_fd >= 0)
   {
     close(transport->socket_fd);
     transport->socket_fd = -1;
   }
+  transport->state = _TRANSPORT_IDLE;
   transport->connected = false;
 }

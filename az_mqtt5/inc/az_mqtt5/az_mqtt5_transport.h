@@ -57,6 +57,33 @@ AZ_NODISCARD AZ_INLINE az_mqtt5_tls_options az_mqtt5_tls_options_default(void)
   return opts;
 }
 
+// ──────────────────────── Limits ─────────────────────────────
+
+// These bounds apply to the POSIX transports (OpenSSL, mbedTLS, no TLS). The
+// Windows (Schannel) transport still connects synchronously and is not bounded
+// by them.
+
+#ifndef AZ_MQTT5_TRANSPORT_CONNECT_TIMEOUT_MS
+/** @brief Bound of az_mqtt5_transport_connect() (TCP connect + TLS handshake). */
+#define AZ_MQTT5_TRANSPORT_CONNECT_TIMEOUT_MS 30000
+#endif
+
+#ifndef AZ_MQTT5_TRANSPORT_ADDRESS_ATTEMPT_MS
+/**
+ * @brief Longest one resolved address is tried while others remain, so an
+ * unreachable first address (e.g. broken IPv6) falls back to the next.
+ */
+#define AZ_MQTT5_TRANSPORT_ADDRESS_ATTEMPT_MS 2000
+#endif
+
+#ifndef AZ_MQTT5_TRANSPORT_SEND_TIMEOUT_MS
+/**
+ * @brief Longest az_mqtt5_transport_send() waits for the peer to accept data.
+ * On expiry the connection is unusable (a partial packet may have been sent).
+ */
+#define AZ_MQTT5_TRANSPORT_SEND_TIMEOUT_MS 30000
+#endif
+
 // ──────────────────────── Transport API ──────────────────────
 
 /**
@@ -78,6 +105,8 @@ AZ_NODISCARD az_result az_mqtt5_transport_init(az_mqtt5_transport* transport);
  * @param port        Destination port (e.g. 1883 or 8883).
  * @param tls_options TLS settings. Pass NULL for plain TCP.
  *
+ * Bounded by AZ_MQTT5_TRANSPORT_CONNECT_TIMEOUT_MS (AZ_MQTT5_ERROR_TIMEOUT) on POSIX.
+ *
  * @retval AZ_MQTT5_ERROR_NOT_SUPPORTED TLS requested from a build without a TLS
  *         backend, or an option the backend cannot honour. Never downgrades.
  * @retval AZ_MQTT5_ERROR_INVALID_CONFIG Only one of client_cert_path / client_key_path set.
@@ -87,6 +116,32 @@ AZ_NODISCARD az_result az_mqtt5_transport_connect(
     az_span host,
     uint16_t port,
     az_mqtt5_tls_options const* tls_options);
+
+/**
+ * @brief Start a connect without waiting for it: resolves @p host and begins
+ * the TCP connect. Drive it with az_mqtt5_transport_connect_poll().
+ *
+ * Name resolution is the only step that may block. Windows (Schannel) completes
+ * the whole connect here, synchronously and without the connect bound, and
+ * az_mqtt5_transport_connect_poll() returns at once.
+ *
+ * @param tls_options Same as az_mqtt5_transport_connect(); read only during this call.
+ */
+AZ_NODISCARD az_result az_mqtt5_transport_connect_start(
+    az_mqtt5_transport* transport,
+    az_span host,
+    uint16_t port,
+    az_mqtt5_tls_options const* tls_options);
+
+/**
+ * @brief Progress a started connect (TCP, then TLS handshake) for up to @p timeout_ms.
+ *
+ * @retval AZ_OK Connected.
+ * @retval AZ_MQTT5_ERROR_TIMEOUT Not done yet; call again.
+ * @retval other Failed; the transport is closed.
+ */
+AZ_NODISCARD az_result
+az_mqtt5_transport_connect_poll(az_mqtt5_transport* transport, int32_t timeout_ms);
 
 /**
  * @brief Send bytes over the transport.

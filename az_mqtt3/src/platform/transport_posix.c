@@ -1,34 +1,53 @@
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
+/**
+ * @file transport_posix.c
+ * @brief POSIX sockets transport, with TLS through OpenSSL when AZ_MQTT3_TLS_OPENSSL is defined.
+ */
+
+#if defined(__linux__) && !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE // inet_pton, ssize_t, recv under -std=c99
+#endif
+
+#include "az_mqtt3_socket_posix.h"
+
 #include <az_mqtt3/az_mqtt3_transport.h>
 #include <az_mqtt3/az_mqtt3_types.h>
 
-#include <azure/core/internal/az_precondition_internal.h>
 #include <azure/core/az_span.h>
+#include <azure/core/internal/az_precondition_internal.h>
 
-#include <errno.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <poll.h>
-#include <stdio.h>
+#include <stdint.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <sys/types.h>
 #include <unistd.h>
 
 #ifdef AZ_MQTT3_TLS_OPENSSL
 #include <arpa/inet.h>
+#include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
+#include <pthread.h>
+#include <sys/socket.h>
 #endif
 
 // ──────────────────────── Platform-specific transport ────────
 
+/** @brief Connection progress. */
+typedef enum
+{
+  _TRANSPORT_IDLE = 0,
+  _TRANSPORT_TCP,
+  _TRANSPORT_TLS,
+  _TRANSPORT_CONNECTED,
+} _transport_state;
+
 struct az_mqtt3_transport
 {
   int socket_fd;
+  _az_mqtt3_tcp_connect tcp;
+  _transport_state state;
 #ifdef AZ_MQTT3_TLS_OPENSSL
   SSL_CTX* ssl_ctx;
   SSL* ssl;
@@ -41,15 +60,14 @@ AZ_NODISCARD int32_t az_mqtt3_transport_sizeof(void) { return (int32_t)sizeof(az
 AZ_NODISCARD az_result az_mqtt3_transport_init(az_mqtt3_transport* transport)
 {
   _az_PRECONDITION_NOT_NULL(transport);
+  memset(transport, 0, sizeof(*transport));
   transport->socket_fd = -1;
-#ifdef AZ_MQTT3_TLS_OPENSSL
-  transport->ssl_ctx = NULL;
-  transport->ssl = NULL;
-#endif
-  transport->connected = false;
+  _az_mqtt3_tcp_connect_init(&transport->tcp);
+  transport->state = _TRANSPORT_IDLE;
   return AZ_OK;
 }
 
+#ifdef AZ_MQTT3_TLS_OPENSSL
 // Helper: copy az_span to null-terminated char buffer on the stack.
 static az_result _span_to_cstr(az_span src, char* buf, int32_t buf_size)
 {
@@ -63,70 +81,94 @@ static az_result _span_to_cstr(az_span src, char* buf, int32_t buf_size)
   return AZ_OK;
 }
 
-static az_result _tcp_connect(az_mqtt3_transport* transport, az_span host, uint16_t port)
+// ──────────────────────── OpenSSL socket BIO ─────────────────
+//
+// OpenSSL's socket BIO writes with write(), which raises SIGPIPE when the peer
+// has reset the connection. This BIO uses send(MSG_NOSIGNAL) instead.
+
+static BIO_METHOD* s_bio_method;
+static pthread_once_t s_bio_once = PTHREAD_ONCE_INIT;
+
+static int _bio_fd(BIO* bio) { return (int)(intptr_t)BIO_get_data(bio); }
+
+static int _bio_write(BIO* bio, char const* data, int size)
 {
-  char host_str[256];
-  az_result rc = _span_to_cstr(host, host_str, (int32_t)sizeof(host_str));
-  if (az_result_failed(rc))
+  BIO_clear_retry_flags(bio);
+  int32_t n = _az_mqtt3_send_nosignal(_bio_fd(bio), (uint8_t const*)data, size);
+  if (n == 0 && size > 0)
   {
-    return rc;
+    BIO_set_retry_write(bio);
+    return -1;
   }
-
-  char port_str[6];
-  snprintf(port_str, sizeof(port_str), "%u", (unsigned)port);
-
-  struct addrinfo hints;
-  memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-
-  struct addrinfo* res = NULL;
-  if (getaddrinfo(host_str, port_str, &hints, &res) != 0 || res == NULL)
-  {
-    return AZ_MQTT3_ERROR_TRANSPORT;
-  }
-
-  int fd = -1;
-  for (struct addrinfo* rp = res; rp != NULL; rp = rp->ai_next)
-  {
-    fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-    if (fd < 0)
-    {
-      continue;
-    }
-    if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0)
-    {
-      break;
-    }
-    close(fd);
-    fd = -1;
-  }
-  freeaddrinfo(res);
-
-  if (fd < 0)
-  {
-    return AZ_MQTT3_ERROR_TRANSPORT;
-  }
-
-  transport->socket_fd = fd;
-  return AZ_OK;
+  return n;
 }
 
-#ifdef AZ_MQTT3_TLS_OPENSSL
-/**
- * @brief Fail the setup: free what was allocated and return @p rc.
- */
-static az_result _tls_fail(SSL_CTX* ctx, SSL* ssl, az_result rc)
+static int _bio_read(BIO* bio, char* buffer, int size)
 {
-  if (ssl != NULL)
+  BIO_clear_retry_flags(bio);
+  ssize_t n = recv(_bio_fd(bio), buffer, (size_t)size, 0);
+  if (n < 0 && _az_mqtt3_would_block())
   {
-    SSL_free(ssl);
+    BIO_set_retry_read(bio);
   }
-  if (ctx != NULL)
+  return (int)n;
+}
+
+static long _bio_ctrl(BIO* bio, int cmd, long num, void* ptr)
+{
+  (void)bio;
+  (void)num;
+  (void)ptr;
+  return cmd == BIO_CTRL_FLUSH ? 1 : 0;
+}
+
+static int _bio_create(BIO* bio)
+{
+  BIO_set_init(bio, 1);
+  return 1;
+}
+
+static void _bio_method_init(void)
+{
+  BIO_METHOD* m = BIO_meth_new(BIO_get_new_index() | BIO_TYPE_SOURCE_SINK, "az_mqtt3_socket");
+  if (m != NULL
+      && (BIO_meth_set_write(m, _bio_write) != 1 || BIO_meth_set_read(m, _bio_read) != 1
+          || BIO_meth_set_ctrl(m, _bio_ctrl) != 1 || BIO_meth_set_create(m, _bio_create) != 1))
   {
-    SSL_CTX_free(ctx);
+    BIO_meth_free(m);
+    m = NULL;
   }
-  return rc;
+  s_bio_method = m;
+}
+
+static BIO* _bio_new(int fd)
+{
+  if (pthread_once(&s_bio_once, _bio_method_init) != 0 || s_bio_method == NULL)
+  {
+    return NULL;
+  }
+  BIO* bio = BIO_new(s_bio_method);
+  if (bio != NULL)
+  {
+    BIO_set_data(bio, (void*)(intptr_t)fd);
+  }
+  return bio;
+}
+
+// ──────────────────────── TLS setup ──────────────────────────
+
+/**
+ * @brief Reject TLS options this backend cannot honour, before any socket work.
+ */
+static az_result _check_tls_options(az_mqtt3_tls_options const* tls_options)
+{
+  if ((az_span_size(tls_options->client_cert_path) > 0)
+      != (az_span_size(tls_options->client_key_path) > 0))
+  {
+    // Half a client identity would silently downgrade to server-only TLS.
+    return AZ_MQTT3_ERROR_INVALID_CONFIG;
+  }
+  return AZ_OK;
 }
 
 /**
@@ -149,30 +191,18 @@ static bool _tls_set_peer_identity(SSL* ssl, char* host)
 }
 
 /**
- * @brief Reject TLS options this backend cannot honour, before any socket work.
+ * @brief Build the TLS context and session for @p host; the socket is attached later.
  */
-static az_result _check_tls_options(az_mqtt3_tls_options const* tls_options)
-{
-  if ((az_span_size(tls_options->client_cert_path) > 0)
-      != (az_span_size(tls_options->client_key_path) > 0))
-  {
-    // Half a client identity would silently downgrade to server-only TLS.
-    return AZ_MQTT3_ERROR_INVALID_CONFIG;
-  }
-  return AZ_OK;
-}
-
-static az_result _tls_setup(
+static az_result _tls_prepare(
     az_mqtt3_transport* transport,
     az_span host,
     az_mqtt3_tls_options const* tls_options)
 {
-  bool const has_cert = az_span_size(tls_options->client_cert_path) > 0;
-
   SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
+  transport->ssl_ctx = ctx;
   if (ctx == NULL || SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION) != 1)
   {
-    return _tls_fail(ctx, NULL, AZ_MQTT3_ERROR_TRANSPORT);
+    return AZ_MQTT3_ERROR_TRANSPORT;
   }
 
   char path[256];
@@ -182,75 +212,106 @@ static az_result _tls_setup(
     rc = _span_to_cstr(tls_options->ca_cert_path, path, (int32_t)sizeof(path));
     if (az_result_failed(rc))
     {
-      return _tls_fail(ctx, NULL, rc);
+      return rc;
     }
     if (SSL_CTX_load_verify_locations(ctx, path, NULL) != 1)
     {
-      return _tls_fail(ctx, NULL, AZ_MQTT3_ERROR_TRANSPORT);
+      return AZ_MQTT3_ERROR_TRANSPORT;
     }
   }
   else if (SSL_CTX_set_default_verify_paths(ctx) != 1)
   {
-    return _tls_fail(ctx, NULL, AZ_MQTT3_ERROR_TRANSPORT);
+    return AZ_MQTT3_ERROR_TRANSPORT;
   }
 
-  if (has_cert)
+  if (az_span_size(tls_options->client_cert_path) > 0)
   {
     rc = _span_to_cstr(tls_options->client_cert_path, path, (int32_t)sizeof(path));
     if (az_result_failed(rc))
     {
-      return _tls_fail(ctx, NULL, rc);
+      return rc;
     }
     if (SSL_CTX_use_certificate_chain_file(ctx, path) != 1)
     {
-      return _tls_fail(ctx, NULL, AZ_MQTT3_ERROR_TRANSPORT);
+      return AZ_MQTT3_ERROR_TRANSPORT;
     }
     rc = _span_to_cstr(tls_options->client_key_path, path, (int32_t)sizeof(path));
     if (az_result_failed(rc))
     {
-      return _tls_fail(ctx, NULL, rc);
+      return rc;
     }
     if (SSL_CTX_use_PrivateKey_file(ctx, path, SSL_FILETYPE_PEM) != 1
         || SSL_CTX_check_private_key(ctx) != 1)
     {
-      return _tls_fail(ctx, NULL, AZ_MQTT3_ERROR_TRANSPORT);
+      return AZ_MQTT3_ERROR_TRANSPORT;
     }
   }
 
   SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
 
-  SSL* ssl = SSL_new(ctx);
-  if (ssl == NULL || SSL_set_fd(ssl, transport->socket_fd) != 1)
+  transport->ssl = SSL_new(ctx);
+  if (transport->ssl == NULL)
   {
-    return _tls_fail(ctx, ssl, AZ_MQTT3_ERROR_TRANSPORT);
+    return AZ_MQTT3_ERROR_TRANSPORT;
   }
 
   char host_str[256];
   rc = _span_to_cstr(host, host_str, (int32_t)sizeof(host_str));
   if (az_result_failed(rc))
   {
-    return _tls_fail(ctx, ssl, rc);
+    return rc;
   }
-  if (!_tls_set_peer_identity(ssl, host_str))
-  {
-    return _tls_fail(ctx, ssl, AZ_MQTT3_ERROR_TRANSPORT);
-  }
+  return _tls_set_peer_identity(transport->ssl, host_str) ? AZ_OK : AZ_MQTT3_ERROR_TRANSPORT;
+}
 
-  // SSL_VERIFY_PEER already aborts the handshake on a bad chain or name; the
-  // explicit checks keep that true even if the verify mode is ever relaxed.
-  if (SSL_connect(ssl) != 1 || SSL_get_verify_result(ssl) != X509_V_OK
-      || SSL_get0_peer_certificate(ssl) == NULL)
+/**
+ * @brief Map an OpenSSL I/O result to a wait: 1 retried after waiting, 0 timed out, -1 failed.
+ */
+static int _tls_wait(az_mqtt3_transport* transport, int ret, int64_t deadline)
+{
+  int err = SSL_get_error(transport->ssl, ret);
+  if (err != SSL_ERROR_WANT_READ && err != SSL_ERROR_WANT_WRITE)
   {
-    return _tls_fail(ctx, ssl, AZ_MQTT3_ERROR_TRANSPORT);
+    return -1;
   }
+  return _az_mqtt3_wait_fd(
+      transport->socket_fd,
+      err == SSL_ERROR_WANT_READ ? _AZ_MQTT3_WAIT_READ : _AZ_MQTT3_WAIT_WRITE,
+      _az_mqtt3_remaining_ms(deadline));
+}
 
-  transport->ssl_ctx = ctx;
-  transport->ssl = ssl;
-  return AZ_OK;
+/** @brief Drive the handshake until done, failed or @p deadline. */
+static az_result _tls_handshake(az_mqtt3_transport* transport, int64_t deadline)
+{
+  for (;;)
+  {
+    ERR_clear_error();
+    int ret = SSL_connect(transport->ssl);
+    if (ret == 1)
+    {
+      // SSL_VERIFY_PEER already aborts on a bad chain or name; checked again so
+      // it stays so if the verify mode is ever relaxed.
+      return (SSL_get_verify_result(transport->ssl) == X509_V_OK
+              && SSL_get0_peer_certificate(transport->ssl) != NULL)
+          ? AZ_OK
+          : AZ_MQTT3_ERROR_TRANSPORT;
+    }
+    int w = _tls_wait(transport, ret, deadline);
+    if (w == 0)
+    {
+      return AZ_MQTT3_ERROR_TIMEOUT;
+    }
+    if (w < 0)
+    {
+      return AZ_MQTT3_ERROR_TRANSPORT;
+    }
+  }
 }
 #endif // AZ_MQTT3_TLS_OPENSSL
 
-AZ_NODISCARD az_result az_mqtt3_transport_connect(
+// ──────────────────────── Connect ────────────────────────────
+
+AZ_NODISCARD az_result az_mqtt3_transport_connect_start(
     az_mqtt3_transport* transport,
     az_span host,
     uint16_t port,
@@ -258,13 +319,20 @@ AZ_NODISCARD az_result az_mqtt3_transport_connect(
 {
   _az_PRECONDITION_NOT_NULL(transport);
 
+  az_mqtt3_transport_close(transport);
+
 #ifdef AZ_MQTT3_TLS_OPENSSL
   if (tls_options != NULL)
   {
-    az_result const check = _check_tls_options(tls_options);
-    if (az_result_failed(check))
+    az_result rc = _check_tls_options(tls_options);
+    if (az_result_succeeded(rc))
     {
-      return check;
+      rc = _tls_prepare(transport, host, tls_options);
+    }
+    if (az_result_failed(rc))
+    {
+      az_mqtt3_transport_close(transport);
+      return rc;
     }
   }
 #else
@@ -275,58 +343,150 @@ AZ_NODISCARD az_result az_mqtt3_transport_connect(
   }
 #endif
 
-  az_result rc = _tcp_connect(transport, host, port);
+  az_result rc = _az_mqtt3_tcp_connect_start(&transport->tcp, host, port);
   if (az_result_failed(rc))
   {
+    az_mqtt3_transport_close(transport);
     return rc;
+  }
+  transport->state = _TRANSPORT_TCP;
+  return AZ_OK;
+}
+
+AZ_NODISCARD az_result
+az_mqtt3_transport_connect_poll(az_mqtt3_transport* transport, int32_t timeout_ms)
+{
+  _az_PRECONDITION_NOT_NULL(transport);
+  int64_t const deadline = _az_mqtt3_deadline(timeout_ms);
+  az_result rc = AZ_OK;
+
+  if (transport->state == _TRANSPORT_TCP)
+  {
+    rc = _az_mqtt3_tcp_connect_poll(&transport->tcp, _az_mqtt3_remaining_ms(deadline));
+    if (rc == AZ_MQTT3_ERROR_TIMEOUT)
+    {
+      return rc;
+    }
+    if (az_result_succeeded(rc))
+    {
+      transport->socket_fd = transport->tcp.fd;
+      _az_mqtt3_tcp_connect_init(&transport->tcp);
+      transport->state = _TRANSPORT_CONNECTED;
+#ifdef AZ_MQTT3_TLS_OPENSSL
+      if (transport->ssl != NULL)
+      {
+        BIO* bio = _bio_new(transport->socket_fd);
+        if (bio == NULL)
+        {
+          rc = AZ_MQTT3_ERROR_TRANSPORT;
+        }
+        else
+        {
+          SSL_set_bio(transport->ssl, bio, bio);
+          transport->state = _TRANSPORT_TLS;
+        }
+      }
+#endif
+    }
   }
 
 #ifdef AZ_MQTT3_TLS_OPENSSL
-  if (tls_options != NULL)
+  if (az_result_succeeded(rc) && transport->state == _TRANSPORT_TLS)
   {
-    rc = _tls_setup(transport, host, tls_options);
-    if (az_result_failed(rc))
+    rc = _tls_handshake(transport, deadline);
+    if (rc == AZ_MQTT3_ERROR_TIMEOUT)
     {
-      close(transport->socket_fd);
-      transport->socket_fd = -1;
       return rc;
+    }
+    if (az_result_succeeded(rc))
+    {
+      transport->state = _TRANSPORT_CONNECTED;
     }
   }
 #endif
 
+  if (az_result_succeeded(rc) && transport->state != _TRANSPORT_CONNECTED)
+  {
+    rc = AZ_MQTT3_ERROR_INVALID_STATE;
+  }
+  if (az_result_failed(rc))
+  {
+    az_mqtt3_transport_close(transport);
+    return rc;
+  }
   transport->connected = true;
   return AZ_OK;
 }
 
+AZ_NODISCARD az_result az_mqtt3_transport_connect(
+    az_mqtt3_transport* transport,
+    az_span host,
+    uint16_t port,
+    az_mqtt3_tls_options const* tls_options)
+{
+  az_result rc = az_mqtt3_transport_connect_start(transport, host, port, tls_options);
+  if (az_result_succeeded(rc))
+  {
+    rc = az_mqtt3_transport_connect_poll(transport, AZ_MQTT3_TRANSPORT_CONNECT_TIMEOUT_MS);
+    if (rc == AZ_MQTT3_ERROR_TIMEOUT)
+    {
+      az_mqtt3_transport_close(transport);
+    }
+  }
+  return rc;
+}
+
+// ──────────────────────── I/O ────────────────────────────────
+
 AZ_NODISCARD az_result az_mqtt3_transport_send(az_mqtt3_transport* transport, az_span data)
 {
   _az_PRECONDITION_NOT_NULL(transport);
+  if (!transport->connected)
+  {
+    return AZ_MQTT3_ERROR_TRANSPORT;
+  }
 
-  uint8_t* ptr = az_span_ptr(data);
+  int64_t const deadline = _az_mqtt3_deadline(AZ_MQTT3_TRANSPORT_SEND_TIMEOUT_MS);
+  uint8_t const* ptr = az_span_ptr(data);
   int32_t remaining = az_span_size(data);
 
   while (remaining > 0)
   {
-    ssize_t sent;
+    int w;
 #ifdef AZ_MQTT3_TLS_OPENSSL
     if (transport->ssl != NULL)
     {
-      sent = SSL_write(transport->ssl, ptr, remaining);
+      ERR_clear_error();
+      int n = SSL_write(transport->ssl, ptr, remaining);
+      if (n > 0)
+      {
+        ptr += n;
+        remaining -= n;
+        continue;
+      }
+      w = _tls_wait(transport, n, deadline);
     }
     else
 #endif
     {
-      sent = send(transport->socket_fd, ptr, (size_t)remaining, 0);
+      int32_t n = _az_mqtt3_send_nosignal(transport->socket_fd, ptr, remaining);
+      if (n > 0)
+      {
+        ptr += n;
+        remaining -= n;
+        continue;
+      }
+      w = n < 0 ? -1
+                : _az_mqtt3_wait_fd(
+                    transport->socket_fd, _AZ_MQTT3_WAIT_WRITE, _az_mqtt3_remaining_ms(deadline));
     }
-
-    if (sent <= 0)
+    if (w <= 0)
     {
-      return AZ_MQTT3_ERROR_TRANSPORT;
+      // A partial packet may be on the wire: the connection is unusable.
+      transport->connected = false;
+      return w == 0 ? AZ_MQTT3_ERROR_TIMEOUT : AZ_MQTT3_ERROR_TRANSPORT;
     }
-    ptr += sent;
-    remaining -= (int32_t)sent;
   }
-
   return AZ_OK;
 }
 
@@ -340,61 +500,56 @@ AZ_NODISCARD az_result az_mqtt3_transport_receive(
   _az_PRECONDITION_NOT_NULL(out_received);
 
   *out_received = AZ_SPAN_EMPTY;
-
-#ifdef AZ_MQTT3_TLS_OPENSSL
-  // Check for pending SSL data first
-  if (transport->ssl != NULL && SSL_pending(transport->ssl) > 0)
+  if (!transport->connected)
   {
-    int n = SSL_read(transport->ssl, az_span_ptr(buffer), az_span_size(buffer));
-    if (n > 0)
+    return AZ_MQTT3_ERROR_TRANSPORT;
+  }
+
+  int64_t const deadline = _az_mqtt3_deadline(timeout_ms);
+  for (;;)
+  {
+    int w;
+#ifdef AZ_MQTT3_TLS_OPENSSL
+    if (transport->ssl != NULL)
     {
-      *out_received = az_span_slice(buffer, 0, n);
-      return AZ_OK;
+      // Read first: decrypted bytes may already be buffered inside OpenSSL.
+      ERR_clear_error();
+      int n = SSL_read(transport->ssl, az_span_ptr(buffer), az_span_size(buffer));
+      if (n > 0)
+      {
+        *out_received = az_span_slice(buffer, 0, n);
+        return AZ_OK;
+      }
+      // A partial TLS record returns WANT_READ; wait for the rest within the deadline.
+      w = _tls_wait(transport, n, deadline);
+    }
+    else
+#endif
+    {
+      w = _az_mqtt3_wait_fd(
+          transport->socket_fd, _AZ_MQTT3_WAIT_READ, _az_mqtt3_remaining_ms(deadline));
+      if (w > 0)
+      {
+        int32_t n = _az_mqtt3_recv_nonblocking(
+            transport->socket_fd, az_span_ptr(buffer), az_span_size(buffer));
+        if (n > 0)
+        {
+          *out_received = az_span_slice(buffer, 0, n);
+          return AZ_OK;
+        }
+        w = n < 0 ? -1 : 1;
+      }
+    }
+    if (w == 0)
+    {
+      return AZ_OK; // Timed out: out_received stays empty.
+    }
+    if (w < 0)
+    {
+      transport->connected = false;
+      return AZ_MQTT3_ERROR_TRANSPORT;
     }
   }
-#endif
-
-  struct pollfd pfd;
-  pfd.fd = transport->socket_fd;
-  pfd.events = POLLIN;
-  pfd.revents = 0;
-
-  int poll_result = poll(&pfd, 1, timeout_ms);
-  if (poll_result < 0)
-  {
-    return AZ_MQTT3_ERROR_TRANSPORT;
-  }
-  if (poll_result == 0)
-  {
-    // Timeout: out_received is already empty
-    return AZ_OK;
-  }
-
-  ssize_t n;
-#ifdef AZ_MQTT3_TLS_OPENSSL
-  if (transport->ssl != NULL)
-  {
-    n = SSL_read(transport->ssl, az_span_ptr(buffer), az_span_size(buffer));
-  }
-  else
-#endif
-  {
-    n = recv(transport->socket_fd, az_span_ptr(buffer), (size_t)az_span_size(buffer), 0);
-  }
-
-  if (n < 0)
-  {
-    return AZ_MQTT3_ERROR_TRANSPORT;
-  }
-  if (n == 0)
-  {
-    // Connection closed
-    transport->connected = false;
-    return AZ_MQTT3_ERROR_TRANSPORT;
-  }
-
-  *out_received = az_span_slice(buffer, 0, (int32_t)n);
-  return AZ_OK;
 }
 
 void az_mqtt3_transport_close(az_mqtt3_transport* transport)
@@ -406,7 +561,10 @@ void az_mqtt3_transport_close(az_mqtt3_transport* transport)
 #ifdef AZ_MQTT3_TLS_OPENSSL
   if (transport->ssl != NULL)
   {
-    SSL_shutdown(transport->ssl);
+    if (transport->connected)
+    {
+      (void)SSL_shutdown(transport->ssl); // Best effort; non-blocking.
+    }
     SSL_free(transport->ssl);
     transport->ssl = NULL;
   }
@@ -416,10 +574,12 @@ void az_mqtt3_transport_close(az_mqtt3_transport* transport)
     transport->ssl_ctx = NULL;
   }
 #endif
+  _az_mqtt3_tcp_connect_cancel(&transport->tcp);
   if (transport->socket_fd >= 0)
   {
     close(transport->socket_fd);
     transport->socket_fd = -1;
   }
+  transport->state = _TRANSPORT_IDLE;
   transport->connected = false;
 }

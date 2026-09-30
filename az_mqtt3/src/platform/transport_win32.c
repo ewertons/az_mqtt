@@ -981,6 +981,24 @@ AZ_NODISCARD az_result az_mqtt3_transport_connect(
   return AZ_OK;
 }
 
+AZ_NODISCARD az_result az_mqtt3_transport_connect_start(
+    az_mqtt3_transport* transport,
+    az_span host,
+    uint16_t port,
+    az_mqtt3_tls_options const* tls_options)
+{
+  // Schannel connects synchronously; az_mqtt3_transport_connect_poll() only reports the result.
+  return az_mqtt3_transport_connect(transport, host, port, tls_options);
+}
+
+AZ_NODISCARD az_result
+az_mqtt3_transport_connect_poll(az_mqtt3_transport* transport, int32_t timeout_ms)
+{
+  _az_PRECONDITION_NOT_NULL(transport);
+  (void)timeout_ms;
+  return transport->connected ? AZ_OK : AZ_MQTT3_ERROR_TRANSPORT;
+}
+
 AZ_NODISCARD az_result az_mqtt3_transport_send(az_mqtt3_transport* transport, az_span data)
 {
   _az_PRECONDITION_NOT_NULL(transport);

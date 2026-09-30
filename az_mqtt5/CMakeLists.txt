@@ -46,9 +46,9 @@ set(AZ_MQTT5_TLS_BACKEND "auto" CACHE STRING "TLS backend: auto | openssl | mbed
 if(WIN32)
   list(APPEND AZ_MQTT5_SOURCES src/platform/transport_win32.c)
 elseif(AZ_MQTT5_TLS_BACKEND STREQUAL "mbedtls")
-  list(APPEND AZ_MQTT5_SOURCES src/platform/transport_mbedtls.c)
+  list(APPEND AZ_MQTT5_SOURCES src/platform/transport_mbedtls.c src/platform/az_mqtt5_socket_posix.c)
 else()
-  list(APPEND AZ_MQTT5_SOURCES src/platform/transport_posix.c)
+  list(APPEND AZ_MQTT5_SOURCES src/platform/transport_posix.c src/platform/az_mqtt5_socket_posix.c)
 endif()
 
 add_library(az_mqtt5_client ${AZ_MQTT5_SOURCES})
@@ -107,6 +107,9 @@ endif()
 # Platform-specific link libraries
 if(WIN32)
   target_link_libraries(az_mqtt5_client PRIVATE ws2_32)
+else()
+  find_package(Threads REQUIRED)
+  target_link_libraries(az_mqtt5_client PRIVATE Threads::Threads)
 endif()
 
 add_library(az_mqtt5::client ALIAS az_mqtt5_client)
