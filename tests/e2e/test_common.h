@@ -21,7 +21,13 @@ typedef struct
 {
   uint8_t send_buf[E2E_SEND_BUF_SIZE];
   uint8_t recv_buf[E2E_RECV_BUF_SIZE];
-  uint8_t transport_buf[E2E_TRANSPORT_BUF_SIZE];
+  union
+  {
+    uint8_t bytes[E2E_TRANSPORT_BUF_SIZE];
+    void* align_pointer;
+    int64_t align_int64;
+    double align_double;
+  } transport_buf; /**< Aligned for the transport's members. */
 
 #if AZ_MQTT_TEST_VERSION == 5
   AZ_MQTT_T(user_property) connack_props[E2E_MAX_USER_PROPS];

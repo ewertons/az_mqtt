@@ -21,8 +21,17 @@
 
 #define TRANSPORT_BUF_SIZE (256 * 1024)
 
-static uint8_t s_transport3[TRANSPORT_BUF_SIZE];
-static uint8_t s_transport5[TRANSPORT_BUF_SIZE];
+/** @brief Transport storage, aligned for the transport's members. */
+typedef union
+{
+  uint8_t bytes[TRANSPORT_BUF_SIZE];
+  void* align_pointer;
+  int64_t align_int64;
+  double align_double;
+} transport_storage;
+
+static transport_storage s_transport3;
+static transport_storage s_transport5;
 static uint8_t s_send3[1024];
 static uint8_t s_recv3[1024];
 static uint8_t s_send5[1024];
@@ -54,8 +63,8 @@ static void test_mqtt3_publishes_mqtt5_receives(void** state)
 {
   (void)state;
   assert_true(az_mqtt_transport_sizeof() <= TRANSPORT_BUF_SIZE);
-  az_mqtt_transport* t3 = (az_mqtt_transport*)s_transport3;
-  az_mqtt_transport* t5 = (az_mqtt_transport*)s_transport5;
+  az_mqtt_transport* t3 = (az_mqtt_transport*)s_transport3.bytes;
+  az_mqtt_transport* t5 = (az_mqtt_transport*)s_transport5.bytes;
   assert_int_equal(az_mqtt_transport_init(t3), AZ_OK);
   assert_int_equal(az_mqtt_transport_init(t5), AZ_OK);
 

@@ -139,18 +139,18 @@ int main(int argc, char* argv[])
   printf("MQTT5 Sample: Connecting to %s:%d\n", host, port);
 
   int32_t transport_size = az_mqtt_transport_sizeof();
-  if (transport_size > (int32_t)sizeof(s_transport_buffer))
+  if (transport_size > (int32_t)sizeof(s_transport_buffer.bytes))
   {
     printf(
         "ERROR: transport buffer too small (need=%d, have=%d). "
         "Increase TRANSPORT_BUFFER_SIZE in az_mqtt_sample_config.h\n",
         transport_size,
-        (int)sizeof(s_transport_buffer));
+        (int)sizeof(s_transport_buffer.bytes));
     return 1;
   }
 
   // Initialize transport
-  az_mqtt_transport* transport = (az_mqtt_transport*)s_transport_buffer;
+  az_mqtt_transport* transport = (az_mqtt_transport*)s_transport_buffer.bytes;
   az_result rc = az_mqtt_transport_init(transport);
   if (az_result_failed(rc))
   {

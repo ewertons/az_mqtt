@@ -201,7 +201,7 @@ static void test_connect_failure(void** state)
 
   az_mqtt_e2e_fixture_reset(&s_fixture);
 
-  az_mqtt_transport* transport = (az_mqtt_transport*)s_fixture.transport_buf;
+  az_mqtt_transport* transport = (az_mqtt_transport*)s_fixture.transport_buf.bytes;
   az_result rc = az_mqtt_transport_init(transport);
   assert_int_equal(rc, AZ_OK);
 

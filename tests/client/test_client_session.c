@@ -448,6 +448,24 @@ static void an_auth_packet_is_a_protocol_error_only_in_mqttv3(void** state)
   _teardown(&f);
 }
 
+static void a_server_disconnect_is_a_protocol_error_only_in_mqttv3(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.send_empty_disconnect = true;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  (void)_pump_until_closed(&f, 3000);
+  assert_int_equal(g.closed, 1);
+#if AZ_MQTT_TEST_VERSION == 5
+  assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_SERVER_DISCONNECTED);
+#else
+  assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_PROTOCOL);
+#endif
+  _teardown(&f);
+}
+
 static void an_explicit_server_keep_alive_of_zero_disables_pings(void** state)
 {
   (void)state;
@@ -521,6 +539,7 @@ int main(void)
     cmocka_unit_test(publish_properties_never_exceed_the_buffers),
 #endif
     cmocka_unit_test(an_auth_packet_is_a_protocol_error_only_in_mqttv3),
+    cmocka_unit_test(a_server_disconnect_is_a_protocol_error_only_in_mqttv3),
     cmocka_unit_test(an_explicit_server_keep_alive_of_zero_disables_pings),
     cmocka_unit_test(reconnecting_from_on_connection_closed_is_safe),
   };

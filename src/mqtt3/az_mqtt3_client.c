@@ -162,13 +162,7 @@ static az_result _dispatch_packet(
       return _handle_suback(client, body);
     case AZ_MQTT_PACKET_TYPE_PINGRESP:
       return AZ_OK;
-    case AZ_MQTT_PACKET_TYPE_DISCONNECT:
-      // Not sent by 3.1.1 servers; an empty one is accepted as the server closing.
-      if (az_span_size(body) != 0)
-        return AZ_MQTT_ERROR_MALFORMED_PACKET;
-      _az_mqtt_core_close(core, AZ_MQTT_ERROR_SERVER_DISCONNECTED);
-      return AZ_OK;
-    default: // Including AUTH (type 15), reserved in 3.1.1.
+    default: // Including DISCONNECT (client-to-server only) and AUTH (reserved) in 3.1.1.
       return AZ_MQTT_ERROR_PROTOCOL;
   }
 }

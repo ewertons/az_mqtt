@@ -60,6 +60,8 @@ typedef struct
   int publish_properties;
   /** @brief After CONNACK, send an empty AUTH packet (valid in MQTT 5, reserved type in 3.1.1). */
   bool send_auth;
+  /** @brief After CONNACK, send an empty DISCONNECT (valid in MQTT 5, client-only in 3.1.1). */
+  bool send_empty_disconnect;
 } test_server_options;
 
 typedef struct test_server test_server;

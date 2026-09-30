@@ -18,6 +18,13 @@
 // Static buffers (zero allocation).
 static uint8_t s_send_buffer[SEND_BUFFER_SIZE];
 static uint8_t s_recv_buffer[RECV_BUFFER_SIZE];
-static uint8_t s_transport_buffer[TRANSPORT_BUFFER_SIZE];
+// Aligned for the transport's pointer and 64-bit members.
+static union
+{
+  uint8_t bytes[TRANSPORT_BUFFER_SIZE];
+  void* align_pointer;
+  int64_t align_int64;
+  double align_double;
+} s_transport_buffer;
 
 #endif // AZ_MQTT_SAMPLE_CONFIG_H

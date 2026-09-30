@@ -385,6 +385,14 @@ static void _serve(test_server* s, conn* c)
       return;
     }
   }
+  if (s->options.send_empty_disconnect)
+  {
+    static const uint8_t disconnect[] = { 0xE0, 0x00 };
+    if (!_write(c, disconnect, (int)sizeof(disconnect)))
+    {
+      return;
+    }
+  }
   if (s->options.send_auth)
   {
     static const uint8_t auth[] = { 0xF0, 0x00 };

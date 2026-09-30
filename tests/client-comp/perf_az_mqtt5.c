@@ -54,7 +54,14 @@ static uint8_t s_recv_buf[RECV_BUFFER_SIZE];
 // Large enough for either TLS backend. The transport struct embeds backend
 // state directly (OpenSSL: a few pointers; mbedTLS: full ssl_context,
 // ssl_config, entropy, ctr_drbg, x509_crt, pk_context).
-static uint8_t s_transport_buf[16384];
+// Aligned for the transport's pointer and 64-bit members.
+static union
+{
+  uint8_t bytes[16384];
+  void* align_pointer;
+  int64_t align_int64;
+  double align_double;
+} s_transport_buf;
 
 static az_mqtt5_user_property s_connack_up[MAX_USER_PROPERTIES];
 static az_mqtt5_user_property s_pub_up[MAX_USER_PROPERTIES];
@@ -211,7 +218,7 @@ int main(int argc, char* argv[])
   resource_snapshot snap_baseline = _snap();
 
   // ── init transport ──
-  az_mqtt_transport* transport = (az_mqtt_transport*)s_transport_buf;
+  az_mqtt_transport* transport = (az_mqtt_transport*)s_transport_buf.bytes;
   az_result rc = az_mqtt_transport_init(transport);
   if (az_result_failed(rc))
   {

@@ -25,7 +25,7 @@ az_result az_mqtt_e2e_init_client(
     return AZ_ERROR_NOT_ENOUGH_SPACE;
   }
 
-  az_mqtt_transport* transport = (az_mqtt_transport*)fixture->transport_buf;
+  az_mqtt_transport* transport = (az_mqtt_transport*)fixture->transport_buf.bytes;
   az_result rc = az_mqtt_transport_init(transport);
   if (az_result_failed(rc))
   {
