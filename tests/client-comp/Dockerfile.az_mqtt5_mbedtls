@@ -1,0 +1,48 @@
+# Dockerfile.az_mqtt5_mbedtls – az_mqtt5 (C) perf test built with mbedTLS TLS backend.
+#
+# Build context must be the repository root.
+# Usage:
+#   docker build -f tests/client-comp/Dockerfile.az_mqtt5_mbedtls -t perf-az-mqtt5-mbedtls:latest .
+
+# ── Build stage ───────────────────────────────────────────────
+FROM ubuntu:24.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git ca-certificates \
+        libmbedtls-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy project tree (needed for library + deps)
+COPY CMakeLists.txt ./
+COPY deps/ ./deps/
+COPY inc/ ./inc/
+COPY src/ ./src/
+COPY tests/client-comp/CMakeLists.txt tests/client-comp/
+COPY tests/client-comp/perf_az_mqtt5.c tests/client-comp/
+COPY tests/client-comp/perf_paho.c tests/client-comp/
+
+# Build only the perf binary with mbedTLS TLS backend.
+RUN cmake -S tests/client-comp -B out -DCMAKE_BUILD_TYPE=Release \
+        -DAZ_MQTT_ROOT=/build \
+        -DAZ_MQTT_TLS_BACKEND=mbedtls \
+        -DAZ_MQTT_BUILD_SAMPLES=OFF \
+        -DAZ_MQTT_BUILD_TESTS=OFF \
+    && cmake --build out --config Release --target perf_az_mqtt5
+
+# ── Runtime stage ─────────────────────────────────────────────
+FROM ubuntu:24.04
+
+# mbedTLS runtime libraries. We install libmbedtls-dev to pull in whatever
+# SONAMEs Ubuntu's current mbedtls package provides (3.x in 24.04); this is
+# simpler than hard-coding version-specific runtime package names that change
+# between Ubuntu releases.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libmbedtls-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/out/perf_az_mqtt5 /usr/local/bin/perf_az_mqtt5
+
+ENTRYPOINT ["perf_az_mqtt5"]
+CMD ["localhost", "1883", "10000", "128", "30"]
