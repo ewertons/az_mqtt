@@ -117,11 +117,16 @@ jobs:
       - name: Install Mosquitto
         shell: pwsh
         run: |
-          choco install mosquitto -y --no-progress *> choco.log
-          if ($LASTEXITCODE -ne 0) {
-            Get-Content choco.log -Tail 15 | ForEach-Object { "::error::$_" }
-            exit 1
-          }
+          # Official installer, newest 2.0.x (the Chocolatey package is gone).
+          $base = "https://mosquitto.org/files/binary/win64/"
+          $list = (Invoke-WebRequest -UseBasicParsing $base).Content
+          $file = [regex]::Matches($list, 'mosquitto-2\.0\.(\d+)-install-windows-x64\.exe') |
+            Sort-Object { [int]$_.Groups[1].Value } | Select-Object -Last 1 -ExpandProperty Value
+          if (-not $file) { "::error::No mosquitto 2.0.x installer found at $base"; exit 1 }
+          "::notice::Installing $file"
+          Invoke-WebRequest -UseBasicParsing "$base$file" -OutFile mosquitto-setup.exe
+          Start-Process .\mosquitto-setup.exe -ArgumentList '/S' -Wait
+          if (-not (Test-Path "C:\Program Files\mosquitto\mosquitto.exe")) { "::error::mosquitto.exe not installed"; exit 1 }
           "C:\Program Files\mosquitto" | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Start broker
         shell: bash
