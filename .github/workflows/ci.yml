@@ -120,18 +120,21 @@ jobs:
         timeout-minutes: 5
         run: |
           $ProgressPreference = 'SilentlyContinue' # the progress bar slows Invoke-WebRequest badly
-          # Official installer, newest 2.0.x (the Chocolatey package is gone).
+          # Official NSIS installer, unpacked with 7-Zip (the Chocolatey package is gone, and
+          # the installer does not finish unattended). Newest 2.0.x release; 2.0.9x are snapshots.
           $base = "https://mosquitto.org/files/binary/win64/"
           $list = (Invoke-WebRequest -UseBasicParsing $base).Content
-          $file = [regex]::Matches($list, 'mosquitto-2\.0\.(\d+)-install-windows-x64\.exe') |
-            Sort-Object { [int]$_.Groups[1].Value } | Select-Object -Last 1 -ExpandProperty Value
-          if (-not $file) { "::error::No mosquitto 2.0.x installer found at $base"; exit 1 }
-          "::notice::Installing $file"
+          $all = [regex]::Matches($list, 'mosquitto-2\.0\.(\d+)-install-windows-x64\.exe') |
+            Where-Object { [int]$_.Groups[1].Value -lt 90 } | Sort-Object { [int]$_.Groups[1].Value }
+          $file = $all | Select-Object -Last 1 -ExpandProperty Value
+          if (-not $file) { "::error::No mosquitto 2.0.x release installer found at $base"; exit 1 }
+          "::notice::Using $file"
           Invoke-WebRequest -UseBasicParsing "$base$file" -OutFile mosquitto-setup.exe
-          "::notice::Downloaded $((Get-Item mosquitto-setup.exe).Length) bytes"
-          $p = Start-Process .\mosquitto-setup.exe -ArgumentList '/S' -PassThru
-          if (-not $p.WaitForExit(120000)) { "::error::installer did not finish in 2 min"; exit 1 }
-          if (-not (Test-Path "C:\Program Files\mosquitto\mosquitto.exe")) { "::error::mosquitto.exe not installed"; exit 1 }
+          7z x mosquitto-setup.exe "-oC:\Program Files\mosquitto" -y *> 7z.log
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path "C:\Program Files\mosquitto\mosquitto.exe")) {
+            Get-Content 7z.log -Tail 10 | ForEach-Object { "::error::$_" }
+            exit 1
+          }
           "C:\Program Files\mosquitto" | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Start broker
         shell: bash
