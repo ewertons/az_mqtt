@@ -19,6 +19,7 @@ function(add_az_mqtt3_e2e_test target_name source_file)
       cmocka
   )
 
+  az_mqtt3_apply_warnings(${target_name})
   add_test(NAME ${target_name} COMMAND ${target_name})
 endfunction()
 
@@ -39,11 +40,12 @@ if(WIN32)
       E2E_WIN32_TLS_BACKEND_AVAILABLE=1
       E2E_CA_CERT_PATH="${E2E_CA_CERT_PATH}")
 elseif(UNIX)
-  if(OpenSSL_FOUND)
+  # The test uses only the az_mqtt3 API, so it runs on any TLS backend.
+  if(AZ_MQTT3_TLS_BACKEND STREQUAL "mbedtls" OR OpenSSL_FOUND)
     file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}/tests/broker/certs/ca.crt" E2E_CA_CERT_PATH)
     add_az_mqtt3_e2e_test(az_mqtt3_test_ssl_posix test_ssl_posix.c)
     target_compile_definitions(az_mqtt3_test_ssl_posix PRIVATE E2E_CA_CERT_PATH="${E2E_CA_CERT_PATH}")
   else()
-    message(STATUS "Skipping POSIX TLS e2e tests: OpenSSL not found")
+    message(STATUS "Skipping POSIX TLS e2e tests: no TLS backend")
   endif()
 endif()

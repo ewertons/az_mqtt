@@ -9,6 +9,7 @@ add_library(az_mqtt5_test_server STATIC test_server.c)
 target_include_directories(az_mqtt5_test_server PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(az_mqtt5_test_server PRIVATE _DEFAULT_SOURCE)
 target_link_libraries(az_mqtt5_test_server PUBLIC OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
+az_mqtt5_apply_warnings(az_mqtt5_test_server)
 
 string(TOUPPER "${AZ_MQTT5_TLS_BACKEND_RESOLVED}" _backend)
 set(AZ_MQTT5_TEST_BACKEND_DEFINE "AZ_MQTT5_TEST_BACKEND_${_backend}" PARENT_SCOPE)
@@ -27,6 +28,7 @@ target_link_libraries(az_mqtt5_client_short_timeouts PUBLIC ${_libs})
 target_compile_definitions(az_mqtt5_client_short_timeouts PUBLIC
   AZ_MQTT5_TRANSPORT_SEND_TIMEOUT_MS=1000 AZ_MQTT5_TRANSPORT_CONNECT_TIMEOUT_MS=1000)
 target_include_directories(az_mqtt5_client_short_timeouts PUBLIC ${PROJECT_SOURCE_DIR}/inc)
+az_mqtt5_apply_warnings(az_mqtt5_client_short_timeouts)
 
 # add_az_mqtt5_local_test(<target> <source> [<client library>]): a cmocka test
 # against the in-process peer. Internal headers (src/platform) are visible.
@@ -40,6 +42,7 @@ function(add_az_mqtt5_local_test target_name source_file)
     ${cmocka_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/platform)
   target_compile_definitions(${target_name} PRIVATE ${AZ_MQTT5_TEST_BACKEND_DEFINE} _DEFAULT_SOURCE)
   target_link_libraries(${target_name} PRIVATE ${_client} az_mqtt5_test_server cmocka)
+  az_mqtt5_apply_warnings(${target_name})
   add_test(NAME ${target_name} COMMAND ${target_name})
   # A regression here tends to hang rather than fail.
   set_tests_properties(${target_name} PROPERTIES TIMEOUT 120)
