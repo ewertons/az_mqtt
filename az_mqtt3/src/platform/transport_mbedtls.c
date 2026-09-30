@@ -24,7 +24,7 @@
 #include <unistd.h>
 
 #ifdef AZ_MQTT3_TLS_MBEDTLS
-#include <mbedtls/build_info.h>
+#include <mbedtls/version.h> // MBEDTLS_VERSION_MAJOR in 2.x, 3.x and 4.x
 #include <mbedtls/net_sockets.h>
 #include <mbedtls/pk.h>
 #include <mbedtls/platform.h>

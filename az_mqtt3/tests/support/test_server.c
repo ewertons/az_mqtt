@@ -410,6 +410,10 @@ static void _serve(test_server* s, conn* c)
     {
       // SUBACK: same packet id, then reason codes (MQTT 5 adds an empty property length).
       int codes = s->options.suback_codes > 0 ? s->options.suback_codes : 1;
+      if (codes > 64)
+      {
+        codes = 64; // Bounded before it sizes both the length byte and the payload.
+      }
       uint8_t suback[4 + 1 + 64];
       int n = 0;
       suback[n++] = 0x90;
@@ -420,7 +424,7 @@ static void _serve(test_server* s, conn* c)
       {
         suback[n++] = 0x00;
       }
-      for (int i = 0; i < codes && i < 64; i++)
+      for (int i = 0; i < codes; i++)
       {
         suback[n++] = 0x00;
       }
