@@ -470,10 +470,10 @@ void test_server_stop(test_server* s)
   free(s);
 }
 
-uint16_t test_server_port(test_server* s) { return s->port; }
-char const* test_server_ca_path(test_server* s) { return s->ca_path; }
-char const* test_server_client_cert_path(test_server* s) { return s->client_cert_path; }
-char const* test_server_client_key_path(test_server* s) { return s->client_key_path; }
+uint16_t test_server_port(test_server const* s) { return s->port; }
+char const* test_server_ca_path(test_server const* s) { return s->ca_path; }
+char const* test_server_client_cert_path(test_server const* s) { return s->client_cert_path; }
+char const* test_server_client_key_path(test_server const* s) { return s->client_key_path; }
 int test_server_accepted(test_server* s) { return _get(s, &s->accepted); }
 int test_server_handshakes(test_server* s) { return _get(s, &s->handshakes); }
 bool test_server_saw_client_cert(test_server* s)
