@@ -160,6 +160,8 @@ jobs:
           }
           Step configure { cmake -S ${{ matrix.lib }} -B build/win -A x64 "-DAZ_${opt}_BUILD_TESTS=ON" "-DAZ_${opt}_BUILD_SAMPLES=ON" "-DAZ_${opt}_WARNINGS_AS_ERRORS=ON" }
           Step build { cmake --build build/win --config Debug }
+          $env:AZ_MQTT5_RUN_TLS_E2E = '1' # test_ssl_win32 is opt-in
+          $env:AZ_MQTT3_RUN_TLS_E2E = '1'
           Step test { ctest --test-dir build/win -C Debug --output-on-failure --timeout 300 }
           $summary = Select-String -Path step.log -Pattern 'tests passed' | Select-Object -First 1
           "::notice title=${{ matrix.lib }} schannel::$($summary.Line)"
