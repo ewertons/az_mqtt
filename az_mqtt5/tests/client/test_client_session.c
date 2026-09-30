@@ -20,6 +20,9 @@
 
 #include "test_server.h"
 
+/** @brief Deliberately discard a result (gcc ignores a (void) cast on warn_unused_result). */
+static void _ignore(az_result rc) { (void)rc; }
+
 #define ARRAY_SPAN(a) az_span_create((uint8_t*)(a), (int32_t)sizeof(a))
 
 typedef struct
@@ -143,7 +146,7 @@ static void _setup(fixture* f, test_server_options const* so, uint16_t keep_aliv
 
 static void _teardown(fixture* f)
 {
-  (void)az_mqtt5_client_disconnect(&f->client, AZ_MQTT5_REASON_NORMAL_DISCONNECTION);
+  _ignore(az_mqtt5_client_disconnect(&f->client, AZ_MQTT5_REASON_NORMAL_DISCONNECTION));
   free(f->transport);
   test_server_stop(f->server);
 }
@@ -183,7 +186,7 @@ static void a_long_process_loop_wait_still_pings_on_time(void** state)
   assert_true(elapsed >= 900 && elapsed < 2500);
   for (int i = 0; i < 20 && test_server_pingreqs(f.server) == 0; i++)
   {
-    (void)az_mqtt5_client_process_loop(&f.client, 50);
+    _ignore(az_mqtt5_client_process_loop(&f.client, 50));
   }
   assert_int_equal(test_server_pingreqs(f.server), 1);
   assert_int_equal(az_mqtt5_client_get_state(&f.client), AZ_MQTT5_CLIENT_STATE_CONNECTED);
@@ -237,7 +240,7 @@ static void server_keep_alive_overrides_the_clients(void** state)
   int64_t const end = _now_ms() + 2500;
   while (_now_ms() < end)
   {
-    (void)az_mqtt5_client_process_loop(&f.client, 100);
+    _ignore(az_mqtt5_client_process_loop(&f.client, 100));
   }
 #if AZ_MQTT5_PROTOCOL_VERSION == 5
   assert_true(test_server_pingreqs(f.server) >= 1);
@@ -412,7 +415,7 @@ static void reconnecting_from_on_connection_closed_is_safe(void** state)
   // First end: the callback reconnects synchronously.
   for (int i = 0; i < 30 && g.closed == 0; i++)
   {
-    (void)az_mqtt5_client_process_loop(&f.client, 100);
+    _ignore(az_mqtt5_client_process_loop(&f.client, 100));
   }
   assert_int_equal(g.closed, 1);
   assert_int_equal(g.reconnect_rc, AZ_OK);

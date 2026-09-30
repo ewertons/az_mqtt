@@ -81,18 +81,18 @@ char const* test_server_client_cert_path(test_server const* server);
 char const* test_server_client_key_path(test_server const* server);
 
 /** @brief TCP connections accepted so far. */
-int test_server_accepted(test_server const* server);
+int test_server_accepted(test_server* server);
 
 /** @brief TLS handshakes completed so far (server side). */
-int test_server_handshakes(test_server const* server);
+int test_server_handshakes(test_server* server);
 
 /** @brief Whether the last completed handshake carried a client certificate. */
-bool test_server_saw_client_cert(test_server const* server);
+bool test_server_saw_client_cert(test_server* server);
 
 /** @brief PINGREQs received so far. */
-int test_server_pingreqs(test_server const* server);
+int test_server_pingreqs(test_server* server);
 
 /** @brief Whether the client closed the last connection (orderly or not). */
-bool test_server_client_closed(test_server const* server);
+bool test_server_client_closed(test_server* server);
 
 #endif // AZ_MQTT3_TEST_SERVER_H
