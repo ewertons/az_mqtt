@@ -19,6 +19,7 @@ function(add_az_mqtt3_e2e_test target_name source_file)
       cmocka
   )
 
+  az_mqtt3_apply_warnings(${target_name})
   add_test(NAME ${target_name} COMMAND ${target_name})
 endfunction()
 
