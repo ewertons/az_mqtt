@@ -73,4 +73,11 @@ if [ "${profile}" = hardened ]; then
   echo "Hardening checks passed"
 fi
 
-ctest --test-dir "${build}" --output-on-failure --timeout 300
+log="${build}/ctest.log"
+set +e
+ctest --test-dir "${build}" --output-on-failure --timeout 300 2>&1 | tee "${log}"
+rc=${PIPESTATUS[0]}
+set -e
+# Summary as a GitHub annotation (harmless elsewhere).
+echo "::notice title=${lib} ${tls} ${profile}::$(grep -E 'tests passed' "${log}" || echo 'no ctest summary')"
+exit "${rc}"
