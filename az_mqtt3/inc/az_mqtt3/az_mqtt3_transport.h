@@ -37,7 +37,13 @@ typedef struct az_mqtt3_transport az_mqtt3_transport;
  * @p native_config is an `SSL_CTX*` (OpenSSL) or `mbedtls_ssl_config*`
  * (mbedTLS), already holding what az_mqtt3_tls_options asked for. Use it for
  * what the options do not cover, e.g. `esp_crt_bundle_attach()` on ESP-IDF.
- * Server verification stays mandatory. A failure aborts the connect with it.
+ * A failure aborts the connect with it.
+ *
+ * The hook is trusted code: with the native configuration it can change how
+ * the server is verified (a certificate bundle does so through a verify
+ * callback). Afterwards the transport re-requires verification and checks its
+ * result, which catches a hook that switches verification off, but not one
+ * that installs a permissive verify callback.
  */
 typedef az_result (*az_mqtt3_tls_configure_fn)(void* native_config, void* context);
 

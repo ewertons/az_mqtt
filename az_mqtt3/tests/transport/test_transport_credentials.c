@@ -29,6 +29,7 @@
 #include <mbedtls/pk.h>
 #include <mbedtls/ssl.h>
 #include <mbedtls/x509_crt.h>
+#include <mbedtls/psa_util.h>
 #include <psa/crypto.h>
 #endif
 
@@ -285,7 +286,7 @@ static void a_failing_configure_hook_aborts_before_connecting(void** state)
   _teardown(&f);
 }
 
-static void the_configure_hook_cannot_turn_verification_off(void** state)
+static void a_configure_hook_turning_verification_off_is_caught(void** state)
 {
   (void)state;
   test_server_options o = test_server_options_default();
@@ -340,14 +341,28 @@ static void a_psa_key_is_used_or_refused(void** state)
   az_mqtt3_tls_options t = az_mqtt3_tls_options_default();
   t.ca_cert_pem = _pem(f.ca);
   t.client_cert_pem = _pem(f.cert);
-#if defined(AZ_MQTT3_TEST_BACKEND_MBEDTLS) && MBEDTLS_VERSION_MAJOR >= 4
+#if defined(AZ_MQTT3_TEST_BACKEND_MBEDTLS) \
+    && (MBEDTLS_VERSION_MAJOR >= 4 || defined(MBEDTLS_USE_PSA_CRYPTO))
   // Import the key into PSA and hand over only its id, as an HSM, secure
   // element or ESP32 DS driver would.
   assert_int_equal(psa_crypto_init(), PSA_SUCCESS);
   mbedtls_pk_context pk;
   mbedtls_pk_init(&pk);
+#if MBEDTLS_VERSION_MAJOR >= 4
   assert_int_equal(
       mbedtls_pk_parse_key(&pk, (unsigned char const*)f.key, strlen(f.key) + 1, NULL, 0), 0);
+#else
+  assert_int_equal(
+      mbedtls_pk_parse_key(
+          &pk,
+          (unsigned char const*)f.key,
+          strlen(f.key) + 1,
+          NULL,
+          0,
+          mbedtls_psa_get_random,
+          MBEDTLS_PSA_RANDOM_STATE),
+      0);
+#endif
   psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
   assert_int_equal(mbedtls_pk_get_psa_attributes(&pk, PSA_KEY_USAGE_SIGN_HASH, &attr), 0);
   mbedtls_svc_key_id_t id = MBEDTLS_SVC_KEY_ID_INIT;
@@ -359,7 +374,7 @@ static void a_psa_key_is_used_or_refused(void** state)
   assert_true(test_server_saw_client_cert(f.server));
   (void)psa_destroy_key(id);
 #else
-  // OpenSSL has no PSA; mbedTLS 3.x needs MBEDTLS_USE_PSA_CRYPTO (off by default).
+  // OpenSSL has no PSA; mbedTLS 3.x without MBEDTLS_USE_PSA_CRYPTO (the default) neither.
   t.client_key_psa_id = 1;
   assert_int_equal(_connect(&f, &t), AZ_MQTT3_ERROR_NOT_SUPPORTED);
   assert_int_equal(test_server_accepted(f.server), 0);
@@ -376,7 +391,7 @@ int main(void)
     cmocka_unit_test(conflicting_sources_are_refused_before_connecting),
     cmocka_unit_test(the_configure_hook_can_install_trust),
     cmocka_unit_test(a_failing_configure_hook_aborts_before_connecting),
-    cmocka_unit_test(the_configure_hook_cannot_turn_verification_off),
+    cmocka_unit_test(a_configure_hook_turning_verification_off_is_caught),
     cmocka_unit_test(a_key_uri_is_used_or_refused),
     cmocka_unit_test(a_psa_key_is_used_or_refused),
   };
