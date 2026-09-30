@@ -18,8 +18,10 @@
 #include <unistd.h>
 
 #ifdef AZ_MQTT3_TLS_OPENSSL
+#include <arpa/inet.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#include <openssl/x509v3.h>
 #endif
 
 // ──────────────────────── Platform-specific transport ────────
@@ -111,100 +113,135 @@ static az_result _tcp_connect(az_mqtt3_transport* transport, az_span host, uint1
 }
 
 #ifdef AZ_MQTT3_TLS_OPENSSL
+/**
+ * @brief Fail the setup: free what was allocated and return @p rc.
+ */
+static az_result _tls_fail(SSL_CTX* ctx, SSL* ssl, az_result rc)
+{
+  if (ssl != NULL)
+  {
+    SSL_free(ssl);
+  }
+  if (ctx != NULL)
+  {
+    SSL_CTX_free(ctx);
+  }
+  return rc;
+}
+
+/**
+ * @brief Pin the peer identity the certificate must match.
+ *
+ * An IP literal is matched against iPAddress SANs and gets no SNI (RFC 6066);
+ * anything else is matched as a DNS name and sent as SNI.
+ */
+static bool _tls_set_peer_identity(SSL* ssl, char* host)
+{
+  X509_VERIFY_PARAM* param = SSL_get0_param(ssl);
+  unsigned char addr[16];
+  if (inet_pton(AF_INET, host, addr) == 1 || inet_pton(AF_INET6, host, addr) == 1)
+  {
+    return X509_VERIFY_PARAM_set1_ip_asc(param, host) == 1;
+  }
+  X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+  return X509_VERIFY_PARAM_set1_host(param, host, 0) == 1
+      && SSL_set_tlsext_host_name(ssl, host) == 1;
+}
+
+/**
+ * @brief Reject TLS options this backend cannot honour, before any socket work.
+ */
+static az_result _check_tls_options(az_mqtt3_tls_options const* tls_options)
+{
+  if ((az_span_size(tls_options->client_cert_path) > 0)
+      != (az_span_size(tls_options->client_key_path) > 0))
+  {
+    // Half a client identity would silently downgrade to server-only TLS.
+    return AZ_MQTT3_ERROR_INVALID_CONFIG;
+  }
+  return AZ_OK;
+}
+
 static az_result _tls_setup(
     az_mqtt3_transport* transport,
     az_span host,
     az_mqtt3_tls_options const* tls_options)
 {
+  bool const has_cert = az_span_size(tls_options->client_cert_path) > 0;
+
   SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
-  if (ctx == NULL)
+  if (ctx == NULL || SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION) != 1)
   {
-    return AZ_MQTT3_ERROR_TRANSPORT;
+    return _tls_fail(ctx, NULL, AZ_MQTT3_ERROR_TRANSPORT);
   }
 
-  SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
-
+  char path[256];
+  az_result rc;
   if (az_span_size(tls_options->ca_cert_path) > 0)
   {
-    char ca_path[256];
-    az_result rc = _span_to_cstr(tls_options->ca_cert_path, ca_path, (int32_t)sizeof(ca_path));
+    rc = _span_to_cstr(tls_options->ca_cert_path, path, (int32_t)sizeof(path));
     if (az_result_failed(rc))
     {
-      SSL_CTX_free(ctx);
-      return rc;
+      return _tls_fail(ctx, NULL, rc);
     }
-    if (SSL_CTX_load_verify_locations(ctx, ca_path, NULL) != 1)
+    if (SSL_CTX_load_verify_locations(ctx, path, NULL) != 1)
     {
-      SSL_CTX_free(ctx);
-      return AZ_MQTT3_ERROR_TRANSPORT;
+      return _tls_fail(ctx, NULL, AZ_MQTT3_ERROR_TRANSPORT);
     }
   }
-  else
+  else if (SSL_CTX_set_default_verify_paths(ctx) != 1)
   {
-    SSL_CTX_set_default_verify_paths(ctx);
+    return _tls_fail(ctx, NULL, AZ_MQTT3_ERROR_TRANSPORT);
   }
 
-  if (az_span_size(tls_options->client_cert_path) > 0)
+  if (has_cert)
   {
-    char cert_path[256];
-    az_result rc
-        = _span_to_cstr(tls_options->client_cert_path, cert_path, (int32_t)sizeof(cert_path));
+    rc = _span_to_cstr(tls_options->client_cert_path, path, (int32_t)sizeof(path));
     if (az_result_failed(rc))
     {
-      SSL_CTX_free(ctx);
-      return rc;
+      return _tls_fail(ctx, NULL, rc);
     }
-    if (SSL_CTX_use_certificate_chain_file(ctx, cert_path) != 1)
+    if (SSL_CTX_use_certificate_chain_file(ctx, path) != 1)
     {
-      SSL_CTX_free(ctx);
-      return AZ_MQTT3_ERROR_TRANSPORT;
+      return _tls_fail(ctx, NULL, AZ_MQTT3_ERROR_TRANSPORT);
     }
-  }
-
-  if (az_span_size(tls_options->client_key_path) > 0)
-  {
-    char key_path[256];
-    az_result rc
-        = _span_to_cstr(tls_options->client_key_path, key_path, (int32_t)sizeof(key_path));
+    rc = _span_to_cstr(tls_options->client_key_path, path, (int32_t)sizeof(path));
     if (az_result_failed(rc))
     {
-      SSL_CTX_free(ctx);
-      return rc;
+      return _tls_fail(ctx, NULL, rc);
     }
-    if (SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) != 1)
+    if (SSL_CTX_use_PrivateKey_file(ctx, path, SSL_FILETYPE_PEM) != 1
+        || SSL_CTX_check_private_key(ctx) != 1)
     {
-      SSL_CTX_free(ctx);
-      return AZ_MQTT3_ERROR_TRANSPORT;
+      return _tls_fail(ctx, NULL, AZ_MQTT3_ERROR_TRANSPORT);
     }
   }
 
   SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
 
   SSL* ssl = SSL_new(ctx);
-  if (ssl == NULL)
+  if (ssl == NULL || SSL_set_fd(ssl, transport->socket_fd) != 1)
   {
-    SSL_CTX_free(ctx);
-    return AZ_MQTT3_ERROR_TRANSPORT;
+    return _tls_fail(ctx, ssl, AZ_MQTT3_ERROR_TRANSPORT);
   }
 
-  SSL_set_fd(ssl, transport->socket_fd);
-
-  // Set SNI hostname
   char host_str[256];
-  az_result rc = _span_to_cstr(host, host_str, (int32_t)sizeof(host_str));
+  rc = _span_to_cstr(host, host_str, (int32_t)sizeof(host_str));
   if (az_result_failed(rc))
   {
-    SSL_free(ssl);
-    SSL_CTX_free(ctx);
-    return rc;
+    return _tls_fail(ctx, ssl, rc);
   }
-  SSL_set_tlsext_host_name(ssl, host_str);
-
-  if (SSL_connect(ssl) != 1)
+  if (!_tls_set_peer_identity(ssl, host_str))
   {
-    SSL_free(ssl);
-    SSL_CTX_free(ctx);
-    return AZ_MQTT3_ERROR_TRANSPORT;
+    return _tls_fail(ctx, ssl, AZ_MQTT3_ERROR_TRANSPORT);
+  }
+
+  // SSL_VERIFY_PEER already aborts the handshake on a bad chain or name; the
+  // explicit checks keep that true even if the verify mode is ever relaxed.
+  if (SSL_connect(ssl) != 1 || SSL_get_verify_result(ssl) != X509_V_OK
+      || SSL_get0_peer_certificate(ssl) == NULL)
+  {
+    return _tls_fail(ctx, ssl, AZ_MQTT3_ERROR_TRANSPORT);
   }
 
   transport->ssl_ctx = ctx;
@@ -220,6 +257,23 @@ AZ_NODISCARD az_result az_mqtt3_transport_connect(
     az_mqtt3_tls_options const* tls_options)
 {
   _az_PRECONDITION_NOT_NULL(transport);
+
+#ifdef AZ_MQTT3_TLS_OPENSSL
+  if (tls_options != NULL)
+  {
+    az_result const check = _check_tls_options(tls_options);
+    if (az_result_failed(check))
+    {
+      return check;
+    }
+  }
+#else
+  if (tls_options != NULL)
+  {
+    // Built without TLS: never fall back to plaintext.
+    return AZ_MQTT3_ERROR_NOT_SUPPORTED;
+  }
+#endif
 
   az_result rc = _tcp_connect(transport, host, port);
   if (az_result_failed(rc))
@@ -238,8 +292,6 @@ AZ_NODISCARD az_result az_mqtt3_transport_connect(
       return rc;
     }
   }
-#else
-  (void)tls_options;
 #endif
 
   transport->connected = true;

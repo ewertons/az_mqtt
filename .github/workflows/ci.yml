@@ -23,6 +23,13 @@ env:
   MBEDTLS_PREFIX: ${{ github.workspace }}/build/mbedtls
 
 jobs:
+  sync:
+    name: az_mqtt3 in sync with az_mqtt5
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: eng/sync-az_mqtt3.sh --check
+
   linux:
     name: ${{ matrix.lib }} / ${{ matrix.tls }} / ${{ matrix.cc }}
     runs-on: ubuntu-24.04

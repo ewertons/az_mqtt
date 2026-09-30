@@ -28,6 +28,10 @@ enum az_mqtt3_result
   AZ_MQTT3_ERROR_TIMEOUT = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 14),
   AZ_MQTT3_ERROR_NOT_CONNECTED = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 15),
   AZ_MQTT3_ERROR_INVALID_STATE = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 16),
+  /** @brief The request needs a capability this build does not have (e.g. TLS without a backend). */
+  AZ_MQTT3_ERROR_NOT_SUPPORTED = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 17),
+  /** @brief The options are inconsistent (e.g. a client certificate without its key). */
+  AZ_MQTT3_ERROR_INVALID_CONFIG = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 18),
 };
 
 // ──────────────────────── MQTT 5 Packet Types ────────────────

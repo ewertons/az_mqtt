@@ -652,8 +652,21 @@ static az_result _schannel_setup(
     return AZ_MQTT3_ERROR_TRANSPORT;
   }
 
-  (void)host;
-  (void)tls_options;
+  // SCH_CRED_MANUAL_CRED_VALIDATION turns Schannel's own check off, so the
+  // chain and host name must be validated here before any MQTT byte is sent.
+  PCCERT_CONTEXT server_cert = NULL;
+  sec = QueryContextAttributesA(
+      &transport->context_handle, SECPKG_ATTR_REMOTE_CERT_CONTEXT, (PVOID)&server_cert);
+  if (sec != SEC_E_OK || server_cert == NULL)
+  {
+    return AZ_MQTT3_ERROR_TRANSPORT;
+  }
+  rc = _validate_server_certificate(host, tls_options, server_cert);
+  CertFreeCertificateContext(server_cert);
+  if (az_result_failed(rc))
+  {
+    return rc;
+  }
 
   transport->tls_active = true;
   transport->decrypted_pending_len = 0;
@@ -918,6 +931,30 @@ AZ_NODISCARD az_result az_mqtt3_transport_connect(
 {
   _az_PRECONDITION_NOT_NULL(transport);
 
+#ifdef AZ_MQTT3_TLS_SCHANNEL
+  if (tls_options != NULL)
+  {
+    bool const has_cert = az_span_size(tls_options->client_cert_path) > 0;
+    bool const has_key = az_span_size(tls_options->client_key_path) > 0;
+    if (has_cert != has_key)
+    {
+      return AZ_MQTT3_ERROR_INVALID_CONFIG; // Same contract as the other backends.
+    }
+    if (has_cert)
+    {
+      // Client certificates are not implemented for Schannel yet; refuse rather
+      // than connect without the identity the caller asked for.
+      return AZ_MQTT3_ERROR_NOT_SUPPORTED;
+    }
+  }
+#else
+  if (tls_options != NULL)
+  {
+    // Built without TLS: never fall back to plaintext.
+    return AZ_MQTT3_ERROR_NOT_SUPPORTED;
+  }
+#endif
+
   az_result rc = _tcp_connect(transport, host, port);
   if (az_result_failed(rc))
   {
@@ -938,7 +975,6 @@ AZ_NODISCARD az_result az_mqtt3_transport_connect(
   }
 #else
   (void)host;
-  (void)tls_options;
 #endif
 
   transport->connected = true;

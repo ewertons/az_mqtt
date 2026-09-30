@@ -1,0 +1,74 @@
+// Copyright (c) Microsoft. All rights reserved.
+// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
+/**
+ * @file test_server.h
+ * @brief In-process TCP/TLS peer for transport tests (POSIX + OpenSSL, test-only).
+ *
+ * Mints its own CA and server certificate per instance, so certificate
+ * validation can be exercised without a broker. Answers an MQTT CONNECT with a
+ * success CONNACK of the protocol level the client asked for.
+ */
+#ifndef AZ_MQTT3_TEST_SERVER_H
+#define AZ_MQTT3_TEST_SERVER_H
+
+#include <stdbool.h>
+#include <stdint.h>
+
+/** @brief What the server does once a client connects. */
+typedef enum
+{
+  /** @brief Complete TLS (if enabled), answer CONNECT with CONNACK, then idle. */
+  TEST_SERVER_MQTT = 0,
+  /** @brief Accept TCP and never read or write (a peer that stops answering). */
+  TEST_SERVER_SILENT,
+  /** @brief Answer CONNECT, then reset the connection. */
+  TEST_SERVER_RESET_AFTER_CONNACK,
+} test_server_behavior;
+
+typedef struct
+{
+  bool tls;
+  /** @brief subjectAltName of the server certificate, e.g. "DNS:localhost,IP:127.0.0.1". */
+  char const* san;
+  /** @brief Sign the server certificate with a CA the client is not given. */
+  bool untrusted_ca;
+  /** @brief Server certificate validity ended before the test ran. */
+  bool expired;
+  /** @brief Require and verify a client certificate issued by the test CA. */
+  bool require_client_cert;
+  test_server_behavior behavior;
+} test_server_options;
+
+typedef struct test_server test_server;
+
+/** @brief Defaults: TLS on, SAN "DNS:localhost,IP:127.0.0.1", MQTT behavior. */
+test_server_options test_server_options_default(void);
+
+/**
+ * @brief Start a server on 127.0.0.1 with an ephemeral port.
+ * @return NULL on failure.
+ */
+test_server* test_server_start(test_server_options const* options);
+
+void test_server_stop(test_server* server);
+
+uint16_t test_server_port(test_server const* server);
+
+/** @brief PEM file with the CA the client should trust (always the good CA). */
+char const* test_server_ca_path(test_server const* server);
+
+/** @brief PEM files of a client identity issued by the trusted CA. */
+char const* test_server_client_cert_path(test_server const* server);
+char const* test_server_client_key_path(test_server const* server);
+
+/** @brief TCP connections accepted so far. */
+int test_server_accepted(test_server* server);
+
+/** @brief TLS handshakes completed so far (server side). */
+int test_server_handshakes(test_server* server);
+
+/** @brief Whether the last completed handshake carried a client certificate. */
+bool test_server_saw_client_cert(test_server* server);
+
+#endif // AZ_MQTT3_TEST_SERVER_H

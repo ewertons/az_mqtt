@@ -28,15 +28,23 @@ typedef struct az_mqtt3_transport az_mqtt3_transport;
 
 // ──────────────────────── TLS options ────────────────────────
 
+/**
+ * @brief TLS settings. The server certificate chain and host name (or IP
+ * address) are always verified; there is no option to turn that off.
+ */
 typedef struct
 {
-  /** @brief Path to CA certificate file (PEM). Set to AZ_SPAN_EMPTY to use system CAs. */
+  /**
+   * @brief Path to CA certificate file (PEM). AZ_SPAN_EMPTY uses the system
+   * store (OpenSSL, Schannel); mbedTLS has none and fails with
+   * AZ_MQTT3_ERROR_NOT_SUPPORTED.
+   */
   az_span ca_cert_path;
 
-  /** @brief Path to client certificate file (PEM) for mutual TLS. Optional. */
+  /** @brief Client certificate file (PEM) for mutual TLS. Set with client_key_path or not at all. */
   az_span client_cert_path;
 
-  /** @brief Path to client private key file (PEM) for mutual TLS. Optional. */
+  /** @brief Client private key file (PEM) for mutual TLS. Set with client_cert_path or not at all. */
   az_span client_key_path;
 } az_mqtt3_tls_options;
 
@@ -69,6 +77,10 @@ AZ_NODISCARD az_result az_mqtt3_transport_init(az_mqtt3_transport* transport);
  * @param host        Null-terminated hostname string (as az_span).
  * @param port        Destination port (e.g. 1883 or 8883).
  * @param tls_options TLS settings. Pass NULL for plain TCP.
+ *
+ * @retval AZ_MQTT3_ERROR_NOT_SUPPORTED TLS requested from a build without a TLS
+ *         backend, or an option the backend cannot honour. Never downgrades.
+ * @retval AZ_MQTT3_ERROR_INVALID_CONFIG Only one of client_cert_path / client_key_path set.
  */
 AZ_NODISCARD az_result az_mqtt3_transport_connect(
     az_mqtt3_transport* transport,

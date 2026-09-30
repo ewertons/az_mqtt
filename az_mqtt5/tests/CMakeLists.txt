@@ -26,3 +26,13 @@ set(BUILD_SHARED_LIBS ${_saved_BUILD_SHARED_LIBS} CACHE BOOL "" FORCE)
 # ── Test subdirectories ──────────────────────────────────────
 
 add_subdirectory(e2e)
+
+# Tests against an in-process peer (POSIX + OpenSSL 3.0+); no broker needed.
+if(UNIX)
+  find_package(OpenSSL 3.0 QUIET)
+  if(OpenSSL_FOUND)
+    add_subdirectory(transport)
+  else()
+    message(STATUS "Skipping transport tests: the in-process peer needs OpenSSL 3.0+")
+  endif()
+endif()
