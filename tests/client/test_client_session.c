@@ -46,6 +46,8 @@ static struct
   int subacks;
   int32_t suback_count;
   int publishes;
+  int32_t publish_user_properties;
+  int32_t publish_subscription_identifiers;
   int disconnects;
   int closed;
   az_result closed_reason;
@@ -74,8 +76,9 @@ static void _on_suback(az_mqtt_client* c, az_mqtt_suback_data const* d)
 static void _on_publish(az_mqtt_client* c, az_mqtt_publish_data const* p)
 {
   (void)c;
-  (void)p;
   g.publishes++;
+  g.publish_user_properties = p->user_property_count;
+  g.publish_subscription_identifiers = p->subscription_identifier_count;
 }
 
 static void _on_disconnect(az_mqtt_client* c, az_mqtt_disconnect_data const* d)
@@ -379,6 +382,52 @@ static void suback_reason_codes_never_exceed_the_buffer(void** state)
   _teardown(&f);
 }
 
+#if AZ_MQTT_TEST_VERSION == 5
+static void publish_properties_never_exceed_the_buffers(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.publish_properties = 10; // The fixture holds 4 of each.
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(az_mqtt_client_connect(&f.client, 3000), AZ_OK);
+  for (int i = 0; i < 20 && g.publishes == 0; i++)
+  {
+    assert_int_equal(az_mqtt_client_process_loop(&f.client, 50), AZ_OK);
+  }
+  assert_int_equal(g.publishes, 1);
+  assert_int_equal(g.publish_user_properties, 4);
+  assert_int_equal(g.publish_subscription_identifiers, 4);
+  assert_int_equal(f.sub_ids[3], 4);
+  // The arrays that follow the publish buffers are untouched.
+  assert_null(az_span_ptr(f.props[2][0].key));
+  assert_int_equal(f.reasons[0], 0);
+  _teardown(&f);
+}
+#endif
+
+static void an_auth_packet_is_a_protocol_error_only_in_mqttv3(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.send_auth = true;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(az_mqtt_client_connect(&f.client, 3000), AZ_OK);
+  az_result rc = AZ_OK;
+  for (int i = 0; i < 10 && rc == AZ_OK; i++)
+  {
+    rc = az_mqtt_client_process_loop(&f.client, 50);
+  }
+#if AZ_MQTT_TEST_VERSION == 5
+  assert_int_equal(rc, AZ_OK);
+  assert_int_equal(az_mqtt_client_get_state(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+#else
+  assert_int_equal(rc, AZ_MQTT_ERROR_PROTOCOL);
+#endif
+  _teardown(&f);
+}
+
 static void an_explicit_server_keep_alive_of_zero_disables_pings(void** state)
 {
   (void)state;
@@ -448,6 +497,10 @@ int main(void)
     cmocka_unit_test(reconnect_after_a_lost_session_works),
     cmocka_unit_test(a_refused_connack_code_is_reported_verbatim),
     cmocka_unit_test(suback_reason_codes_never_exceed_the_buffer),
+#if AZ_MQTT_TEST_VERSION == 5
+    cmocka_unit_test(publish_properties_never_exceed_the_buffers),
+#endif
+    cmocka_unit_test(an_auth_packet_is_a_protocol_error_only_in_mqttv3),
     cmocka_unit_test(an_explicit_server_keep_alive_of_zero_disables_pings),
     cmocka_unit_test(reconnecting_from_on_connection_closed_is_safe),
   };

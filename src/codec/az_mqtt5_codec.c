@@ -1191,10 +1191,8 @@ static az_result _decode_publish_props(az_span* src, az_mqtt_publish_data* out)
         if (az_result_failed(rc))
           return rc;
         if (out->subscription_identifiers != NULL
-            && out->subscription_identifier_count
-                < (int32_t)(sizeof(*out->subscription_identifiers)))
+            && out->subscription_identifier_count < out->subscription_identifier_capacity)
         {
-          // Caller must set capacity separately; we use the publish_data's count field
           out->subscription_identifiers[out->subscription_identifier_count] = sub_id;
           out->subscription_identifier_count++;
         }
@@ -1209,7 +1207,7 @@ static az_result _decode_publish_props(az_span* src, az_mqtt_publish_data* out)
         rc = _az_mqtt_read_utf8_string(&props, &value);
         if (az_result_failed(rc))
           return rc;
-        if (out->user_properties != NULL && out->user_property_count < (int32_t)65535)
+        if (out->user_properties != NULL && out->user_property_count < out->user_property_capacity)
         {
           out->user_properties[out->user_property_count].key = key;
           out->user_properties[out->user_property_count].value = value;
@@ -1234,11 +1232,15 @@ az_mqtt5_codec_decode_publish(az_span body, uint8_t flags, az_mqtt_publish_data*
 
   // Save caller-provided buffers before clearing
   az_mqtt_user_property* user_properties = out->user_properties;
+  int32_t user_property_capacity = out->user_property_capacity;
   int32_t* subscription_identifiers = out->subscription_identifiers;
+  int32_t subscription_identifier_capacity = out->subscription_identifier_capacity;
 
   memset(out, 0, sizeof(*out));
   out->user_properties = user_properties;
+  out->user_property_capacity = user_property_capacity;
   out->subscription_identifiers = subscription_identifiers;
+  out->subscription_identifier_capacity = subscription_identifier_capacity;
 
   out->dup = (flags & 0x08) != 0;
   out->qos = (az_mqtt_qos)((flags >> 1) & 0x03);

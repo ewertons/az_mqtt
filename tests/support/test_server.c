@@ -359,6 +359,40 @@ static void _serve(test_server* s, conn* c)
       return;
     }
   }
+  if (v5 && s->options.publish_properties > 0 && s->options.publish_properties <= 12)
+  {
+    // QoS 0 PUBLISH "t" / "p" with N x (user property "k"="v", subscription identifier i+1).
+    int const count = s->options.publish_properties;
+    uint8_t pub[128];
+    int n = 0;
+    pub[n++] = 0x30;
+    pub[n++] = (uint8_t)(3 + 1 + count * 9 + 1);
+    pub[n++] = 0x00;
+    pub[n++] = 0x01;
+    pub[n++] = 't';
+    pub[n++] = (uint8_t)(count * 9);
+    for (int i = 0; i < count; i++)
+    {
+      static const uint8_t user_property[] = { 0x26, 0x00, 0x01, 'k', 0x00, 0x01, 'v' };
+      memcpy(&pub[n], user_property, sizeof(user_property));
+      n += (int)sizeof(user_property);
+      pub[n++] = 0x0B;
+      pub[n++] = (uint8_t)(i + 1);
+    }
+    pub[n++] = 'p';
+    if (!_write(c, pub, n))
+    {
+      return;
+    }
+  }
+  if (s->options.send_auth)
+  {
+    static const uint8_t auth[] = { 0xF0, 0x00 };
+    if (!_write(c, auth, (int)sizeof(auth)))
+    {
+      return;
+    }
+  }
   if (s->options.behavior == TEST_SERVER_DISCONNECT_AFTER_CONNACK)
   {
     static const uint8_t disconnect_v5[] = { 0xE0, 0x01, 0x8B };

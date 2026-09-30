@@ -269,8 +269,10 @@ typedef struct
   az_span content_type;
   int32_t* subscription_identifiers;
   int32_t subscription_identifier_count;
+  int32_t subscription_identifier_capacity; /**< Entries in @p subscription_identifiers; extras are dropped. */
   az_mqtt_user_property* user_properties;
   int32_t user_property_count;
+  int32_t user_property_capacity; /**< Entries in @p user_properties; extras are dropped. */
 } az_mqtt_publish_data;
 
 // ──────────────────────── Publish options (for sending) ──────

@@ -56,6 +56,10 @@ typedef struct
   uint8_t connack_code;
   /** @brief Reason codes per SUBACK; 0 answers SUBSCRIBE with one granted QoS 0. */
   int suback_codes;
+  /** @brief MQTT 5: after CONNACK, send one PUBLISH with this many user properties and subscription identifiers (max 12). */
+  int publish_properties;
+  /** @brief After CONNACK, send an empty AUTH packet (valid in MQTT 5, reserved type in 3.1.1). */
+  bool send_auth;
 } test_server_options;
 
 typedef struct test_server test_server;

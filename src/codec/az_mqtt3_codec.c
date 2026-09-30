@@ -455,11 +455,15 @@ az_mqtt3_codec_decode_publish(az_span body, uint8_t flags, az_mqtt_publish_data*
 
   // Save caller-provided buffers before clearing
   az_mqtt_user_property* user_properties = out->user_properties;
+  int32_t user_property_capacity = out->user_property_capacity;
   int32_t* subscription_identifiers = out->subscription_identifiers;
+  int32_t subscription_identifier_capacity = out->subscription_identifier_capacity;
 
   memset(out, 0, sizeof(*out));
   out->user_properties = user_properties;
+  out->user_property_capacity = user_property_capacity;
   out->subscription_identifiers = subscription_identifiers;
+  out->subscription_identifier_capacity = subscription_identifier_capacity;
 
   out->dup = (flags & 0x08) != 0;
   out->qos = (az_mqtt_qos)((flags >> 1) & 0x03);

@@ -270,8 +270,12 @@ static az_result _handle_publish(az_mqtt_client* client, az_span body, uint8_t f
   az_mqtt_publish_data publish;
   publish.user_properties = _span_user_properties(client->options.buffers.publish_user_properties);
   publish.user_property_count = 0;
+  publish.user_property_capacity
+      = _span_count(client->options.buffers.publish_user_properties, (int32_t)sizeof(az_mqtt_user_property));
   publish.subscription_identifiers = _span_i32(client->options.buffers.publish_subscription_identifiers);
   publish.subscription_identifier_count = 0;
+  publish.subscription_identifier_capacity
+      = _span_count(client->options.buffers.publish_subscription_identifiers, (int32_t)sizeof(int32_t));
 
   az_result rc = client->options.codec->decode_publish(body, flags, &publish);
   if (az_result_failed(rc))
@@ -493,8 +497,8 @@ static az_result _dispatch_packet(
     case AZ_MQTT_PACKET_TYPE_DISCONNECT:
       return _handle_disconnect(client, body);
     case AZ_MQTT_PACKET_TYPE_AUTH:
-      // AUTH packets could be handled here for enhanced auth
-      return AZ_OK;
+      // MQTT 5.0 only; packet type 15 is reserved in 3.1.1. Enhanced auth is not implemented.
+      return client->options.codec->protocol_version >= 5 ? AZ_OK : AZ_MQTT_ERROR_PROTOCOL;
     default:
       return AZ_MQTT_ERROR_PROTOCOL;
   }
