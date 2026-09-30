@@ -14,16 +14,16 @@ az_mqtt_apply_warnings(az_mqtt_test_server)
 string(TOUPPER "${AZ_MQTT_TLS_BACKEND_RESOLVED}" _backend)
 set(AZ_MQTT_TEST_BACKEND_DEFINE "AZ_MQTT_TEST_BACKEND_${_backend}" PARENT_SCOPE)
 
-# The core again, with 1 s transport bounds, so timeout paths run in seconds.
-list(TRANSFORM AZ_MQTT_SOURCES PREPEND "${PROJECT_SOURCE_DIR}/" OUTPUT_VARIABLE _sources)
+# The base library again, with 1 s transport bounds, so timeout paths run in seconds.
+list(TRANSFORM AZ_MQTT_BASE_SOURCES PREPEND "${PROJECT_SOURCE_DIR}/" OUTPUT_VARIABLE _sources)
 add_library(az_mqtt_short_timeouts STATIC ${_sources})
 foreach(_prop INCLUDE_DIRECTORIES COMPILE_DEFINITIONS)
-  get_target_property(_value az_mqtt ${_prop})
+  get_target_property(_value az_mqtt_base ${_prop})
   if(_value)
     set_property(TARGET az_mqtt_short_timeouts PROPERTY ${_prop} ${_value})
   endif()
 endforeach()
-get_target_property(_libs az_mqtt LINK_LIBRARIES)
+get_target_property(_libs az_mqtt_base LINK_LIBRARIES)
 target_link_libraries(az_mqtt_short_timeouts PUBLIC ${_libs})
 target_compile_definitions(az_mqtt_short_timeouts PUBLIC
   AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS=1000 AZ_MQTT_TRANSPORT_CONNECT_TIMEOUT_MS=1000)
@@ -31,9 +31,10 @@ target_include_directories(az_mqtt_short_timeouts PUBLIC ${PROJECT_SOURCE_DIR}/i
 az_mqtt_apply_warnings(az_mqtt_short_timeouts)
 
 # add_az_mqtt_local_test(<target> <source> [LIBRARY <lib>] [PER_VERSION]): a
-# cmocka test against the in-process peer, linked to <lib> (default az_mqtt::core).
-# PER_VERSION builds az_mqtt<version>_<target minus "az_mqtt_"> for each enabled
-# version, linked to that codec, with AZ_MQTT_TEST_VERSION set.
+# cmocka test against the in-process peer, linked to <lib> (default az_mqtt::base).
+# PER_VERSION instead builds, per enabled version N, az_mqttN_<target minus
+# "az_mqtt_"> on az_mqtt::mqttN and, when both are enabled, az_mqtt_multiN_...
+# on az_mqtt::multi; each with AZ_MQTT_TEST_VERSION=N (see az_mqtt_test_version.h).
 # Internal headers (src/platform) are visible.
 function(add_az_mqtt_local_test target_name source_file)
   cmake_parse_arguments(ARG "PER_VERSION" "LIBRARY" "" ${ARGN})
@@ -44,10 +45,15 @@ function(add_az_mqtt_local_test target_name source_file)
         _az_mqtt_local_test(az_mqtt${version}_${_suffix} ${source_file} az_mqtt::mqtt${version})
         target_compile_definitions(az_mqtt${version}_${_suffix} PRIVATE AZ_MQTT_TEST_VERSION=${version})
       endif()
+      if(TARGET az_mqtt::multi)
+        _az_mqtt_local_test(az_mqtt_multi${version}_${_suffix} ${source_file} az_mqtt::multi)
+        target_compile_definitions(az_mqtt_multi${version}_${_suffix} PRIVATE
+          AZ_MQTT_TEST_VERSION=${version} AZ_MQTT_TEST_MULTI)
+      endif()
     endforeach()
   else()
     if(NOT ARG_LIBRARY)
-      set(ARG_LIBRARY az_mqtt::core)
+      set(ARG_LIBRARY az_mqtt::base)
     endif()
     _az_mqtt_local_test(${target_name} ${source_file} ${ARG_LIBRARY})
   endif()

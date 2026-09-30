@@ -153,7 +153,6 @@ int main(int argc, char* argv[])
   az_mqtt_client_options client_opts;
   memset(&client_opts, 0, sizeof(client_opts));
   client_opts.transport = transport;
-  client_opts.codec = &az_mqtt5_codec;
   client_opts.send_buffer = AZ_SPAN_FROM_BUFFER(s_send_buffer);
   client_opts.receive_buffer = AZ_SPAN_FROM_BUFFER(s_recv_buffer);
   client_opts.connect_options = connect_opts;

@@ -2,21 +2,21 @@
 
 ## Current layout
 
-GCC 12.2, `-O3 -DNDEBUG`, x86-64, Debian 12, no TLS. An application links `az_mqtt::core` plus
-only the codec(s) it uses.
+GCC 12.2, `-O3 -DNDEBUG`, x86-64, Debian 12, no TLS. An application links `az_mqtt::base` plus
+one of `az_mqtt::mqtt3`, `az_mqtt::mqtt5`, `az_mqtt::multi`; the client is compiled per library.
 
-| Module | Target | .text | .rodata | .data | .bss |
+| Module | Library | .text | .rodata | .data | .bss |
 |---|---|---:|---:|---:|---:|
-| az_mqtt_client.c | core | 6,774 B | 64 B | 0 | 0 |
-| az_mqtt_codec_common.c | core | 1,703 B | 0 | 0 | 0 |
-| transport_posix.c | core | 1,361 B | 0 | 0 | 0 |
-| az_mqtt_socket_posix.c | core | 3,215 B | 7 B | 0 | 0 |
-| az_mqtt3_codec.c | mqtt3 | 2,902 B | 149 B | 0 | 0 |
-| az_mqtt5_codec.c | mqtt5 | 9,977 B | 427 B | 0 | 0 |
-| **mqttv3 application** | core + mqtt3 | **15,955 B** | **220 B** | **0** | **0** |
-| **mqttv5 application** | core + mqtt5 | **23,030 B** | **498 B** | **0** | **0** |
-
-`.rodata` includes the codec function table (`az_mqttN_codec`).
+| transport_posix.c | base | 1,361 B | 0 | 0 | 0 |
+| az_mqtt_socket_posix.c | base | 3,215 B | 7 B | 0 | 0 |
+| az_mqtt_client.c | mqtt3 | 6,746 B | 60 B | 0 | 0 |
+| az_mqtt3_codec.c | mqtt3, multi | 5,591 B | 16 B | 0 | 0 |
+| az_mqtt_client.c | mqtt5 | 6,794 B | 64 B | 0 | 0 |
+| az_mqtt5_codec.c | mqtt5, multi | 18,215 B | 294 B | 0 | 0 |
+| az_mqtt_client.c | multi | 7,426 B | 64 B | 0 | 0 |
+| **mqttv3 application** | base + mqtt3 | **16,913 B** | **67 B** | **0** | **0** |
+| **mqttv5 application** | base + mqtt5 | **29,585 B** | **365 B** | **0** | **0** |
+| **Both versions** | base + multi | **35,808 B** | **381 B** | **0** | **0** |
 
 ## Before the mqttv3/mqttv5 merge (az_mqtt5 library)
 

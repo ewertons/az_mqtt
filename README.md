@@ -7,22 +7,29 @@ It speaks MQTT 3.1.1 (mqttv3) and MQTT 5.0 (mqttv5) through one client API.
 ## Layers
 
 - **Codecs** — pure encode/decode of every packet type on caller-supplied buffers. One per
-  protocol version: `az_mqtt3_codec` and `az_mqtt5_codec`.
+  protocol version: `az_mqtt3_codec_*` and `az_mqtt5_codec_*`.
 - **Client** — connection management, keep-alive, QoS 0/1/2 ACK dispatch and an event loop.
-  Version-neutral; it drives whichever codec it is given.
+  One source, built per library with its codec bound at build time.
 - **Transport** — TCP/TLS: OpenSSL or mbedTLS (POSIX), Schannel (Windows), or plain TCP.
 
 ## Choosing the MQTT version
 
-Set the codec when initializing the client:
+Link the library for the version(s) used — exactly one of:
+
+| CMake target | Speaks | Codec binding |
+|--------------|--------|---------------|
+| `az_mqtt::mqtt3` | MQTT 3.1.1 | Build time: direct calls; nothing of mqttv5 is compiled in. |
+| `az_mqtt::mqtt5` | MQTT 5.0 | Build time: direct calls; nothing of mqttv3 is compiled in. |
+| `az_mqtt::multi` | both | Per client, from `options.protocol_version`. Built when both versions are enabled. |
+
+Each links `az_mqtt::base` (transport; version-independent).
 
 ```c
 #include <az_mqtt/az_mqtt_client.h>
-#include <az_mqtt/az_mqtt5.h>   /* or az_mqtt3.h */
 
 az_mqtt_client_options options = { 0 };
 options.transport = transport;
-options.codec = &az_mqtt5_codec; /* or &az_mqtt3_codec */
+/* az_mqtt::multi only: options.protocol_version = AZ_MQTT5_PROTOCOL_VERSION; (az_mqtt5.h) */
 /* ... buffers, callbacks, connect options ... */
 az_result rc = az_mqtt_client_init(&client, &options);
 ```
@@ -30,23 +37,17 @@ az_result rc = az_mqtt_client_init(&client, &options);
 With mqttv3, mqttv5-only fields (properties, user properties, `buffers`) are ignored and may be
 left zeroed.
 
-Link the target for the version(s) used:
-
-| CMake target | Contents |
-|--------------|----------|
-| `az_mqtt::core` | Client, transport, shared codec primitives. References neither codec. |
-| `az_mqtt::mqtt3` | mqttv3 codec (links `az_mqtt::core`) |
-| `az_mqtt::mqtt5` | mqttv5 codec (links `az_mqtt::core`) |
-
-An application that links only one version carries no code from the other; CI checks this on
-every build. Linking both is supported (one client per connection, each with its own codec).
+A single-version application is no larger than with the previous per-version libraries: the
+mqttv5 build is byte-identical in code size, the mqttv3 one smaller (it no longer carries unused
+MQTT 5 code), and the client structs are the same size. CI checks on every build that a
+single-version program contains no symbol of the other version.
 
 ### CMake options
 
 | Option | Default | |
 |--------|---------|-|
-| `AZ_MQTT_ENABLE_MQTT3` | `ON` | Build `az_mqtt::mqtt3` |
-| `AZ_MQTT_ENABLE_MQTT5` | `ON` | Build `az_mqtt::mqtt5` |
+| `AZ_MQTT_ENABLE_MQTT3` | `ON` | Build `az_mqtt::mqtt3` (and `az_mqtt::multi` if both) |
+| `AZ_MQTT_ENABLE_MQTT5` | `ON` | Build `az_mqtt::mqtt5` (and `az_mqtt::multi` if both) |
 | `AZ_MQTT_TLS_BACKEND` | `auto` | `auto`, `openssl`, `mbedtls` or `none` |
 | `AZ_MQTT_BUILD_SAMPLES` | `ON` | |
 | `AZ_MQTT_BUILD_TESTS` | `ON` | |
@@ -58,8 +59,7 @@ every build. Linking both is supported (one client per connection, each with its
 - Rename `az_mqtt5_*` / `az_mqtt3_*` (and `AZ_MQTT5_*` / `AZ_MQTT3_*`) to `az_mqtt_*` /
   `AZ_MQTT_*`. Codec functions (`az_mqttN_codec_*`), `AZ_MQTTN_PROTOCOL_VERSION` and
   `AZ_MQTT3_CONNACK_*` keep their names.
-- Set `az_mqtt_client_options.codec` (required).
-- CMake: link `az_mqtt::mqtt5` / `az_mqtt::mqtt3`; options are now `AZ_MQTT_*`.
+- CMake: link `az_mqtt::mqtt5` / `az_mqtt::mqtt3` (or `az_mqtt::multi`); options are now `AZ_MQTT_*`.
 - mqttv3: `az_mqtt3_codec_decode_ack` rejects bytes after the packet identifier; AUTH
   encode/decode no longer exist (MQTT 5.0 only).
 
@@ -86,7 +86,7 @@ Warnings in our code are errors in every job.
 
 | Job | What it covers |
 |-----|----------------|
-| Linux | {OpenSSL, mbedTLS 3.6.7 / 4.1.1 / 4.2.0, no TLS} × {gcc, clang}: build, link-isolation check, all tests (mqttv3 and mqttv5), including e2e against a local Mosquitto (plain and TLS) |
+| Linux | {OpenSSL, mbedTLS 3.6.7 / 4.1.1 / 4.2.0, no TLS} × {gcc, clang}: build, link-isolation check, all tests (mqttv3, mqttv5, and both through `az_mqtt::multi`), including e2e against a local Mosquitto (plain and TLS) |
 | Single version | Builds and tests with only mqttv3 or only mqttv5 enabled |
 | Sanitizers | ASan + UBSan (+ leak check) over all tests |
 | Hardened | Release build with `_FORTIFY_SOURCE=3`, stack protector, CET, full RELRO and PIE, verified on every executable, then all tests |

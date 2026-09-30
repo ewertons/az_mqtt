@@ -3,7 +3,7 @@
 
 /**
  * @file az_mqtt5.h
- * @brief MQTT 5.0 codec: pass &az_mqtt5_codec to az_mqtt_client_init().
+ * @brief MQTT 5.0 codec (az_mqtt::mqtt5).
  *
  * All functions operate on caller-provided az_span buffers with zero dynamic allocation.
  */
@@ -11,7 +11,6 @@
 #ifndef AZ_MQTT5_H
 #define AZ_MQTT5_H
 
-#include <az_mqtt/az_mqtt_codec.h>
 #include <az_mqtt/az_mqtt_types.h>
 
 #include <azure/core/az_result.h>
@@ -22,10 +21,13 @@
 /** @brief CONNECT Protocol Level this codec speaks (MQTT 5.0). */
 #define AZ_MQTT5_PROTOCOL_VERSION 5
 
-/** @brief The MQTT 5.0 codec. */
-extern az_mqtt_codec const az_mqtt5_codec;
 
 // ──────────────────────── Encoding ───────────────────────────
+
+/**
+ * @brief Encode a PINGREQ packet (2 bytes).
+ */
+AZ_NODISCARD az_result az_mqtt5_codec_encode_pingreq(az_span* dest);
 
 /**
  * @brief Encode a CONNECT packet into the destination buffer.
@@ -117,6 +119,21 @@ AZ_NODISCARD az_result az_mqtt5_codec_encode_auth(
     az_span authentication_data);
 
 // ──────────────────────── Decoding ───────────────────────────
+
+/**
+ * @brief Read a fixed header.
+ *
+ * @param[in,out] src             Source buffer; advanced past the header on success.
+ * @param[out]    out_packet_type Packet type.
+ * @param[out]    out_flags       Fixed header flags (lower nibble of first byte).
+ * @param[out]    out_remaining   Remaining length value.
+ * @return AZ_OK, AZ_ERROR_UNEXPECTED_END, or AZ_MQTT_ERROR_MALFORMED_PACKET.
+ */
+AZ_NODISCARD az_result az_mqtt5_codec_decode_fixed_header(
+    az_span* src,
+    az_mqtt_packet_type* out_packet_type,
+    uint8_t* out_flags,
+    int32_t* out_remaining);
 
 /**
  * @brief Decode a CONNACK packet body (after fixed header).

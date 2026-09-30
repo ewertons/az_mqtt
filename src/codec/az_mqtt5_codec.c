@@ -1665,25 +1665,16 @@ AZ_NODISCARD az_result az_mqtt5_codec_decode_auth(az_span body, az_mqtt_auth_dat
   return AZ_OK;
 }
 
-// ============================================================================
-// Codec table
-// ============================================================================
+AZ_NODISCARD az_result az_mqtt5_codec_decode_fixed_header(
+    az_span* src,
+    az_mqtt_packet_type* out_packet_type,
+    uint8_t* out_flags,
+    int32_t* out_remaining)
+{
+  return _az_mqtt_decode_fixed_header(src, out_packet_type, out_flags, out_remaining);
+}
 
-az_mqtt_codec const az_mqtt5_codec = {
-  AZ_MQTT5_PROTOCOL_VERSION,
-  az_mqtt5_codec_encode_connect,
-  az_mqtt5_codec_encode_publish,
-  az_mqtt5_codec_encode_puback,
-  az_mqtt5_codec_encode_pubrec,
-  az_mqtt5_codec_encode_pubrel,
-  az_mqtt5_codec_encode_pubcomp,
-  az_mqtt5_codec_encode_subscribe,
-  az_mqtt5_codec_encode_unsubscribe,
-  az_mqtt5_codec_encode_disconnect,
-  az_mqtt5_codec_decode_connack,
-  az_mqtt5_codec_decode_publish,
-  az_mqtt5_codec_decode_ack,
-  az_mqtt5_codec_decode_suback,
-  az_mqtt5_codec_decode_unsuback,
-  az_mqtt5_codec_decode_disconnect,
-};
+AZ_NODISCARD az_result az_mqtt5_codec_encode_pingreq(az_span* dest)
+{
+  return _az_mqtt_encode_pingreq(dest);
+}

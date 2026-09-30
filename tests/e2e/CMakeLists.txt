@@ -1,26 +1,34 @@
 # Copyright (c) Microsoft. All rights reserved.
 # Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-# End-to-end tests against a broker (see eng/ci/start-broker.sh). Each is built
-# once per enabled protocol version: az_mqtt<version>_test_<name>.
+# End-to-end tests against a broker (see eng/ci/start-broker.sh).
 
 file(TO_CMAKE_PATH "${PROJECT_SOURCE_DIR}/tests/broker/certs/ca.crt" E2E_CA_CERT_PATH)
 
-# add_az_mqtt_e2e_test(<name> <source> [<compile definition>...])
+# add_az_mqtt_e2e_test(<name> <source> [<compile definition>...]): per enabled
+# version N, az_mqttN_test_<name> on az_mqtt::mqttN and, when both are enabled,
+# az_mqtt_multiN_test_<name> on az_mqtt::multi.
 function(add_az_mqtt_e2e_test name source_file)
   foreach(version 3 5)
-    if(NOT AZ_MQTT_ENABLE_MQTT${version})
-      continue()
+    if(AZ_MQTT_ENABLE_MQTT${version})
+      _az_mqtt_e2e_test(az_mqtt${version}_test_${name} ${source_file} az_mqtt::mqtt${version}
+        AZ_MQTT_TEST_VERSION=${version} ${ARGN})
     endif()
-    set(target az_mqtt${version}_test_${name})
-    add_executable(${target} ${source_file} test_common.c)
-    target_include_directories(${target} PRIVATE
-      ${cmocka_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/tests)
-    target_compile_definitions(${target} PRIVATE AZ_MQTT_TEST_VERSION=${version} ${ARGN})
-    target_link_libraries(${target} PRIVATE az_mqtt::mqtt${version} cmocka)
-    az_mqtt_apply_warnings(${target})
-    add_test(NAME ${target} COMMAND ${target})
+    if(TARGET az_mqtt::multi)
+      _az_mqtt_e2e_test(az_mqtt_multi${version}_test_${name} ${source_file} az_mqtt::multi
+        AZ_MQTT_TEST_VERSION=${version} AZ_MQTT_TEST_MULTI ${ARGN})
+    endif()
   endforeach()
+endfunction()
+
+function(_az_mqtt_e2e_test target source_file library)
+  add_executable(${target} ${source_file} test_common.c)
+  target_include_directories(${target} PRIVATE
+    ${cmocka_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/tests)
+  target_compile_definitions(${target} PRIVATE ${ARGN})
+  target_link_libraries(${target} PRIVATE ${library} cmocka)
+  az_mqtt_apply_warnings(${target})
+  add_test(NAME ${target} COMMAND ${target})
 endfunction()
 
 # ── Plain TCP ────────────────────────────────────────────────

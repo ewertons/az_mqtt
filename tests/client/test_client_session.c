@@ -127,7 +127,7 @@ static void _setup(fixture* f, test_server_options const* so, uint16_t keep_aliv
   az_mqtt_client_options o;
   memset(&o, 0, sizeof(o));
   o.transport = f->transport;
-  o.codec = AZ_MQTT_TEST_CODEC;
+  o.protocol_version = AZ_MQTT_TEST_PROTOCOL_VERSION;
   o.send_buffer = ARRAY_SPAN(f->send_buf);
   o.receive_buffer = ARRAY_SPAN(f->recv_buf);
   o.connect_options = az_mqtt_connect_options_default();

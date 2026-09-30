@@ -3,7 +3,7 @@
 
 /**
  * @file az_mqtt3.h
- * @brief MQTT 3.1.1 codec: pass &az_mqtt3_codec to az_mqtt_client_init().
+ * @brief MQTT 3.1.1 codec (az_mqtt::mqtt3).
  *
  * All functions operate on caller-provided az_span buffers with zero dynamic allocation.
  */
@@ -11,7 +11,6 @@
 #ifndef AZ_MQTT3_H
 #define AZ_MQTT3_H
 
-#include <az_mqtt/az_mqtt_codec.h>
 #include <az_mqtt/az_mqtt_types.h>
 
 #include <azure/core/az_result.h>
@@ -22,8 +21,6 @@
 /** @brief CONNECT Protocol Level this codec speaks (MQTT 3.1.1). */
 #define AZ_MQTT3_PROTOCOL_VERSION 4
 
-/** @brief The MQTT 3.1.1 codec. */
-extern az_mqtt_codec const az_mqtt3_codec;
 
 /**
  * @name MQTT 3.1.1 CONNACK return codes
@@ -39,6 +36,11 @@ extern az_mqtt_codec const az_mqtt3_codec;
 /** @} */
 
 // ──────────────────────── Encoding ───────────────────────────
+
+/**
+ * @brief Encode a PINGREQ packet (2 bytes).
+ */
+AZ_NODISCARD az_result az_mqtt3_codec_encode_pingreq(az_span* dest);
 
 /**
  * @brief Encode a CONNECT packet into the destination buffer.
@@ -121,6 +123,21 @@ AZ_NODISCARD az_result az_mqtt3_codec_encode_disconnect(
     uint32_t session_expiry_interval);
 
 // ──────────────────────── Decoding ───────────────────────────
+
+/**
+ * @brief Read a fixed header.
+ *
+ * @param[in,out] src             Source buffer; advanced past the header on success.
+ * @param[out]    out_packet_type Packet type.
+ * @param[out]    out_flags       Fixed header flags (lower nibble of first byte).
+ * @param[out]    out_remaining   Remaining length value.
+ * @return AZ_OK, AZ_ERROR_UNEXPECTED_END, or AZ_MQTT_ERROR_MALFORMED_PACKET.
+ */
+AZ_NODISCARD az_result az_mqtt3_codec_decode_fixed_header(
+    az_span* src,
+    az_mqtt_packet_type* out_packet_type,
+    uint8_t* out_flags,
+    int32_t* out_remaining);
 
 /**
  * @brief Decode a CONNACK packet body (after fixed header).

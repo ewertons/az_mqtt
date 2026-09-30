@@ -2,9 +2,12 @@
 
 ## Decision
 
-One version-neutral client (`az_mqtt_client`) plus one codec library per protocol version
-(`az_mqtt::mqtt3`, `az_mqtt::mqtt5`). The application selects the version at run time by passing
-`&az_mqtt3_codec` or `&az_mqtt5_codec` in `az_mqtt_client_options.codec`.
+One client source and one API (`az_mqtt_client_*`), one codec per protocol version. The client
+is built per library with its codec bound at build time:
+
+- `az_mqtt::mqtt3` / `az_mqtt::mqtt5`: calls go straight to that codec; the other version is
+  not compiled in.
+- `az_mqtt::multi`: both codecs; each client picks one from `options.protocol_version`.
 
 This replaces the earlier layout of two separate libraries (`az_mqtt5`, and `az_mqtt3` kept in
 sync as a copy), which duplicated the client, transport and types.
@@ -34,15 +37,14 @@ through the shared types in `az_mqtt_types.h`.
 
 ```
 inc/az_mqtt/
-  az_mqtt_client.h      // client API (version-neutral)
+  az_mqtt_client.h      // client API
   az_mqtt_types.h       // options and callback data (mqttv5 fields ignored with mqttv3)
   az_mqtt_transport.h   // TCP/TLS
-  az_mqtt_codec.h       // az_mqtt_codec function table + fixed header / PINGREQ
-  az_mqtt3.h            // az_mqtt3_codec, AZ_MQTT3_CONNACK_*
-  az_mqtt5.h            // az_mqtt5_codec (incl. AUTH)
+  az_mqtt3.h            // az_mqtt3_codec_*, AZ_MQTT3_PROTOCOL_VERSION, AZ_MQTT3_CONNACK_*
+  az_mqtt5.h            // az_mqtt5_codec_* (incl. AUTH), AZ_MQTT5_PROTOCOL_VERSION
 src/
-  az_mqtt_client.c
-  codec/az_mqtt_codec_common.c   // wire primitives shared by both codecs
+  az_mqtt_client.c               // codec calls via _AZ_MQTT_CODEC(client, fn)
+  codec/az_mqtt_codec_internal.h // wire primitives, static: each codec compiles its own copy
   codec/az_mqtt3_codec.c
   codec/az_mqtt5_codec.c
   platform/                      // transport backends
@@ -50,26 +52,35 @@ src/
 
 | CMake target | Contents |
 |---|---|
-| `az_mqtt::core` | client, transport, common codec primitives |
-| `az_mqtt::mqtt3` | mqttv3 codec + `az_mqtt::core` |
-| `az_mqtt::mqtt5` | mqttv5 codec + `az_mqtt::core` |
+| `az_mqtt::base` | transport |
+| `az_mqtt::mqtt3` | client + mqttv3 codec |
+| `az_mqtt::mqtt5` | client + mqttv5 codec |
+| `az_mqtt::multi` | client + both codecs |
+
+An application links exactly one of `mqtt3`, `mqtt5`, `multi` (they define the same client
+symbols).
 
 ---
 
-### Linking only one version
+### Why build-time binding
 
-- The client reaches the codec only through `options.codec`, so `az_mqtt::core` references
-  no `az_mqtt3_*` / `az_mqtt5_*` symbol.
-- Each codec is a separate library; an application links, and carries, only the ones it
-  names. CI fails if the core references a codec, or if a single-version sample contains the
-  other version's symbols.
-- `AZ_MQTT_ENABLE_MQTT3` / `AZ_MQTT_ENABLE_MQTT5` let a build omit a codec entirely.
+A first version selected the codec at run time through a function table. It kept the other
+version out of the binary, but cost code: calls through the table are not inlined, and the table
+keeps every codec function alive, used or not. With build-time binding a single-version client
+compiles to the same code as the previous per-version libraries.
 
-Remaining shared costs, relative to the previous per-version libraries (x86-64, `-Os`):
+Measured on the connect samples (x86-64, GCC 12, `-Os`, no TLS; previous `az_mqtt3` /
+`az_mqtt5` = 100 %):
 
-| | Cost |
-|---|---|
-| `az_mqtt_client` | +8 B (`codec` pointer) |
-| Code, no LTO | mqttv3 sample −610 B, mqttv5 sample +550 B |
-| Code, LTO | mqttv3 sample +1.3 KB, mqttv5 sample +1.6 KB: codec calls are indirect, so they are not inlined into the caller and unused operations (e.g. UNSUBSCRIBE) are kept |
-| mqttv5-only option fields (`buffers`, properties) | unchanged: the previous `az_mqtt3` types were already copies of the mqttv5 ones |
+| | mqttv3 `.text` | mqttv5 `.text` |
+|---|---|---|
+| Previous libraries | 25,215 B | 29,573 B |
+| This layout | 23,920 B | 29,573 B |
+| This layout, LTO (previous: 13,443 / 18,138 B) | 13,020 B | 18,138 B |
+
+`az_mqtt_client` / `az_mqtt_client_options` stay 432 / 384 B: `protocol_version` fills
+existing padding. Figures exclude the PUBLISH property-bounds fix, which adds 67 B (80 B with
+LTO) to mqttv5 and nothing to mqttv3.
+
+`az_mqtt::multi` compiles both codecs and branches per call; base + multi is 20,953 B of
+`.text`, against 29,068 B for the previous two libraries linked together.

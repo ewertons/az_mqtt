@@ -5,14 +5,15 @@
  * @file az_mqtt_client.h
  * @brief MQTT client API, for MQTT 3.1.1 and 5.0.
  *
- * Usage:
- *   1. Allocate az_mqtt_client on the stack/static.
- *   2. Call az_mqtt_client_init() with options, caller-owned buffers and the
- *      codec of the protocol version to speak (az_mqtt3.h / az_mqtt5.h).
- *      Only that codec is linked.
- *
+ * The protocol version is chosen by the library linked: az_mqtt::mqtt3 or
+ * az_mqtt::mqtt5 (codec bound at build time; nothing of the other version is
+ * linked), or az_mqtt::multi (both; per-client options.protocol_version).
  * MQTT 5.0-only fields (properties, reason strings, buffers.*) are ignored with
  * MQTT 3.1.1 and may be left zero.
+ *
+ * Usage:
+ *   1. Allocate az_mqtt_client on the stack/static.
+ *   2. Call az_mqtt_client_init() with options and caller-owned buffers.
  *   3. Call az_mqtt_client_connect() to establish the MQTT session.
  *   4. Use az_mqtt_client_publish/subscribe/unsubscribe.
  *   5. Call az_mqtt_client_process_loop() regularly to handle I/O and keepalive.
@@ -24,7 +25,6 @@
 #ifndef AZ_MQTT_CLIENT_H
 #define AZ_MQTT_CLIENT_H
 
-#include <az_mqtt/az_mqtt_codec.h>
 #include <az_mqtt/az_mqtt_transport.h>
 #include <az_mqtt/az_mqtt_types.h>
 
@@ -117,9 +117,6 @@ typedef struct
   /** @brief Transport handle (caller-allocated). */
   az_mqtt_transport* transport;
 
-  /** @brief Protocol version: &az_mqtt3_codec (az_mqtt3.h) or &az_mqtt5_codec (az_mqtt5.h). */
-  az_mqtt_codec const* codec;
-
   /** @brief Buffer for encoding outgoing packets. */
   az_span send_buffer;
 
@@ -137,6 +134,14 @@ typedef struct
 
   /** @brief Broker port. */
   uint16_t port;
+
+  /**
+   * @brief Protocol version: AZ_MQTT3_PROTOCOL_VERSION or AZ_MQTT5_PROTOCOL_VERSION.
+   *
+   * Required with az_mqtt::multi. With az_mqtt::mqtt3 or az_mqtt::mqtt5, 0 selects
+   * that library's version and any other value must match it.
+   */
+  uint8_t protocol_version;
 
   // Callbacks (all optional, set to NULL if not needed)
   az_mqtt_on_connack_fn on_connack;
@@ -188,6 +193,9 @@ struct az_mqtt_client
 
 /**
  * @brief Initialize the client.
+ *
+ * @pre options->protocol_version is one the linked library speaks (checked
+ * always with az_mqtt::multi; in debug builds only with az_mqtt::mqtt3/mqtt5).
  */
 AZ_NODISCARD az_result az_mqtt_client_init(az_mqtt_client* client, az_mqtt_client_options const* options);
 

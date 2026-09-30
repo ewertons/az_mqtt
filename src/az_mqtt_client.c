@@ -2,19 +2,44 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 /**
- * @brief MQTT client implementation (version-neutral; wire format via az_mqtt_codec).
+ * @brief MQTT client implementation.
+ *
+ * Built once per library: AZ_MQTT_CLIENT_MQTT3 / AZ_MQTT_CLIENT_MQTT5 (0 or 1)
+ * select the codec(s). With one, codec calls are direct and the other version
+ * is not referenced; with both, options.protocol_version picks per client.
  *
  * Wires together the codec and transport layers. Handles connection,
  * keep-alive, packet framing, and callback dispatch. Zero dynamic allocation.
  */
 
 #include <az_mqtt/az_mqtt_client.h>
+#if AZ_MQTT_CLIENT_MQTT3
+#include <az_mqtt/az_mqtt3.h>
+#endif
+#if AZ_MQTT_CLIENT_MQTT5
+#include <az_mqtt/az_mqtt5.h>
+#endif
 
 #include <azure/core/internal/az_precondition_internal.h>
 #include <azure/core/az_result.h>
 #include <azure/core/az_span.h>
 
 #include <string.h>
+
+#if AZ_MQTT_CLIENT_MQTT3 && AZ_MQTT_CLIENT_MQTT5
+/** @brief Whether @p c speaks MQTT 5.0. */
+#define _AZ_MQTT_IS_V5(c) ((c)->options.protocol_version == AZ_MQTT5_PROTOCOL_VERSION)
+/** @brief The codec function @p fn for @p c's protocol version. */
+#define _AZ_MQTT_CODEC(c, fn) (_AZ_MQTT_IS_V5(c) ? az_mqtt5_codec_##fn : az_mqtt3_codec_##fn)
+#elif AZ_MQTT_CLIENT_MQTT5
+#define _AZ_MQTT_IS_V5(c) ((void)(c), true)
+#define _AZ_MQTT_CODEC(c, fn) az_mqtt5_codec_##fn
+#elif AZ_MQTT_CLIENT_MQTT3
+#define _AZ_MQTT_IS_V5(c) ((void)(c), false)
+#define _AZ_MQTT_CODEC(c, fn) az_mqtt3_codec_##fn
+#else
+#error "Build with AZ_MQTT_CLIENT_MQTT3 and/or AZ_MQTT_CLIENT_MQTT5 set to 1."
+#endif
 
 // ============================================================================
 // Helpers
@@ -217,7 +242,7 @@ static az_result _read_packet(
   az_span packet_span = az_span_slice(client->options.receive_buffer, 0, total_packet_size);
   az_span header_span = packet_span;
   int32_t decoded_remaining;
-  rc = az_mqtt_codec_decode_fixed_header(&header_span, out_type, out_flags, &decoded_remaining);
+  rc = _AZ_MQTT_CODEC(client, decode_fixed_header)(&header_span, out_type, out_flags, &decoded_remaining);
   if (az_result_failed(rc))
     return rc;
 
@@ -245,7 +270,7 @@ static az_result _handle_connack(az_mqtt_client* client, az_span body)
   connack.user_property_capacity =
       _span_count(client->options.buffers.connack_user_properties, (int32_t)sizeof(az_mqtt_user_property));
 
-  az_result rc = client->options.codec->decode_connack(body, &connack);
+  az_result rc = _AZ_MQTT_CODEC(client, decode_connack)(body, &connack);
   if (az_result_failed(rc))
     return rc;
 
@@ -270,14 +295,17 @@ static az_result _handle_publish(az_mqtt_client* client, az_span body, uint8_t f
   az_mqtt_publish_data publish;
   publish.user_properties = _span_user_properties(client->options.buffers.publish_user_properties);
   publish.user_property_count = 0;
-  publish.user_property_capacity
-      = _span_count(client->options.buffers.publish_user_properties, (int32_t)sizeof(az_mqtt_user_property));
   publish.subscription_identifiers = _span_i32(client->options.buffers.publish_subscription_identifiers);
   publish.subscription_identifier_count = 0;
-  publish.subscription_identifier_capacity
-      = _span_count(client->options.buffers.publish_subscription_identifiers, (int32_t)sizeof(int32_t));
+  if (_AZ_MQTT_IS_V5(client)) // MQTT 3.1.1 has no properties.
+  {
+    publish.user_property_capacity = _span_count(
+        client->options.buffers.publish_user_properties, (int32_t)sizeof(az_mqtt_user_property));
+    publish.subscription_identifier_capacity = _span_count(
+        client->options.buffers.publish_subscription_identifiers, (int32_t)sizeof(int32_t));
+  }
 
-  az_result rc = client->options.codec->decode_publish(body, flags, &publish);
+  az_result rc = _AZ_MQTT_CODEC(client, decode_publish)(body, flags, &publish);
   if (az_result_failed(rc))
     return rc;
 
@@ -285,7 +313,7 @@ static az_result _handle_publish(az_mqtt_client* client, az_span body, uint8_t f
   if (publish.qos == AZ_MQTT_QOS_AT_LEAST_ONCE)
   {
     az_span send_buf = client->options.send_buffer;
-    rc = client->options.codec->encode_puback(&send_buf, publish.packet_id, AZ_MQTT_REASON_SUCCESS);
+    rc = _AZ_MQTT_CODEC(client, encode_puback)(&send_buf, publish.packet_id, AZ_MQTT_REASON_SUCCESS);
     if (az_result_failed(rc))
       return rc;
     rc = _send_encoded(client, client->options.send_buffer, send_buf);
@@ -295,7 +323,7 @@ static az_result _handle_publish(az_mqtt_client* client, az_span body, uint8_t f
   else if (publish.qos == AZ_MQTT_QOS_EXACTLY_ONCE)
   {
     az_span send_buf = client->options.send_buffer;
-    rc = client->options.codec->encode_pubrec(&send_buf, publish.packet_id, AZ_MQTT_REASON_SUCCESS);
+    rc = _AZ_MQTT_CODEC(client, encode_pubrec)(&send_buf, publish.packet_id, AZ_MQTT_REASON_SUCCESS);
     if (az_result_failed(rc))
       return rc;
     rc = _send_encoded(client, client->options.send_buffer, send_buf);
@@ -319,7 +347,7 @@ static az_result _handle_puback(az_mqtt_client* client, az_span body)
   ack.user_property_capacity =
       _span_count(client->options.buffers.ack_user_properties, (int32_t)sizeof(az_mqtt_user_property));
 
-  az_result rc = client->options.codec->decode_ack(body, &ack);
+  az_result rc = _AZ_MQTT_CODEC(client, decode_ack)(body, &ack);
   if (az_result_failed(rc))
     return rc;
 
@@ -338,13 +366,13 @@ static az_result _handle_pubrec(az_mqtt_client* client, az_span body)
   ack.user_property_capacity =
       _span_count(client->options.buffers.ack_user_properties, (int32_t)sizeof(az_mqtt_user_property));
 
-  az_result rc = client->options.codec->decode_ack(body, &ack);
+  az_result rc = _AZ_MQTT_CODEC(client, decode_ack)(body, &ack);
   if (az_result_failed(rc))
     return rc;
 
   // Send PUBREL
   az_span send_buf = client->options.send_buffer;
-  rc = client->options.codec->encode_pubrel(&send_buf, ack.packet_id, AZ_MQTT_REASON_SUCCESS);
+  rc = _AZ_MQTT_CODEC(client, encode_pubrel)(&send_buf, ack.packet_id, AZ_MQTT_REASON_SUCCESS);
   if (az_result_failed(rc))
     return rc;
   rc = _send_encoded(client, client->options.send_buffer, send_buf);
@@ -362,13 +390,13 @@ static az_result _handle_pubrel(az_mqtt_client* client, az_span body)
   ack.user_property_capacity =
       _span_count(client->options.buffers.ack_user_properties, (int32_t)sizeof(az_mqtt_user_property));
 
-  az_result rc = client->options.codec->decode_ack(body, &ack);
+  az_result rc = _AZ_MQTT_CODEC(client, decode_ack)(body, &ack);
   if (az_result_failed(rc))
     return rc;
 
   // Send PUBCOMP
   az_span send_buf = client->options.send_buffer;
-  rc = client->options.codec->encode_pubcomp(&send_buf, ack.packet_id, AZ_MQTT_REASON_SUCCESS);
+  rc = _AZ_MQTT_CODEC(client, encode_pubcomp)(&send_buf, ack.packet_id, AZ_MQTT_REASON_SUCCESS);
   if (az_result_failed(rc))
     return rc;
   rc = _send_encoded(client, client->options.send_buffer, send_buf);
@@ -391,7 +419,7 @@ static az_result _handle_pubcomp(az_mqtt_client* client, az_span body)
   ack.user_property_capacity =
       _span_count(client->options.buffers.ack_user_properties, (int32_t)sizeof(az_mqtt_user_property));
 
-  az_result rc = client->options.codec->decode_ack(body, &ack);
+  az_result rc = _AZ_MQTT_CODEC(client, decode_ack)(body, &ack);
   if (az_result_failed(rc))
     return rc;
 
@@ -414,7 +442,7 @@ static az_result _handle_suback(az_mqtt_client* client, az_span body)
   suback.user_property_capacity =
       _span_count(client->options.buffers.suback_user_properties, (int32_t)sizeof(az_mqtt_user_property));
 
-  az_result rc = client->options.codec->decode_suback(body, &suback);
+  az_result rc = _AZ_MQTT_CODEC(client, decode_suback)(body, &suback);
   if (az_result_failed(rc))
     return rc;
 
@@ -437,7 +465,7 @@ static az_result _handle_unsuback(az_mqtt_client* client, az_span body)
   unsuback.user_property_capacity =
       _span_count(client->options.buffers.suback_user_properties, (int32_t)sizeof(az_mqtt_user_property));
 
-  az_result rc = client->options.codec->decode_unsuback(body, &unsuback);
+  az_result rc = _AZ_MQTT_CODEC(client, decode_unsuback)(body, &unsuback);
   if (az_result_failed(rc))
     return rc;
 
@@ -456,7 +484,7 @@ static az_result _handle_disconnect(az_mqtt_client* client, az_span body)
   disc.user_property_capacity = _span_count(
       client->options.buffers.disconnect_user_properties, (int32_t)sizeof(az_mqtt_user_property));
 
-  az_result rc = client->options.codec->decode_disconnect(body, &disc);
+  az_result rc = _AZ_MQTT_CODEC(client, decode_disconnect)(body, &disc);
   if (az_result_failed(rc))
     return rc;
 
@@ -498,7 +526,7 @@ static az_result _dispatch_packet(
       return _handle_disconnect(client, body);
     case AZ_MQTT_PACKET_TYPE_AUTH:
       // MQTT 5.0 only; packet type 15 is reserved in 3.1.1. Enhanced auth is not implemented.
-      return client->options.codec->protocol_version >= 5 ? AZ_OK : AZ_MQTT_ERROR_PROTOCOL;
+      return _AZ_MQTT_IS_V5(client) ? AZ_OK : AZ_MQTT_ERROR_PROTOCOL;
     default:
       return AZ_MQTT_ERROR_PROTOCOL;
   }
@@ -513,7 +541,20 @@ AZ_NODISCARD az_result az_mqtt_client_init(az_mqtt_client* client, az_mqtt_clien
   _az_PRECONDITION_NOT_NULL(client);
   _az_PRECONDITION_NOT_NULL(options);
   _az_PRECONDITION_NOT_NULL(options->transport);
-  _az_PRECONDITION_NOT_NULL(options->codec);
+
+#if AZ_MQTT_CLIENT_MQTT3 && AZ_MQTT_CLIENT_MQTT5
+  _az_PRECONDITION(
+      options->protocol_version == AZ_MQTT3_PROTOCOL_VERSION
+      || options->protocol_version == AZ_MQTT5_PROTOCOL_VERSION);
+#elif !defined(NDEBUG) // Single version: checked in debug builds only, to add no code otherwise.
+#if AZ_MQTT_CLIENT_MQTT5
+  _az_PRECONDITION(
+      options->protocol_version == 0 || options->protocol_version == AZ_MQTT5_PROTOCOL_VERSION);
+#else
+  _az_PRECONDITION(
+      options->protocol_version == 0 || options->protocol_version == AZ_MQTT3_PROTOCOL_VERSION);
+#endif
+#endif
 
   memset(client, 0, sizeof(*client));
   client->options = *options;
@@ -566,7 +607,7 @@ AZ_NODISCARD az_result az_mqtt_client_connect(az_mqtt_client* client, int32_t ti
 
   // Encode and send CONNECT
   az_span send_buf = client->options.send_buffer;
-  rc = client->options.codec->encode_connect(&send_buf, &client->options.connect_options);
+  rc = _AZ_MQTT_CODEC(client, encode_connect)(&send_buf, &client->options.connect_options);
   if (az_result_succeeded(rc))
   {
     rc = _send_encoded(client, client->options.send_buffer, send_buf);
@@ -652,7 +693,7 @@ static az_result _service_keep_alive(az_mqtt_client* client, int32_t* out_next_m
   }
 
   az_span send_buf = client->options.send_buffer;
-  az_result rc = az_mqtt_codec_encode_pingreq(&send_buf);
+  az_result rc = _AZ_MQTT_CODEC(client, encode_pingreq)(&send_buf);
   if (az_result_succeeded(rc))
   {
     rc = _send_encoded(client, client->options.send_buffer, send_buf);
@@ -758,7 +799,7 @@ AZ_NODISCARD az_result az_mqtt_client_publish(
   }
 
   az_span send_buf = client->options.send_buffer;
-  az_result rc = client->options.codec->encode_publish(&send_buf, options, packet_id);
+  az_result rc = _AZ_MQTT_CODEC(client, encode_publish)(&send_buf, options, packet_id);
   if (az_result_failed(rc))
   {
     return rc;
@@ -797,7 +838,7 @@ AZ_NODISCARD az_result az_mqtt_client_subscribe(
 
   az_span send_buf = client->options.send_buffer;
   az_result rc
-      = client->options.codec->encode_subscribe(&send_buf, subscriptions, subscription_count, packet_id);
+      = _AZ_MQTT_CODEC(client, encode_subscribe)(&send_buf, subscriptions, subscription_count, packet_id);
   if (az_result_failed(rc))
   {
     return rc;
@@ -836,7 +877,7 @@ AZ_NODISCARD az_result az_mqtt_client_unsubscribe(
 
   az_span send_buf = client->options.send_buffer;
   az_result rc
-      = client->options.codec->encode_unsubscribe(&send_buf, topic_filters, filter_count, packet_id);
+      = _AZ_MQTT_CODEC(client, encode_unsubscribe)(&send_buf, topic_filters, filter_count, packet_id);
   if (az_result_failed(rc))
   {
     return rc;
@@ -872,7 +913,7 @@ AZ_NODISCARD az_result az_mqtt_client_disconnect(
   if (client->state == AZ_MQTT_CLIENT_STATE_CONNECTED)
   {
     az_span send_buf = client->options.send_buffer;
-    az_result rc = client->options.codec->encode_disconnect(&send_buf, reason_code, 0);
+    az_result rc = _AZ_MQTT_CODEC(client, encode_disconnect)(&send_buf, reason_code, 0);
     if (az_result_succeeded(rc))
     {
       // Best effort: the session ends either way.

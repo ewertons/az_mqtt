@@ -38,7 +38,7 @@ az_result az_mqtt_e2e_init_client(
   az_mqtt_client_options opts;
   memset(&opts, 0, sizeof(opts));
   opts.transport = transport;
-  opts.codec = AZ_MQTT_TEST_CODEC;
+  opts.protocol_version = AZ_MQTT_TEST_PROTOCOL_VERSION;
   opts.send_buffer = AZ_SPAN_FROM_BUFFER(fixture->send_buf);
   opts.receive_buffer = AZ_SPAN_FROM_BUFFER(fixture->recv_buf);
   opts.connect_options = connect_opts;

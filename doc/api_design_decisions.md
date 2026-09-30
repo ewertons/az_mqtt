@@ -16,7 +16,6 @@ Current call pattern in the sample is effectively:
 
     az_mqtt_client_options client_opts = {0};
     client_opts.transport = transport;
-    client_opts.codec = &az_mqtt5_codec;
     client_opts.send_buffer = AZ_SPAN_FROM_BUFFER(s_send_buffer);
     client_opts.receive_buffer = AZ_SPAN_FROM_BUFFER(s_recv_buffer);
 

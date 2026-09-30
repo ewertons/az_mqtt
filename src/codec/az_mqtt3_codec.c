@@ -455,15 +455,11 @@ az_mqtt3_codec_decode_publish(az_span body, uint8_t flags, az_mqtt_publish_data*
 
   // Save caller-provided buffers before clearing
   az_mqtt_user_property* user_properties = out->user_properties;
-  int32_t user_property_capacity = out->user_property_capacity;
   int32_t* subscription_identifiers = out->subscription_identifiers;
-  int32_t subscription_identifier_capacity = out->subscription_identifier_capacity;
 
   memset(out, 0, sizeof(*out));
   out->user_properties = user_properties;
-  out->user_property_capacity = user_property_capacity;
   out->subscription_identifiers = subscription_identifiers;
-  out->subscription_identifier_capacity = subscription_identifier_capacity;
 
   out->dup = (flags & 0x08) != 0;
   out->qos = (az_mqtt_qos)((flags >> 1) & 0x03);
@@ -619,25 +615,16 @@ AZ_NODISCARD az_result az_mqtt3_codec_decode_disconnect(az_span body, az_mqtt_di
   return AZ_OK;
 }
 
-// ============================================================================
-// Codec table
-// ============================================================================
+AZ_NODISCARD az_result az_mqtt3_codec_decode_fixed_header(
+    az_span* src,
+    az_mqtt_packet_type* out_packet_type,
+    uint8_t* out_flags,
+    int32_t* out_remaining)
+{
+  return _az_mqtt_decode_fixed_header(src, out_packet_type, out_flags, out_remaining);
+}
 
-az_mqtt_codec const az_mqtt3_codec = {
-  AZ_MQTT3_PROTOCOL_VERSION,
-  az_mqtt3_codec_encode_connect,
-  az_mqtt3_codec_encode_publish,
-  az_mqtt3_codec_encode_puback,
-  az_mqtt3_codec_encode_pubrec,
-  az_mqtt3_codec_encode_pubrel,
-  az_mqtt3_codec_encode_pubcomp,
-  az_mqtt3_codec_encode_subscribe,
-  az_mqtt3_codec_encode_unsubscribe,
-  az_mqtt3_codec_encode_disconnect,
-  az_mqtt3_codec_decode_connack,
-  az_mqtt3_codec_decode_publish,
-  az_mqtt3_codec_decode_ack,
-  az_mqtt3_codec_decode_suback,
-  az_mqtt3_codec_decode_unsuback,
-  az_mqtt3_codec_decode_disconnect,
-};
+AZ_NODISCARD az_result az_mqtt3_codec_encode_pingreq(az_span* dest)
+{
+  return _az_mqtt_encode_pingreq(dest);
+}

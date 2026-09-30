@@ -55,19 +55,21 @@ args+=(${CMAKE_ARGS:-})
 cmake "${args[@]}"
 cmake --build "${build}"
 
-# Link isolation: the core must not reference either codec, and an app linking
-# one MQTT version must not contain code from the other.
+# Link isolation: the base library references no version-specific code, and a
+# program linked to az_mqtt::mqtt3 or az_mqtt::mqtt5 contains none of the other
+# version's code.
 status=0
-core="$(find "${build}" -path "${build}/_deps" -prune -o -name 'libaz_mqtt.a' -print -quit)"
-if grep -E ' az_mqtt[35]_' <<<"$(nm "${core}")"; then
-  echo "${core}: references version-specific symbols" >&2; status=1
+base="$(find "${build}" -path "${build}/_deps" -prune -o -name 'libaz_mqtt_base.a' -print -quit)"
+[ -n "${base}" ] || { echo "libaz_mqtt_base.a not found" >&2; exit 1; }
+if grep -E ' az_mqtt[35]_' <<<"$(nm "${base}")"; then
+  echo "${base}: references version-specific symbols" >&2; status=1
 fi
 for v in 3 5; do
   other=$((8 - v))
   exe="${build}/samples/az_mqtt${v}_sample_connect"
   [ -f "${exe}" ] || continue
   syms="$(nm "${exe}")"
-  grep -q " az_mqtt${v}_codec" <<<"${syms}" || { echo "${exe}: no mqttv${v} codec" >&2; status=1; }
+  grep -q " az_mqtt${v}_codec_encode_connect" <<<"${syms}" || { echo "${exe}: no mqttv${v} codec" >&2; status=1; }
   if grep -E " az_mqtt${other}_" <<<"${syms}"; then
     echo "${exe}: contains mqttv${other} symbols" >&2; status=1
   fi
