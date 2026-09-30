@@ -169,6 +169,14 @@ AZ_NODISCARD az_result az_mqtt3_transport_receive(
  */
 void az_mqtt3_transport_close(az_mqtt3_transport* transport);
 
+/**
+ * @brief Monotonic clock in milliseconds, used for keep-alive and timeouts.
+ *
+ * Part of the platform port, like the functions above: it must never go
+ * backwards (not wall-clock time) and must have millisecond resolution.
+ */
+AZ_NODISCARD int64_t az_mqtt3_transport_clock_ms(void);
+
 #include <azure/core/_az_cfg_suffix.h>
 
 #endif // AZ_MQTT3_TRANSPORT_H

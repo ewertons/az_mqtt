@@ -28,6 +28,8 @@ typedef enum
   TEST_SERVER_PARTIAL_TLS_RECORD,
   /** @brief Answer CONNECT, then never read again (the client's sends back up). */
   TEST_SERVER_STOP_READING,
+  /** @brief Answer CONNECT, then send DISCONNECT (0x8B) and close (MQTT 5; 3.1.1 just closes). */
+  TEST_SERVER_DISCONNECT_AFTER_CONNACK,
 } test_server_behavior;
 
 typedef struct
@@ -42,6 +44,14 @@ typedef struct
   /** @brief Require and verify a client certificate issued by the test CA. */
   bool require_client_cert;
   test_server_behavior behavior;
+  /** @brief Never answer PINGREQ. */
+  bool no_pingresp;
+  /** @brief Server Keep Alive to put in an MQTT 5 CONNACK (see server_keep_alive_present). */
+  uint16_t server_keep_alive;
+  /** @brief Send server_keep_alive even when 0; otherwise 0 means "no property". */
+  bool server_keep_alive_present;
+  /** @brief QoS 0 PUBLISHes written in one burst right after the CONNACK. */
+  int burst_publishes;
 } test_server_options;
 
 typedef struct test_server test_server;
@@ -74,5 +84,11 @@ int test_server_handshakes(test_server* server);
 
 /** @brief Whether the last completed handshake carried a client certificate. */
 bool test_server_saw_client_cert(test_server* server);
+
+/** @brief PINGREQs received so far. */
+int test_server_pingreqs(test_server* server);
+
+/** @brief Whether the client closed the last connection (orderly or not). */
+bool test_server_client_closed(test_server* server);
 
 #endif // AZ_MQTT3_TEST_SERVER_H

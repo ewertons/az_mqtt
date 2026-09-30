@@ -10,7 +10,6 @@
 
 #include <az_mqtt3/az_mqtt3_client.h>
 
-#include <azure/core/az_platform.h>
 #include <azure/core/internal/az_precondition_internal.h>
 #include <azure/core/az_result.h>
 #include <azure/core/az_span.h>
@@ -31,12 +30,47 @@ static uint16_t _next_packet_id(az_mqtt3_client* client)
   return client->next_packet_id;
 }
 
-static int64_t _get_clock_ms(void)
+/** @brief Most packets handled by one az_mqtt3_client_process_loop() call. */
+#define _AZ_MQTT3_MAX_PACKETS_PER_LOOP 32
+
+static int64_t _get_clock_ms(void) { return az_mqtt3_transport_clock_ms(); }
+
+/** @brief Absolute deadline @p timeout_ms from now; -1 (no limit) for a negative timeout. */
+static int64_t _deadline(int32_t timeout_ms)
 {
-  int64_t now = 0;
-  az_result rc = az_platform_clock_msec(&now);
-  (void)rc;
-  return now;
+  return timeout_ms < 0 ? -1 : _get_clock_ms() + timeout_ms;
+}
+
+/** @brief Milliseconds left until @p deadline_ms, 0 if passed, -1 if unlimited. */
+static int32_t _remaining(int64_t deadline_ms)
+{
+  if (deadline_ms < 0)
+  {
+    return -1;
+  }
+  int64_t left = deadline_ms - _get_clock_ms();
+  return left <= 0 ? 0 : (left > INT32_MAX ? INT32_MAX : (int32_t)left);
+}
+
+/**
+ * @brief End the session: close the transport, reset state, report why.
+ *
+ * on_connection_closed runs only if the client was CONNECTING or CONNECTED.
+ */
+static void _close(az_mqtt3_client* client, az_result reason)
+{
+  bool const was_open = client->state != AZ_MQTT3_CLIENT_STATE_DISCONNECTED;
+  az_mqtt3_transport_close(client->options.transport);
+  client->state = AZ_MQTT3_CLIENT_STATE_DISCONNECTED;
+  client->recv_buf_pos = 0;
+  client->ping_outstanding = false;
+  // The callback may reconnect: callers compare generations before touching
+  // anything that belonged to the old session.
+  client->session_generation++;
+  if (was_open && client->options.on_connection_closed != NULL)
+  {
+    client->options.on_connection_closed(client, reason);
+  }
 }
 
 static int32_t _span_count(az_span span, int32_t element_size)
@@ -78,9 +112,9 @@ static az_result _send_encoded(az_mqtt3_client* client, az_span original_buf, az
   return rc;
 }
 
-// Ensure we have at least `needed` bytes in the receive buffer.
-// Handles partial reads and buffering.
-static az_result _ensure_received(az_mqtt3_client* client, int32_t needed, int32_t timeout_ms)
+// Ensure we have at least `needed` bytes in the receive buffer, waiting no
+// later than `deadline_ms`. Handles partial reads and buffering.
+static az_result _ensure_received(az_mqtt3_client* client, int32_t needed, int64_t deadline_ms)
 {
   while (client->recv_buf_pos < needed)
   {
@@ -90,16 +124,21 @@ static az_result _ensure_received(az_mqtt3_client* client, int32_t needed, int32
       return AZ_ERROR_NOT_ENOUGH_SPACE;
     }
 
+    int32_t const wait_ms = _remaining(deadline_ms);
     az_span received;
     az_result rc = az_mqtt3_transport_receive(
-        client->options.transport, free_space, timeout_ms, &received);
+        client->options.transport, free_space, wait_ms, &received);
     if (az_result_failed(rc))
     {
       return rc;
     }
     if (az_span_size(received) == 0)
     {
-      return AZ_MQTT3_ERROR_TIMEOUT;
+      if (wait_ms == 0)
+      {
+        return AZ_MQTT3_ERROR_TIMEOUT;
+      }
+      continue; // Woke early; wait out the rest of the deadline.
     }
     client->recv_buf_pos += az_span_size(received);
   }
@@ -128,14 +167,14 @@ static void _consume_recv(az_mqtt3_client* client, int32_t count)
 // The caller must call _consume_recv(client, *out_packet_size) AFTER processing the body.
 static az_result _read_packet(
     az_mqtt3_client* client,
-    int32_t timeout_ms,
+    int64_t deadline_ms,
     az_mqtt3_packet_type* out_type,
     uint8_t* out_flags,
     az_span* out_body,
     int32_t* out_packet_size)
 {
   // We need at least 2 bytes for the fixed header (type + min 1-byte VBI)
-  az_result rc = _ensure_received(client, 2, timeout_ms);
+  az_result rc = _ensure_received(client, 2, deadline_ms);
   if (az_result_failed(rc))
     return rc;
 
@@ -148,7 +187,7 @@ static az_result _read_packet(
 
   for (int i = 0; i < 4; i++)
   {
-    rc = _ensure_received(client, header_size + 1 + i, timeout_ms);
+    rc = _ensure_received(client, header_size + 1 + i, deadline_ms);
     if (az_result_failed(rc))
       return rc;
 
@@ -170,7 +209,7 @@ static az_result _read_packet(
 
   // Now ensure we have the full packet
   int32_t total_packet_size = header_size + remaining_length;
-  rc = _ensure_received(client, total_packet_size, timeout_ms);
+  rc = _ensure_received(client, total_packet_size, deadline_ms);
   if (az_result_failed(rc))
     return rc;
 
@@ -188,6 +227,8 @@ static az_result _read_packet(
   // Return packet size so caller can consume AFTER processing the body.
   *out_packet_size = total_packet_size;
   client->last_receive_time_ms = _get_clock_ms();
+  // Any packet proves the link is alive, not only a PINGRESP.
+  client->ping_outstanding = false;
 
   return AZ_OK;
 }
@@ -211,6 +252,9 @@ static az_result _handle_connack(az_mqtt3_client* client, az_span body)
   if (connack.reason_code == AZ_MQTT3_REASON_SUCCESS)
   {
     client->state = AZ_MQTT3_CLIENT_STATE_CONNECTED;
+    client->keep_alive_seconds = connack.server_keep_alive_present
+        ? connack.server_keep_alive
+        : client->options.connect_options.keep_alive_seconds;
   }
 
   if (client->options.on_connack != NULL)
@@ -412,12 +456,11 @@ static az_result _handle_disconnect(az_mqtt3_client* client, az_span body)
   if (az_result_failed(rc))
     return rc;
 
-  client->state = AZ_MQTT3_CLIENT_STATE_DISCONNECTED;
-
   if (client->options.on_disconnect != NULL)
   {
     client->options.on_disconnect(client, &disc);
   }
+  _close(client, AZ_MQTT3_ERROR_SERVER_DISCONNECTED);
   return AZ_OK;
 }
 
@@ -487,34 +530,47 @@ AZ_NODISCARD az_result az_mqtt3_client_connect(az_mqtt3_client* client, int32_t 
     return AZ_MQTT3_ERROR_INVALID_STATE;
   }
 
-  // TCP/TLS connect
-  az_result rc = az_mqtt3_transport_connect(
+  int64_t const deadline = _deadline(timeout_ms);
+  client->recv_buf_pos = 0;
+  client->ping_outstanding = false;
+  client->state = AZ_MQTT3_CLIENT_STATE_CONNECTING;
+
+  // TCP/TLS connect, bounded by the same deadline as the CONNACK.
+  az_result rc = az_mqtt3_transport_connect_start(
       client->options.transport,
       client->options.hostname,
       client->options.port,
       client->options.tls_options);
+  while (rc == AZ_OK)
+  {
+    rc = az_mqtt3_transport_connect_poll(client->options.transport, _remaining(deadline));
+    if (rc == AZ_OK)
+    {
+      break;
+    }
+    if (rc == AZ_MQTT3_ERROR_TIMEOUT && _remaining(deadline) != 0)
+    {
+      rc = AZ_OK; // Woke early; keep polling until the deadline.
+    }
+  }
   if (az_result_failed(rc))
   {
+    _close(client, rc);
     return rc;
   }
 
   // Encode and send CONNECT
   az_span send_buf = client->options.send_buffer;
   rc = az_mqtt3_codec_encode_connect(&send_buf, &client->options.connect_options);
+  if (az_result_succeeded(rc))
+  {
+    rc = _send_encoded(client, client->options.send_buffer, send_buf);
+  }
   if (az_result_failed(rc))
   {
-    az_mqtt3_transport_close(client->options.transport);
+    _close(client, rc);
     return rc;
   }
-
-  rc = _send_encoded(client, client->options.send_buffer, send_buf);
-  if (az_result_failed(rc))
-  {
-    az_mqtt3_transport_close(client->options.transport);
-    return rc;
-  }
-
-  client->state = AZ_MQTT3_CLIENT_STATE_CONNECTING;
 
   // Wait for CONNACK
   az_mqtt3_packet_type type;
@@ -522,40 +578,88 @@ AZ_NODISCARD az_result az_mqtt3_client_connect(az_mqtt3_client* client, int32_t 
   az_span body;
   int32_t packet_size;
 
-  rc = _read_packet(client, timeout_ms, &type, &flags, &body, &packet_size);
-  if (az_result_failed(rc))
+  uint32_t const generation = client->session_generation;
+  rc = _read_packet(client, deadline, &type, &flags, &body, &packet_size);
+  if (az_result_succeeded(rc))
   {
-    az_mqtt3_transport_close(client->options.transport);
-    client->state = AZ_MQTT3_CLIENT_STATE_DISCONNECTED;
-    return rc;
-  }
-
-  if (type != AZ_MQTT3_PACKET_TYPE_CONNACK)
-  {
+    if (type != AZ_MQTT3_PACKET_TYPE_CONNACK)
+    {
+      rc = AZ_MQTT3_ERROR_PROTOCOL;
+    }
+    else
+    {
+      rc = _dispatch_packet(client, type, flags, body);
+    }
+    if (client->session_generation != generation)
+    {
+      // on_connack ended the session (and may have started another): leave it be.
+      return client->state == AZ_MQTT3_CLIENT_STATE_CONNECTED ? AZ_OK
+                                                                : AZ_MQTT3_ERROR_NOT_CONNECTED;
+    }
     _consume_recv(client, packet_size);
-    az_mqtt3_transport_close(client->options.transport);
-    client->state = AZ_MQTT3_CLIENT_STATE_DISCONNECTED;
-    return AZ_MQTT3_ERROR_PROTOCOL;
   }
-
-  rc = _dispatch_packet(client, type, flags, body);
-  _consume_recv(client, packet_size);
+  if (az_result_succeeded(rc) && client->state != AZ_MQTT3_CLIENT_STATE_CONNECTED)
+  {
+    rc = AZ_MQTT3_ERROR_NOT_CONNECTED; // CONNACK refused; the reason went to on_connack.
+  }
   if (az_result_failed(rc))
   {
-    az_mqtt3_transport_close(client->options.transport);
-    client->state = AZ_MQTT3_CLIENT_STATE_DISCONNECTED;
+    _close(client, rc);
     return rc;
   }
 
-  // Check if CONNACK was successful
-  if (client->state != AZ_MQTT3_CLIENT_STATE_CONNECTED)
+  client->last_receive_time_ms = _get_clock_ms();
+  return AZ_OK;
+}
+
+/**
+ * @brief Send PINGREQ when due and detect a missing response.
+ *
+ * @param[out] out_next_ms Milliseconds until keep-alive next needs attention; -1 if never.
+ */
+static az_result _service_keep_alive(az_mqtt3_client* client, int32_t* out_next_ms)
+{
+  *out_next_ms = -1;
+  if (client->state != AZ_MQTT3_CLIENT_STATE_CONNECTED || client->keep_alive_seconds == 0)
   {
-    az_mqtt3_transport_close(client->options.transport);
-    client->state = AZ_MQTT3_CLIENT_STATE_DISCONNECTED;
-    return AZ_MQTT3_ERROR_NOT_CONNECTED;
+    return AZ_OK;
   }
 
-  return AZ_OK;
+  int64_t const now = _get_clock_ms();
+  int64_t const keep_alive_ms = (int64_t)client->keep_alive_seconds * 1000;
+
+  if (client->ping_outstanding)
+  {
+    int64_t const waited = now - client->ping_sent_time_ms;
+    if (waited >= keep_alive_ms)
+    {
+      return AZ_MQTT3_ERROR_KEEP_ALIVE_TIMEOUT;
+    }
+    *out_next_ms = (int32_t)(keep_alive_ms - waited);
+    return AZ_OK;
+  }
+
+  int64_t const idle = now - client->last_send_time_ms;
+  if (idle < keep_alive_ms)
+  {
+    *out_next_ms = (int32_t)(keep_alive_ms - idle);
+    return AZ_OK;
+  }
+
+  az_span send_buf = client->options.send_buffer;
+  az_result rc = az_mqtt3_codec_encode_pingreq(&send_buf);
+  if (az_result_succeeded(rc))
+  {
+    rc = _send_encoded(client, client->options.send_buffer, send_buf);
+  }
+  if (az_result_succeeded(rc))
+  {
+    // The response window starts once the PINGREQ is out, not before a slow send.
+    client->ping_outstanding = true;
+    client->ping_sent_time_ms = _get_clock_ms();
+    *out_next_ms = (int32_t)keep_alive_ms;
+  }
+  return rc;
 }
 
 AZ_NODISCARD az_result az_mqtt3_client_process_loop(az_mqtt3_client* client, int32_t timeout_ms)
@@ -567,44 +671,66 @@ AZ_NODISCARD az_result az_mqtt3_client_process_loop(az_mqtt3_client* client, int
     return AZ_MQTT3_ERROR_NOT_CONNECTED;
   }
 
-  // Send PINGREQ if needed
-  if (client->state == AZ_MQTT3_CLIENT_STATE_CONNECTED
-      && client->options.connect_options.keep_alive_seconds > 0)
-  {
-    int64_t now = _get_clock_ms();
-    int64_t keep_alive_ms = (int64_t)client->options.connect_options.keep_alive_seconds * 1000;
-
-    if ((now - client->last_send_time_ms) >= keep_alive_ms)
-    {
-      az_span send_buf = client->options.send_buffer;
-      az_result rc = az_mqtt3_codec_encode_pingreq(&send_buf);
-      if (az_result_failed(rc))
-        return rc;
-      rc = _send_encoded(client, client->options.send_buffer, send_buf);
-      if (az_result_failed(rc))
-        return rc;
-    }
-  }
-
-  // Try to read a packet
-  az_mqtt3_packet_type type;
-  uint8_t flags;
-  az_span body;
-  int32_t packet_size;
-
-  az_result rc = _read_packet(client, timeout_ms, &type, &flags, &body, &packet_size);
-  if (rc == AZ_MQTT3_ERROR_TIMEOUT)
-  {
-    return AZ_OK; // No data available, that's fine
-  }
+  int32_t next_keep_alive_ms;
+  az_result rc = _service_keep_alive(client, &next_keep_alive_ms);
   if (az_result_failed(rc))
   {
+    _close(client, rc);
     return rc;
   }
 
-  rc = _dispatch_packet(client, type, flags, body);
-  _consume_recv(client, packet_size);
-  return rc;
+  // Never sleep past the next keep-alive action.
+  int32_t wait_ms = timeout_ms;
+  if (next_keep_alive_ms >= 0 && (wait_ms < 0 || next_keep_alive_ms < wait_ms))
+  {
+    wait_ms = next_keep_alive_ms;
+  }
+  int64_t deadline = _deadline(wait_ms);
+
+  // Handle every complete packet already available, up to a bound.
+  for (int i = 0; i < _AZ_MQTT3_MAX_PACKETS_PER_LOOP
+       && client->state == AZ_MQTT3_CLIENT_STATE_CONNECTED;
+       i++)
+  {
+    az_mqtt3_packet_type type;
+    uint8_t flags;
+    az_span body;
+    int32_t packet_size;
+
+    uint32_t const generation = client->session_generation;
+    rc = _read_packet(client, deadline, &type, &flags, &body, &packet_size);
+    if (rc == AZ_MQTT3_ERROR_TIMEOUT)
+    {
+      rc = AZ_OK;
+      break;
+    }
+    if (az_result_succeeded(rc))
+    {
+      rc = _dispatch_packet(client, type, flags, body);
+      if (client->session_generation != generation)
+      {
+        // A callback ended this session, and may have connected a new one whose
+        // receive buffer must not be touched: stop here.
+        return az_result_failed(rc) ? rc : AZ_OK;
+      }
+      _consume_recv(client, packet_size);
+    }
+    if (az_result_failed(rc))
+    {
+      _close(client, rc);
+      return rc;
+    }
+    deadline = _get_clock_ms(); // Only what is already there from now on.
+  }
+
+  // The wait may have been cut to the keep-alive time: act on it now.
+  rc = _service_keep_alive(client, &next_keep_alive_ms);
+  if (az_result_failed(rc))
+  {
+    _close(client, rc);
+    return rc;
+  }
+  return AZ_OK;
 }
 
 AZ_NODISCARD az_result az_mqtt3_client_publish(
@@ -636,6 +762,7 @@ AZ_NODISCARD az_result az_mqtt3_client_publish(
   rc = _send_encoded(client, client->options.send_buffer, send_buf);
   if (az_result_failed(rc))
   {
+    _close(client, rc); // A partial packet may be on the wire.
     return rc;
   }
 
@@ -674,6 +801,7 @@ AZ_NODISCARD az_result az_mqtt3_client_subscribe(
   rc = _send_encoded(client, client->options.send_buffer, send_buf);
   if (az_result_failed(rc))
   {
+    _close(client, rc); // A partial packet may be on the wire.
     return rc;
   }
 
@@ -712,6 +840,7 @@ AZ_NODISCARD az_result az_mqtt3_client_unsubscribe(
   rc = _send_encoded(client, client->options.send_buffer, send_buf);
   if (az_result_failed(rc))
   {
+    _close(client, rc); // A partial packet may be on the wire.
     return rc;
   }
 
@@ -741,14 +870,11 @@ AZ_NODISCARD az_result az_mqtt3_client_disconnect(
     az_result rc = az_mqtt3_codec_encode_disconnect(&send_buf, reason_code, 0);
     if (az_result_succeeded(rc))
     {
-      _send_encoded(client, client->options.send_buffer, send_buf);
-      // Ignore send errors during disconnect
+      // Best effort: the session ends either way.
+      (void)_send_encoded(client, client->options.send_buffer, send_buf);
     }
   }
 
-  az_mqtt3_transport_close(client->options.transport);
-  client->state = AZ_MQTT3_CLIENT_STATE_DISCONNECTED;
-  client->recv_buf_pos = 0;
-
+  _close(client, AZ_OK);
   return AZ_OK;
 }

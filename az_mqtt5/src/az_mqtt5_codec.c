@@ -1250,6 +1250,7 @@ static az_result _decode_connack_props(az_span* src, az_mqtt5_connack_data* out)
       }
       case AZ_MQTT5_PROPERTY_SERVER_KEEP_ALIVE:
         rc = _read_uint16(&props, &out->server_keep_alive);
+        out->server_keep_alive_present = az_result_succeeded(rc);
         break;
       case AZ_MQTT5_PROPERTY_RESPONSE_INFORMATION:
         rc = _read_utf8_string(&props, &out->response_information);
