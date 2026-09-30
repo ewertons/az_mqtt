@@ -150,6 +150,19 @@ static void test_reconnect_with_session(void** state)
 
   // Override session expiry to keep the session
   client.options.connect_options.session_expiry_interval = 300;
+#if AZ_MQTT3_PROTOCOL_VERSION == 4
+  // MQTT 3.1.1 has no session expiry: a Clean Session 1 session ends at
+  // disconnect. Clear any old session with one clean connect, then keep the
+  // next one with Clean Session 0.
+  rc = az_mqtt3_client_connect(&client, 5000);
+  assert_int_equal(rc, AZ_OK);
+  rc = az_mqtt3_client_disconnect(&client, AZ_MQTT3_REASON_NORMAL_DISCONNECTION);
+  assert_int_equal(rc, AZ_OK);
+  s_connack_received = false;
+  rc = init_client(&client, client_id);
+  assert_int_equal(rc, AZ_OK);
+  client.options.connect_options.clean_start = false;
+#endif
 
   rc = az_mqtt3_client_connect(&client, 5000);
   assert_int_equal(rc, AZ_OK);

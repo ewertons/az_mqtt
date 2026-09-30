@@ -647,7 +647,7 @@ az_mqtt5_codec_encode_connect(az_span* dest, az_mqtt5_connect_options const* opt
     return rc;
 
   // Protocol Version (5)
-  rc = _write_byte(dest, 5);
+  rc = _write_byte(dest, AZ_MQTT5_PROTOCOL_VERSION);
   if (az_result_failed(rc))
     return rc;
 
