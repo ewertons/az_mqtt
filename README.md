@@ -18,6 +18,12 @@ the [Azure SDK for C](https://github.com/Azure/azure-sdk-for-c) span and platfor
 - TLS: OpenSSL or mbedTLS (POSIX), Schannel (Windows), or none.
 - Connect is blocking (`az_mqttN_client_connect`) or not (`az_mqttN_client_connect_start`, then
   `az_mqttN_client_process_loop` until CONNECTED; only name resolution may block).
+- Requests awaiting acknowledgement are tracked in caller storage (`options.inflight`, 4 B per
+  slot): unique packet identifiers, QoS 2 duplicate detection, acknowledgements for unknown
+  identifiers ignored. With no free slot a request fails with `AZ_MQTT_ERROR_FLOW_CONTROL`.
+  Nothing is resent after a reconnect.
+- mqttv5 enforces the CONNACK Receive Maximum, Maximum QoS, Retain Available, Topic Alias Maximum
+  and Maximum Packet Size.
 
 ```c
 #include <az_mqtt5/az_mqtt5_client.h>   /* or az_mqtt3/az_mqtt3_client.h */
@@ -28,6 +34,7 @@ options.hostname = AZ_SPAN_FROM_STR("broker.example.com");
 options.port = 8883;
 options.send_buffer = AZ_SPAN_FROM_BUFFER(send_buf);
 options.receive_buffer = AZ_SPAN_FROM_BUFFER(recv_buf);
+options.inflight = az_span_create((uint8_t*)inflight, (int32_t)sizeof(inflight)); /* az_mqtt_inflight[8] */
 options.connect_options = az_mqtt5_connect_options_default();
 /* ... TLS, callbacks, property buffers ... */
 az_result rc = az_mqtt5_client_init(&client, &options);
@@ -59,6 +66,13 @@ az_result rc = az_mqtt5_client_init(&client, &options);
   - `az_mqtt3_client_disconnect(client)` takes no reason code;
   - removed: `buffers`, `on_disconnect`, properties, AUTH.
 - mqttv3: `az_mqtt3_codec_decode_ack` rejects bytes after the packet identifier. An AUTH packet (reserved in 3.1.1) is a protocol error.
+- `options.inflight` is required for QoS 1/2 publish, subscribe and unsubscribe; without it they
+  fail with `AZ_MQTT_ERROR_FLOW_CONTROL`. `on_puback`, `on_pubcomp`, `on_suback` and `on_unsuback`
+  fire only for identifiers in flight.
+- mqttv5: publish fails with `AZ_MQTT_ERROR_NOT_SUPPORTED` above the server's Maximum QoS, when
+  it is retained and Retain Available is 0, or when `topic_alias` exceeds the server's Topic Alias
+  Maximum (0 if not sent); with `AZ_MQTT_ERROR_FLOW_CONTROL` at its Receive Maximum; and with
+  `AZ_MQTT_ERROR_PACKET_TOO_LARGE` above its Maximum Packet Size (also subscribe and unsubscribe).
 - CMake:
   - targets: `az_mqtt::mqttv5` / `az_mqtt::mqttv3` (were `az_mqtt5::client` / `az_mqtt3::client`);
   - options: `AZ_MQTT_*` (were `AZ_MQTT5_*` / `AZ_MQTT3_*`).

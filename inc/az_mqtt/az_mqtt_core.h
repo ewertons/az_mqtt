@@ -23,6 +23,19 @@
 
 typedef struct az_mqtt_core az_mqtt_core;
 
+/**
+ * @brief Storage for one in-flight request (see the clients' `inflight` option).
+ * Fields are internal.
+ */
+typedef struct
+{
+  struct
+  {
+    uint16_t packet_id;
+    uint8_t kind;
+  } _internal;
+} az_mqtt_inflight;
+
 /** @brief Internal: called by the core when a session ends; see on_connection_closed. */
 typedef void (*_az_mqtt_core_on_closed_fn)(az_mqtt_core* core, az_result reason);
 
@@ -37,6 +50,8 @@ struct az_mqtt_core
     az_span hostname;
     az_mqtt_tls_options const* tls_options;
     _az_mqtt_core_on_closed_fn on_closed;
+    /** @brief In-flight requests (caller storage); inflight_capacity entries. */
+    az_mqtt_inflight* inflight;
     int64_t last_send_time_ms;
     int64_t last_receive_time_ms;
     /** @brief CONNECTED: when the outstanding PINGREQ was sent. CONNECTING: connect deadline (-1: none). */
@@ -50,6 +65,7 @@ struct az_mqtt_core
     uint16_t next_packet_id;
     /** @brief Keep-alive in force (the server's, if it sent one). */
     uint16_t keep_alive_seconds;
+    uint16_t inflight_capacity;
     /** @brief A PINGREQ is awaiting its PINGRESP (or any other packet). */
     bool ping_outstanding;
     /** @brief CONNECTING: the transport is up and CONNECT was sent. */

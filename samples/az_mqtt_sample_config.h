@@ -4,6 +4,7 @@
 #ifndef AZ_MQTT_SAMPLE_CONFIG_H
 #define AZ_MQTT_SAMPLE_CONFIG_H
 
+#include <az_mqtt/az_mqtt_core.h>
 #include <az_mqtt/az_mqtt_transport.h>
 
 #include <stdint.h>
@@ -26,5 +27,8 @@ static union
   int64_t align_int64;
   double align_double;
 } s_transport_buffer;
+
+// In-flight QoS 1/2 publishes, subscribes and unsubscribes.
+static az_mqtt_inflight s_inflight[8];
 
 #endif // AZ_MQTT_SAMPLE_CONFIG_H

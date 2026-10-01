@@ -64,6 +64,28 @@ typedef struct
   bool send_empty_disconnect;
   /** @brief TLS: wait this long after accepting before answering the ClientHello. */
   int handshake_delay_ms;
+  /** @brief MQTT 5 CONNACK Receive Maximum; 0: absent. */
+  uint16_t receive_maximum;
+  /** @brief MQTT 5 CONNACK Maximum QoS (0 or 1), sent when maximum_qos_present. */
+  uint8_t maximum_qos;
+  bool maximum_qos_present;
+  /** @brief MQTT 5 CONNACK Retain Available = 0. */
+  bool retain_unavailable;
+  /** @brief MQTT 5 CONNACK Maximum Packet Size; 0: absent. */
+  uint32_t maximum_packet_size;
+  /** @brief Answer PUBLISH QoS 1 with PUBACK, QoS 2 with PUBREC, and PUBREL with PUBCOMP. */
+  bool ack_publishes;
+  /** @brief With ack_publishes: never acknowledge the first PUBLISH. */
+  bool hold_first_publish;
+  /** @brief MQTT 5: reason code in the PUBRECs sent (0: success). */
+  uint8_t pubrec_reason;
+  /**
+   * @brief After CONNACK: QoS 2 PUBLISH with packet id 7, its DUP resend, PUBREL 7, a new
+   * QoS 2 PUBLISH with packet id 7, PUBREL 7.
+   */
+  bool send_qos2_sequence;
+  /** @brief After CONNACK: PUBACK, PUBCOMP, PUBREC, PUBREL, SUBACK, UNSUBACK for unused packet ids. */
+  bool send_unknown_acks;
 } test_server_options;
 
 typedef struct test_server test_server;
@@ -99,6 +121,16 @@ bool test_server_saw_client_cert(test_server* server);
 
 /** @brief PINGREQs received so far. */
 int test_server_pingreqs(test_server* server);
+
+/** @brief PUBLISH packets received. */
+int test_server_publishes(test_server* server);
+
+/** @brief PUBREL packets received, and the reason code of the last (0 if absent). */
+int test_server_pubrels(test_server* server);
+int test_server_last_pubrel_reason(test_server* server);
+
+/** @brief PUBCOMP packets received. */
+int test_server_pubcomps(test_server* server);
 
 /** @brief Whether the client closed the last connection (orderly or not). */
 bool test_server_client_closed(test_server* server);

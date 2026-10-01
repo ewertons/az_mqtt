@@ -42,6 +42,7 @@ az_result az_mqtt_e2e_init_client(
   opts.transport = transport;
   opts.send_buffer = AZ_SPAN_FROM_BUFFER(fixture->send_buf);
   opts.receive_buffer = AZ_SPAN_FROM_BUFFER(fixture->recv_buf);
+  opts.inflight = az_span_create((uint8_t*)fixture->inflight, (int32_t)sizeof(fixture->inflight));
   opts.connect_options = connect_opts;
   opts.hostname = params->hostname;
   opts.port = params->port;

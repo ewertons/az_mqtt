@@ -40,6 +40,10 @@ struct test_server
   int handshakes;
   bool saw_client_cert;
   int pingreqs;
+  int publishes;
+  int pubrels;
+  int last_pubrel_reason;
+  int pubcomps;
   bool client_closed;
   int silent_fds[MAX_SILENT];
   int silent_count;
@@ -216,6 +220,8 @@ typedef struct
 {
   int fd;
   SSL* ssl;
+  /** @brief Fixed header flags of the last packet read. */
+  uint8_t flags;
 } conn;
 
 static int _read(conn* c, uint8_t* buf, int len)
@@ -280,6 +286,7 @@ static int _read_packet(test_server* s, conn* c, uint8_t* body, int cap, int* ou
     return -1;
   }
   int type = b >> 4;
+  c->flags = b & 0x0F;
   int len = 0;
   int shift = 0;
   do
@@ -317,21 +324,42 @@ static void _serve(test_server* s, conn* c)
   }
   // CONNECT variable header: 00 04 'M' 'Q' 'T' 'T' <level>
   bool const v5 = body[6] == 5;
-  uint8_t connack_v5[] = { 0x20, 0x03, 0x00, s->options.connack_code, 0x00, 0x00, 0x00, 0x00 };
   uint8_t const connack_v3[] = { 0x20, 0x02, 0x00, s->options.connack_code };
-  int connack_v5_len = 5;
+  uint8_t props[24];
+  int p = 0;
   if (s->options.server_keep_alive != 0 || s->options.server_keep_alive_present)
   {
-    // Properties: Server Keep Alive (0x13).
-    connack_v5[1] = 0x06;
-    connack_v5[4] = 0x03;
-    connack_v5[5] = 0x13;
-    connack_v5[6] = (uint8_t)(s->options.server_keep_alive >> 8);
-    connack_v5[7] = (uint8_t)(s->options.server_keep_alive & 0xFF);
-    connack_v5_len = 8;
+    props[p++] = 0x13; // Server Keep Alive
+    props[p++] = (uint8_t)(s->options.server_keep_alive >> 8);
+    props[p++] = (uint8_t)(s->options.server_keep_alive & 0xFF);
   }
-  bool ok = v5 ? _write(c, connack_v5, connack_v5_len)
-               : _write(c, connack_v3, (int)sizeof(connack_v3));
+  if (s->options.receive_maximum != 0)
+  {
+    props[p++] = 0x21;
+    props[p++] = (uint8_t)(s->options.receive_maximum >> 8);
+    props[p++] = (uint8_t)(s->options.receive_maximum & 0xFF);
+  }
+  if (s->options.maximum_qos_present)
+  {
+    props[p++] = 0x24;
+    props[p++] = s->options.maximum_qos;
+  }
+  if (s->options.retain_unavailable)
+  {
+    props[p++] = 0x25;
+    props[p++] = 0x00;
+  }
+  if (s->options.maximum_packet_size != 0)
+  {
+    props[p++] = 0x27;
+    for (int shift = 24; shift >= 0; shift -= 8)
+    {
+      props[p++] = (uint8_t)(s->options.maximum_packet_size >> shift);
+    }
+  }
+  uint8_t connack_v5[5 + sizeof(props)] = { 0x20, (uint8_t)(3 + p), 0x00, s->options.connack_code, (uint8_t)p };
+  memcpy(&connack_v5[5], props, (size_t)p);
+  bool ok = v5 ? _write(c, connack_v5, 5 + p) : _write(c, connack_v3, (int)sizeof(connack_v3));
   if (!ok || s->options.connack_code != 0)
   {
     return;
@@ -397,6 +425,54 @@ static void _serve(test_server* s, conn* c)
   {
     static const uint8_t auth[] = { 0xF0, 0x00 };
     if (!_write(c, auth, (int)sizeof(auth)))
+    {
+      return;
+    }
+  }
+  if (s->options.send_qos2_sequence)
+  {
+    // PUBLISH QoS 2 "t"/"p" id 7: 0x34 len 00 01 't' 00 07 [00 props] 'p'; DUP sets 0x08.
+    uint8_t seq[64];
+    int n = 0;
+    uint8_t const kinds[] = { 0x34, 0x3C, 0x62, 0x34, 0x62 };
+    for (size_t i = 0; i < sizeof(kinds); i++)
+    {
+      seq[n++] = kinds[i];
+      if (kinds[i] == 0x62)
+      {
+        seq[n++] = 0x02; // PUBREL 7
+        seq[n++] = 0x00;
+        seq[n++] = 0x07;
+        continue;
+      }
+      seq[n++] = v5 ? 0x07 : 0x06;
+      seq[n++] = 0x00;
+      seq[n++] = 0x01;
+      seq[n++] = 't';
+      seq[n++] = 0x00;
+      seq[n++] = 0x07;
+      if (v5)
+      {
+        seq[n++] = 0x00;
+      }
+      seq[n++] = 'p';
+    }
+    if (!_write(c, seq, n))
+    {
+      return;
+    }
+  }
+  if (s->options.send_unknown_acks)
+  {
+    static const uint8_t acks_v3[] = { 0x40, 0x02, 0x41, 0x41, 0x70, 0x02, 0x42, 0x42, 0x50, 0x02,
+                                       0x43, 0x43, 0x62, 0x02, 0x44, 0x44, 0x90, 0x03, 0x45, 0x45,
+                                       0x00, 0xB0, 0x02, 0x46, 0x46 };
+    static const uint8_t acks_v5[] = { 0x40, 0x02, 0x41, 0x41, 0x70, 0x02, 0x42, 0x42, 0x50, 0x02,
+                                       0x43, 0x43, 0x62, 0x02, 0x44, 0x44, 0x90, 0x04, 0x45, 0x45,
+                                       0x00, 0x00, 0xB0, 0x04, 0x46, 0x46, 0x00, 0x00 };
+    bool const sent = v5 ? _write(c, acks_v5, (int)sizeof(acks_v5))
+                         : _write(c, acks_v3, (int)sizeof(acks_v3));
+    if (!sent)
     {
       return;
     }
@@ -472,6 +548,42 @@ static void _serve(test_server* s, conn* c)
       }
       (void)_write(c, suback, n);
     }
+    if (type == 3)
+    {
+      _add(s, &s->publishes, 1);
+      int const qos = (c->flags >> 1) & 0x03;
+      int const id_at = len >= 2 ? 2 + ((body[0] << 8) | body[1]) : len;
+      bool const held = s->options.hold_first_publish && test_server_publishes(s) == 1;
+      if (s->options.ack_publishes && !held && qos > 0 && id_at + 2 <= len)
+      {
+        bool const reason = v5 && qos == 2 && s->options.pubrec_reason != 0;
+        uint8_t const ack[] = { (uint8_t)(qos == 1 ? 0x40 : 0x50), (uint8_t)(reason ? 3 : 2),
+                                body[id_at], body[id_at + 1], s->options.pubrec_reason };
+        (void)_write(c, ack, reason ? 5 : 4);
+      }
+    }
+    if (type == 6 && len >= 2)
+    {
+      pthread_mutex_lock(&s->lock);
+      s->pubrels++;
+      s->last_pubrel_reason = len >= 3 ? body[2] : 0;
+      pthread_mutex_unlock(&s->lock);
+      if (s->options.ack_publishes)
+      {
+        uint8_t const pubcomp[] = { 0x70, 0x02, body[0], body[1] };
+        (void)_write(c, pubcomp, (int)sizeof(pubcomp));
+      }
+    }
+    if (type == 7)
+    {
+      _add(s, &s->pubcomps, 1);
+    }
+    if (type == 10 && len >= 2)
+    {
+      // UNSUBACK for one topic filter (MQTT 5: empty properties, reason 0).
+      uint8_t const unsuback[] = { 0xB0, (uint8_t)(v5 ? 4 : 2), body[0], body[1], 0x00, 0x00 };
+      (void)_write(c, unsuback, v5 ? 6 : 4);
+    }
     if (type == 12)
     {
       _add(s, &s->pingreqs, 1);
@@ -518,7 +630,7 @@ static void* _run(void* arg)
       }
       continue;
     }
-    conn c = { fd, NULL };
+    conn c = { fd, NULL, 0 };
     if (s->options.tls)
     {
       struct timeval tv = { 5, 0 };
@@ -641,6 +753,10 @@ bool test_server_saw_client_cert(test_server* s)
   return v;
 }
 int test_server_pingreqs(test_server* s) { return _get(s, &s->pingreqs); }
+int test_server_publishes(test_server* s) { return _get(s, &s->publishes); }
+int test_server_pubrels(test_server* s) { return _get(s, &s->pubrels); }
+int test_server_last_pubrel_reason(test_server* s) { return _get(s, &s->last_pubrel_reason); }
+int test_server_pubcomps(test_server* s) { return _get(s, &s->pubcomps); }
 bool test_server_client_closed(test_server* s)
 {
   pthread_mutex_lock(&s->lock);

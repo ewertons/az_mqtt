@@ -73,6 +73,11 @@ static az_result _handle_connack(az_mqtt5_client* client, az_span body)
 
   if (connack.reason_code == AZ_MQTT5_REASON_SUCCESS)
   {
+    client->_internal.server_receive_maximum = connack.receive_maximum;
+    client->_internal.server_maximum_qos = connack.maximum_qos;
+    client->_internal.server_retain_available = connack.retain_available;
+    client->_internal.server_maximum_packet_size = connack.maximum_packet_size;
+    client->_internal.server_topic_alias_maximum = connack.topic_alias_maximum;
     _CORE(client).state = AZ_MQTT_CLIENT_STATE_CONNECTED;
     _CORE(client).keep_alive_seconds = connack.server_keep_alive_present
         ? connack.server_keep_alive
@@ -116,13 +121,15 @@ static az_result _handle_publish(az_mqtt5_client* client, az_span body, uint8_t 
   }
   else if (publish.qos == AZ_MQTT_QOS_EXACTLY_ONCE)
   {
+    bool const duplicate
+        = _az_mqtt_core_inflight_inbound_qos2(&client->_internal.core, publish.packet_id);
     az_span send_buf = _SEND_BUFFER(client);
     rc = az_mqtt5_codec_encode_pubrec(&send_buf, publish.packet_id, AZ_MQTT5_REASON_SUCCESS);
     if (az_result_failed(rc))
       return rc;
     rc = _az_mqtt_core_send(&client->_internal.core, send_buf);
-    if (az_result_failed(rc))
-      return rc;
+    if (az_result_failed(rc) || duplicate)
+      return rc; // A duplicate was delivered already.
   }
 
   if (client->_internal.on_publish != NULL)
@@ -146,23 +153,61 @@ static az_result _handle_ack(az_mqtt5_client* client, az_mqtt_packet_type type, 
   if (az_result_failed(rc))
     return rc;
 
+  az_mqtt_core* const core = &client->_internal.core;
   az_mqtt5_on_puback_fn callback = client->_internal.on_pubcomp;
   if (type == AZ_MQTT_PACKET_TYPE_PUBACK)
   {
+    if (!_az_mqtt_core_inflight_complete(core, _AZ_MQTT_INFLIGHT_PUBLISH_QOS1, ack.packet_id))
+    {
+      return AZ_OK; // Not in flight.
+    }
     callback = client->_internal.on_puback;
   }
-  else if (type != AZ_MQTT_PACKET_TYPE_PUBCOMP)
+  else if (type == AZ_MQTT_PACKET_TYPE_PUBCOMP)
   {
-    // PUBREC: answer PUBREL. PUBREL: answer PUBCOMP, then report completion.
+    if (!_az_mqtt_core_inflight_complete(core, _AZ_MQTT_INFLIGHT_PUBREL, ack.packet_id))
+    {
+      return AZ_OK;
+    }
+  }
+  else if (type == AZ_MQTT_PACKET_TYPE_PUBREC)
+  {
+    az_mqtt_inflight* slot
+        = _az_mqtt_core_inflight_find(core, _AZ_MQTT_INFLIGHT_PUBLISH_QOS2, ack.packet_id);
+    if (slot != NULL && ack.reason_code >= 0x80)
+    {
+      slot->_internal.kind = _AZ_MQTT_INFLIGHT_FREE; // Failed: the exchange ends here.
+    }
+    else
+    {
+      if (slot != NULL)
+      {
+        slot->_internal.kind = _AZ_MQTT_INFLIGHT_PUBREL;
+      }
+      else
+      {
+        slot = _az_mqtt_core_inflight_find(core, _AZ_MQTT_INFLIGHT_PUBREL, ack.packet_id); // Resent.
+      }
+      az_span send_buf = _SEND_BUFFER(client);
+      rc = az_mqtt5_codec_encode_pubrel(
+          &send_buf,
+          ack.packet_id,
+          slot != NULL ? AZ_MQTT5_REASON_SUCCESS : AZ_MQTT5_REASON_PACKET_IDENTIFIER_NOT_FOUND);
+      return az_result_succeeded(rc) ? _az_mqtt_core_send(core, send_buf) : rc;
+    }
+  }
+  else // PUBREL
+  {
+    bool const tracked
+        = _az_mqtt_core_inflight_complete(core, _AZ_MQTT_INFLIGHT_INBOUND_QOS2, ack.packet_id);
+    // Always acknowledged: an untracked one may have been delivered without a slot.
     az_span send_buf = _SEND_BUFFER(client);
-    rc = type == AZ_MQTT_PACKET_TYPE_PUBREC
-        ? az_mqtt5_codec_encode_pubrel(&send_buf, ack.packet_id, AZ_MQTT5_REASON_SUCCESS)
-        : az_mqtt5_codec_encode_pubcomp(&send_buf, ack.packet_id, AZ_MQTT5_REASON_SUCCESS);
+    rc = az_mqtt5_codec_encode_pubcomp(&send_buf, ack.packet_id, AZ_MQTT5_REASON_SUCCESS);
     if (az_result_succeeded(rc))
     {
-      rc = _az_mqtt_core_send(&client->_internal.core, send_buf);
+      rc = _az_mqtt_core_send(core, send_buf);
     }
-    if (az_result_failed(rc) || type == AZ_MQTT_PACKET_TYPE_PUBREC)
+    if (az_result_failed(rc) || !tracked)
     {
       return rc;
     }
@@ -188,7 +233,9 @@ static az_result _handle_suback(az_mqtt5_client* client, az_span body)
       _span_count(client->_internal.buffers.suback_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
 
   az_result rc = az_mqtt5_codec_decode_suback(body, &suback);
-  if (az_result_failed(rc))
+  if (az_result_failed(rc)
+      || !_az_mqtt_core_inflight_complete(
+          &client->_internal.core, _AZ_MQTT_INFLIGHT_SUBSCRIBE, suback.packet_id))
     return rc;
 
   if (client->_internal.on_suback != NULL)
@@ -211,7 +258,9 @@ static az_result _handle_unsuback(az_mqtt5_client* client, az_span body)
       _span_count(client->_internal.buffers.suback_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
 
   az_result rc = az_mqtt5_codec_decode_unsuback(body, &unsuback);
-  if (az_result_failed(rc))
+  if (az_result_failed(rc)
+      || !_az_mqtt_core_inflight_complete(
+          &client->_internal.core, _AZ_MQTT_INFLIGHT_UNSUBSCRIBE, unsuback.packet_id))
     return rc;
 
   if (client->_internal.on_unsuback != NULL)
@@ -304,6 +353,7 @@ az_mqtt5_client_init(az_mqtt5_client* client, az_mqtt5_client_options const* opt
   client->_internal.on_disconnect = options->on_disconnect;
   client->_internal.on_connection_closed = options->on_connection_closed;
   client->_internal.user_context = options->user_context;
+  _az_mqtt_core_inflight_init(&client->_internal.core, options->inflight);
   return AZ_OK;
 }
 
@@ -352,18 +402,37 @@ AZ_NODISCARD az_result az_mqtt5_client_publish(
     return AZ_MQTT_ERROR_NOT_CONNECTED;
   }
 
+  if ((uint8_t)options->qos > client->_internal.server_maximum_qos
+      || (options->retain && !client->_internal.server_retain_available)
+      || options->topic_alias > client->_internal.server_topic_alias_maximum)
+  {
+    return AZ_MQTT_ERROR_NOT_SUPPORTED;
+  }
+
+  az_mqtt_inflight* slot = NULL;
   uint16_t packet_id = 0;
   if (options->qos != AZ_MQTT_QOS_AT_MOST_ONCE)
   {
-    packet_id = _az_mqtt_core_next_packet_id(&client->_internal.core);
+    az_result rc = _az_mqtt_core_inflight_reserve(
+        &client->_internal.core,
+        options->qos == AZ_MQTT_QOS_AT_LEAST_ONCE ? _AZ_MQTT_INFLIGHT_PUBLISH_QOS1
+                                                  : _AZ_MQTT_INFLIGHT_PUBLISH_QOS2,
+        client->_internal.server_receive_maximum,
+        &slot);
+    if (az_result_failed(rc))
+    {
+      return rc;
+    }
+    packet_id = slot->_internal.packet_id;
   }
 
   az_span send_buf = _SEND_BUFFER(client);
-  az_result rc = az_mqtt5_codec_encode_publish(&send_buf, options, packet_id);
-  if (az_result_succeeded(rc))
-  {
-    rc = _az_mqtt_core_send_request(&client->_internal.core, send_buf);
-  }
+  az_result rc = _az_mqtt_core_send_tracked(
+      &client->_internal.core,
+      slot,
+      az_mqtt5_codec_encode_publish(&send_buf, options, packet_id),
+      send_buf,
+      client->_internal.server_maximum_packet_size);
   if (az_result_succeeded(rc) && out_packet_id != NULL)
   {
     *out_packet_id = packet_id;
@@ -385,14 +454,21 @@ AZ_NODISCARD az_result az_mqtt5_client_subscribe(
     return AZ_MQTT_ERROR_NOT_CONNECTED;
   }
 
-  uint16_t packet_id = _az_mqtt_core_next_packet_id(&client->_internal.core);
-  az_span send_buf = _SEND_BUFFER(client);
-  az_result rc
-      = az_mqtt5_codec_encode_subscribe(&send_buf, subscriptions, subscription_count, packet_id);
-  if (az_result_succeeded(rc))
+  az_mqtt_inflight* slot = NULL;
+  az_result rc = _az_mqtt_core_inflight_reserve(
+      &client->_internal.core, _AZ_MQTT_INFLIGHT_SUBSCRIBE, UINT16_MAX, &slot);
+  if (az_result_failed(rc))
   {
-    rc = _az_mqtt_core_send_request(&client->_internal.core, send_buf);
+    return rc;
   }
+  uint16_t const packet_id = slot->_internal.packet_id;
+  az_span send_buf = _SEND_BUFFER(client);
+  rc = _az_mqtt_core_send_tracked(
+      &client->_internal.core,
+      slot,
+      az_mqtt5_codec_encode_subscribe(&send_buf, subscriptions, subscription_count, packet_id),
+      send_buf,
+      client->_internal.server_maximum_packet_size);
   if (az_result_succeeded(rc) && out_packet_id != NULL)
   {
     *out_packet_id = packet_id;
@@ -414,14 +490,21 @@ AZ_NODISCARD az_result az_mqtt5_client_unsubscribe(
     return AZ_MQTT_ERROR_NOT_CONNECTED;
   }
 
-  uint16_t packet_id = _az_mqtt_core_next_packet_id(&client->_internal.core);
-  az_span send_buf = _SEND_BUFFER(client);
-  az_result rc
-      = az_mqtt5_codec_encode_unsubscribe(&send_buf, topic_filters, filter_count, packet_id);
-  if (az_result_succeeded(rc))
+  az_mqtt_inflight* slot = NULL;
+  az_result rc = _az_mqtt_core_inflight_reserve(
+      &client->_internal.core, _AZ_MQTT_INFLIGHT_UNSUBSCRIBE, UINT16_MAX, &slot);
+  if (az_result_failed(rc))
   {
-    rc = _az_mqtt_core_send_request(&client->_internal.core, send_buf);
+    return rc;
   }
+  uint16_t const packet_id = slot->_internal.packet_id;
+  az_span send_buf = _SEND_BUFFER(client);
+  rc = _az_mqtt_core_send_tracked(
+      &client->_internal.core,
+      slot,
+      az_mqtt5_codec_encode_unsubscribe(&send_buf, topic_filters, filter_count, packet_id),
+      send_buf,
+      client->_internal.server_maximum_packet_size);
   if (az_result_succeeded(rc) && out_packet_id != NULL)
   {
     *out_packet_id = packet_id;

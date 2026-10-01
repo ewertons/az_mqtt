@@ -39,8 +39,8 @@ to the current implementation status of `az_mqttv3` (on `az_mqtt_core`).
 | 24 | QoS must be 0, 1, or 2 | [§3.3.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | No | No validation | |
 | 25 | Topic Name field: must not contain wildcard characters in send | [§3.3.2.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | No | No topic validation on outgoing PUBLISH | |
 | 26 | Packet Identifier present when QoS > 0 | [§3.3.2.2](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | Encoder writes `packet_id` when QoS>0 | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
-| 27 | Packet Identifier must not be 0 for QoS > 0 | [§3.3.2.2](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `_next_packet_id` wraps from 65535 to 1 (skips 0) | [src/core/az_mqtt_core.c](../../src/core/az_mqtt_core.c) |
-| 28 | Packet Identifier must be unique across all in-flight packets | [§3.3.2.2](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | No | Sequential counter; no in-flight tracking set to prevent reuse | [src/core/az_mqtt_core.c](../../src/core/az_mqtt_core.c) |
+| 27 | Packet Identifier must not be 0 for QoS > 0 | [§3.3.2.2](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | The next identifier skips 0 | [src/core/az_mqtt_core.c](../../src/core/az_mqtt_core.c) |
+| 28 | Packet Identifier must be unique across all in-flight packets | [§3.3.2.2](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | An identifier is skipped while an outgoing request holds it in the caller's `inflight` slots; with no free slot, QoS > 0 PUBLISH, SUBSCRIBE and UNSUBSCRIBE fail with `AZ_MQTT_ERROR_FLOW_CONTROL` | [src/core/az_mqtt_core.c](../../src/core/az_mqtt_core.c) |
 | 29 | DUP flag on received PUBLISH decoded | [§3.3.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `publish_data.dup` | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | 30 | Retain flag encoded/decoded | [§3.3.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `publish_options.retain` / `publish_data.retain` | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | 31 | Retain flag must be 0 when forwarding (server responsibility; client receives them correctly) | [§3.3.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | Client only receives; retain bit from server in received PUBLISH | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
@@ -48,7 +48,7 @@ to the current implementation status of `az_mqttv3` (on `az_mqtt_core`).
 | 33 | QoS 1: PUBACK contains packet identifier of the PUBLISH | [§3.4](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `packet_id` from decoded PUBLISH forwarded | [src/mqtt3/az_mqtt3_client.c](../../src/mqtt3/az_mqtt3_client.c) |
 | 34 | QoS 2 (receive): client sends PUBREC | [§3.5](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `_handle_publish` sends PUBREC for QoS 2 | [src/mqtt3/az_mqtt3_client.c](../../src/mqtt3/az_mqtt3_client.c) |
 | 35 | QoS 2 (receive): client sends PUBCOMP in response to PUBREL | [§3.7](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `_handle_pubrel` sends PUBCOMP | [src/mqtt3/az_mqtt3_client.c](../../src/mqtt3/az_mqtt3_client.c) |
-| 36 | QoS 2 (receive): client must not deliver the application message a second time after sending PUBREC | [§3.5](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | No | No deduplication state stored; duplicate PUBLISH would be re-delivered to `on_publish` callback | |
+| 36 | QoS 2 (receive): client must not deliver the application message a second time after sending PUBREC | [§3.5](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | Held in an `inflight` slot until PUBREL; a resent PUBLISH is acknowledged, not delivered. With no free slot, it is delivered without duplicate detection | [src/core/az_mqtt_core.c](../../src/core/az_mqtt_core.c), [src/mqtt3/az_mqtt3_client.c](../../src/mqtt3/az_mqtt3_client.c) |
 | 37 | QoS 2 (send): client sends PUBREL in response to PUBREC | [§3.6](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `_handle_pubrec` sends PUBREL | [src/mqtt3/az_mqtt3_client.c](../../src/mqtt3/az_mqtt3_client.c) |
 | 38 | QoS 2 (send): client retransmits PUBLISH/PUBREL with DUP=1 until acknowledged | [§3.3.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | No | No retransmission logic; no in-flight message store | |
 | **PUBACK ([§3.4](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html))** |||||
@@ -98,17 +98,15 @@ to the current implementation status of `az_mqttv3` (on `az_mqtt_core`).
 
 | Status | Count |
 |--------|-------|
-| Yes | 56 |
+| Yes | 58 |
 | Partial | 1 |
-| No | 12 |
+| No | 10 |
 
 ### Key gaps (client-facing impact)
 
 | Gap | Spec reference |
 |-----|---------------|
-| QoS 2 receive deduplication not implemented | [§3.5](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) |
 | QoS 1/2 retransmission on reconnect not implemented | [§3.3.1, 3.6](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) |
-| In-flight packet ID uniqueness not guaranteed | [§3.3.2.2](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) |
 | Topic wildcards not validated in PUBLISH | [§3.3.2.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) |
 | UTF-8 string validation not performed | [§2.3.2](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) |
 | Will flag consistency validation not enforced | [§3.1.2.4](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) |

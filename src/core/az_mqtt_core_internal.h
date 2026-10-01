@@ -93,14 +93,71 @@ AZ_NODISCARD AZ_INLINE az_result _az_mqtt_core_send_request(az_mqtt_core* core, 
   return rc;
 }
 
-/** @brief Next non-zero packet identifier. */
-AZ_INLINE uint16_t _az_mqtt_core_next_packet_id(az_mqtt_core* core)
+/** @brief What an in-flight slot holds. PUBLISH_QOS1 to PUBREL are what Receive Maximum counts. */
+typedef enum
 {
-  if (++core->_internal.next_packet_id == 0)
-  {
-    core->_internal.next_packet_id = 1;
-  }
-  return core->_internal.next_packet_id;
-}
+  _AZ_MQTT_INFLIGHT_FREE = 0,
+  /** @brief PUBLISH QoS 1 sent; awaiting PUBACK. */
+  _AZ_MQTT_INFLIGHT_PUBLISH_QOS1,
+  /** @brief PUBLISH QoS 2 sent; awaiting PUBREC. */
+  _AZ_MQTT_INFLIGHT_PUBLISH_QOS2,
+  /** @brief PUBREL sent; awaiting PUBCOMP. */
+  _AZ_MQTT_INFLIGHT_PUBREL,
+  _AZ_MQTT_INFLIGHT_SUBSCRIBE,
+  _AZ_MQTT_INFLIGHT_UNSUBSCRIBE,
+  /** @brief PUBLISH QoS 2 received, PUBREC sent; awaiting PUBREL. Server's packet identifier. */
+  _AZ_MQTT_INFLIGHT_INBOUND_QOS2,
+} _az_mqtt_inflight_kind;
+
+/** @brief Use @p storage (az_mqtt_inflight[]) as the in-flight table; all slots free. */
+void _az_mqtt_core_inflight_init(az_mqtt_core* core, az_span storage);
+
+/**
+ * @brief Take a free slot for an outgoing request, with a packet identifier no
+ * other outgoing request holds.
+ *
+ * @param publish_limit Fail if this many outgoing QoS 1/2 PUBLISH exchanges are
+ * incomplete (the server's Receive Maximum); UINT16_MAX for none.
+ * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free slot, or @p publish_limit reached.
+ */
+AZ_NODISCARD az_result _az_mqtt_core_inflight_reserve(
+    az_mqtt_core* core,
+    _az_mqtt_inflight_kind kind,
+    uint16_t publish_limit,
+    az_mqtt_inflight** out_slot);
+
+/** @brief The slot of @p kind holding @p packet_id, or NULL. */
+az_mqtt_inflight*
+_az_mqtt_core_inflight_find(az_mqtt_core* core, _az_mqtt_inflight_kind kind, uint16_t packet_id);
+
+/** @brief Free the slot of @p kind holding @p packet_id; whether there was one. */
+bool _az_mqtt_core_inflight_complete(
+    az_mqtt_core* core,
+    _az_mqtt_inflight_kind kind,
+    uint16_t packet_id);
+
+/**
+ * @brief Record an inbound QoS 2 PUBLISH until its PUBREL.
+ *
+ * @return true if @p packet_id is already awaiting PUBREL (a duplicate: do not
+ * deliver it again). Without a free slot nothing is recorded and a resent
+ * duplicate would be delivered again.
+ */
+bool _az_mqtt_core_inflight_inbound_qos2(az_mqtt_core* core, uint16_t packet_id);
+
+/**
+ * @brief Send a request the client encoded into the send buffer (@p encoded:
+ * the encoder's result, @p remaining: what it left of the buffer).
+ *
+ * On an encoding failure, or a packet over @p maximum_packet_size (0: no
+ * limit; AZ_MQTT_ERROR_PACKET_TOO_LARGE), frees @p slot (may be NULL) and sends
+ * nothing. A send failure closes the session, as _az_mqtt_core_send_request().
+ */
+AZ_NODISCARD az_result _az_mqtt_core_send_tracked(
+    az_mqtt_core* core,
+    az_mqtt_inflight* slot,
+    az_result encoded,
+    az_span remaining,
+    uint32_t maximum_packet_size);
 
 #endif // AZ_MQTT_CORE_INTERNAL_H
