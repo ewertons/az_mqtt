@@ -33,6 +33,7 @@ typedef struct
   test_server* server;
   uint8_t send_buf[1024];
   uint8_t recv_buf[1024];
+  az_mqtt_tls_options tls;
 #if AZ_MQTT_TEST_VERSION == 5
   AZ_MQTT_T(user_property) props[4][4];
   int32_t sub_ids[4];
@@ -148,6 +149,12 @@ static void _setup(fixture* f, test_server_options const* so, uint16_t keep_aliv
   o.connect_options.client_id = AZ_SPAN_FROM_STR("session-test");
   o.connect_options.keep_alive_seconds = keep_alive_s;
   o.hostname = AZ_SPAN_FROM_STR("127.0.0.1");
+  if (so->tls)
+  {
+    f->tls = az_mqtt_tls_options_default();
+    f->tls.ca_cert_path = az_span_create_from_str((char*)(uintptr_t)test_server_ca_path(f->server));
+    o.tls_options = &f->tls;
+  }
   o.port = test_server_port(f->server);
   o.on_connack = _on_connack;
   o.on_publish = _on_publish;
@@ -379,6 +386,34 @@ static void a_started_connect_completes_in_process_loop(void** state)
   assert_int_equal(g.closed, 0);
   _teardown(&f);
 }
+
+#if !defined(AZ_MQTT_TEST_BACKEND_NONE)
+static void a_started_tls_connect_resumes_across_calls(void** state)
+{
+  (void)state;
+  test_server_options so = test_server_options_default(); // TLS
+  so.handshake_delay_ms = 500;
+  fixture f;
+  _setup(&f, &so, 30);
+  int64_t const start = _now_ms();
+  assert_int_equal(AZ_MQTT_T(client_connect_start)(&f.client, 5000), AZ_OK);
+  assert_true(_now_ms() - start < 200);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTING);
+  // The peer holds the handshake: these calls return at once, still connecting.
+  for (int i = 0; i < 3; i++)
+  {
+    int64_t const t0 = _now_ms();
+    assert_int_equal(AZ_MQTT_T(client_process_loop)(&f.client, 0), AZ_OK);
+    assert_true(_now_ms() - t0 < 200);
+    assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTING);
+  }
+  assert_int_equal(_pump_connect(&f, 5000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+  assert_int_equal(test_server_handshakes(f.server), 1);
+  assert_int_equal(g.connacks, 1);
+  _teardown(&f);
+}
+#endif
 
 static void a_started_connect_to_a_silent_peer_times_out(void** state)
 {
@@ -618,6 +653,9 @@ int main(void)
     cmocka_unit_test(a_local_disconnect_reports_closed_once),
     cmocka_unit_test(connect_to_a_silent_peer_times_out),
     cmocka_unit_test(a_started_connect_completes_in_process_loop),
+#if !defined(AZ_MQTT_TEST_BACKEND_NONE)
+    cmocka_unit_test(a_started_tls_connect_resumes_across_calls),
+#endif
     cmocka_unit_test(a_started_connect_to_a_silent_peer_times_out),
     cmocka_unit_test(a_started_connect_reports_a_refused_connack),
     cmocka_unit_test(disconnect_cancels_a_started_connect),

@@ -62,6 +62,8 @@ typedef struct
   bool send_auth;
   /** @brief After CONNACK, send an empty DISCONNECT (valid in MQTT 5, client-only in 3.1.1). */
   bool send_empty_disconnect;
+  /** @brief TLS: wait this long after accepting before answering the ClientHello. */
+  int handshake_delay_ms;
 } test_server_options;
 
 typedef struct test_server test_server;
