@@ -41,18 +41,18 @@ typedef void (*az_mqtt3_on_publish_received_fn)(
     az_mqtt3_client* client,
     az_mqtt3_publish_data const* publish);
 
-/** @brief A SUBACK arrived. */
+/** @brief A SUBACK arrived for a SUBSCRIBE in flight. */
 typedef void (*az_mqtt3_on_suback_fn)(az_mqtt3_client* client, az_mqtt3_suback_data const* suback);
 
-/** @brief An UNSUBACK arrived. */
+/** @brief An UNSUBACK arrived for an UNSUBSCRIBE in flight. */
 typedef void (*az_mqtt3_on_unsuback_fn)(az_mqtt3_client* client, az_mqtt3_ack_data const* unsuback);
 
-/** @brief A PUBACK arrived (QoS 1 publish complete). */
+/** @brief A PUBACK arrived for a QoS 1 PUBLISH in flight. */
 typedef void (*az_mqtt3_on_puback_fn)(az_mqtt3_client* client, az_mqtt3_ack_data const* ack);
 
 /**
  * @brief A QoS 2 exchange completed: PUBCOMP received (outgoing) or PUBREL
- * received and PUBCOMP sent (incoming).
+ * received and PUBCOMP sent (incoming, held in an in-flight entry).
  */
 typedef void (*az_mqtt3_on_pubcomp_fn)(az_mqtt3_client* client, az_mqtt3_ack_data const* ack);
 
@@ -90,6 +90,18 @@ typedef struct
 
   /** @brief CONNECT options (client_id, keep-alive, etc.). */
   az_mqtt3_connect_options connect_options;
+
+  /**
+   * @brief In-flight entries (az_mqtt_inflight_entry[]; at most UINT16_MAX used).
+   *
+   * Each QoS 1/2 PUBLISH, SUBSCRIBE and UNSUBSCRIBE holds an entry until acknowledged, and each
+   * inbound QoS 2 PUBLISH until its PUBREL. A request with no free entry fails with
+   * AZ_MQTT_ERROR_FLOW_CONTROL; an inbound QoS 2 PUBLISH with none is delivered without duplicate
+   * detection. May be empty if only QoS 0 is published and nothing is subscribed.
+   * Acknowledgements for packet identifiers not in flight are ignored. Whatever is in flight when
+   * the session ends is abandoned: nothing is resent on resume.
+   */
+  az_span inflight_control_buffer;
 
   // Callbacks (all optional, set to NULL if not needed)
   az_mqtt3_on_connack_fn on_connack;
@@ -188,7 +200,11 @@ AZ_NODISCARD az_result az_mqtt3_client_process_loop(az_mqtt3_client* client, int
 
 /**
  * @brief Publish a message.
+ *
+ * QoS 1/2 holds an in-flight entry until PUBACK / PUBCOMP (see options.inflight_control_buffer).
+ *
  * @param[out] out_packet_id  Packet ID assigned (for QoS > 0). Can be NULL.
+ * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free in-flight entry.
  */
 AZ_NODISCARD az_result az_mqtt3_client_publish(
     az_mqtt3_client* client,
@@ -196,8 +212,9 @@ AZ_NODISCARD az_result az_mqtt3_client_publish(
     uint16_t* out_packet_id);
 
 /**
- * @brief Subscribe to topic(s).
+ * @brief Subscribe to topic(s). Holds an in-flight entry until SUBACK.
  * @param[out] out_packet_id  Packet ID assigned. Can be NULL.
+ * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free in-flight entry.
  */
 AZ_NODISCARD az_result az_mqtt3_client_subscribe(
     az_mqtt3_client* client,
@@ -206,8 +223,9 @@ AZ_NODISCARD az_result az_mqtt3_client_subscribe(
     uint16_t* out_packet_id);
 
 /**
- * @brief Unsubscribe from topic(s).
+ * @brief Unsubscribe from topic(s). Holds an in-flight entry until UNSUBACK.
  * @param[out] out_packet_id  Packet ID assigned. Can be NULL.
+ * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free in-flight entry.
  */
 AZ_NODISCARD az_result az_mqtt3_client_unsubscribe(
     az_mqtt3_client* client,

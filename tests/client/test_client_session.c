@@ -34,6 +34,7 @@ typedef struct
   uint8_t send_buf[1024];
   uint8_t recv_buf[1024];
   az_mqtt_tls_options tls;
+  az_mqtt_inflight_entry inflight_control_buffer[8];
 #if AZ_MQTT_TEST_VERSION == 5
   AZ_MQTT_T(user_property) props[4][4];
   int32_t sub_ids[4];
@@ -48,6 +49,10 @@ static struct
   int subacks;
   int32_t suback_count;
   int publishes;
+  int pubacks;
+  int pubcomps;
+  int last_pubcomp_reason;
+  int unsubacks;
   int32_t publish_user_properties;
   int32_t publish_subscription_identifiers;
   int disconnects;
@@ -95,6 +100,31 @@ static void _on_publish(AZ_MQTT_T(client)* c, AZ_MQTT_T(publish_data) const* p)
 #endif
 }
 
+static void _on_puback(AZ_MQTT_T(client)* c, AZ_MQTT_T(ack_data) const* a)
+{
+  (void)c;
+  (void)a;
+  g.pubacks++;
+}
+
+static void _on_pubcomp(AZ_MQTT_T(client)* c, AZ_MQTT_T(ack_data) const* a)
+{
+  (void)c;
+  g.pubcomps++;
+  g.last_pubcomp_reason = AZ_MQTT_TEST_ACK_REASON(a);
+}
+
+#if AZ_MQTT_TEST_VERSION == 5
+static void _on_unsuback(AZ_MQTT_T(client)* c, AZ_MQTT_T(suback_data) const* d)
+#else
+static void _on_unsuback(AZ_MQTT_T(client)* c, AZ_MQTT_T(ack_data) const* d)
+#endif
+{
+  (void)c;
+  (void)d;
+  g.unsubacks++;
+}
+
 #if AZ_MQTT_TEST_VERSION == 5
 static void _on_disconnect(AZ_MQTT_T(client)* c, AZ_MQTT_T(disconnect_data) const* d)
 {
@@ -130,6 +160,9 @@ static void _sleep_ms(int ms)
   nanosleep(&ts, NULL);
 }
 
+/** @brief In-flight slots the next _setup() gives the client (at most 8). */
+static int s_inflight_slots = 4;
+
 static void _setup(fixture* f, test_server_options const* so, uint16_t keep_alive_s)
 {
   memset(f, 0, sizeof(*f));
@@ -159,6 +192,12 @@ static void _setup(fixture* f, test_server_options const* so, uint16_t keep_aliv
   o.on_connack = _on_connack;
   o.on_publish = _on_publish;
   o.on_suback = _on_suback;
+  o.on_unsuback = _on_unsuback;
+  o.on_puback = _on_puback;
+  o.on_pubcomp = _on_pubcomp;
+  o.inflight_control_buffer = az_span_create(
+      (uint8_t*)f->inflight_control_buffer,
+      s_inflight_slots * (int32_t)sizeof(az_mqtt_inflight_entry));
   o.on_connection_closed = _on_closed;
 #if AZ_MQTT_TEST_VERSION == 5
   o.on_disconnect = _on_disconnect;
@@ -175,6 +214,7 @@ static void _setup(fixture* f, test_server_options const* so, uint16_t keep_aliv
 
 static void _teardown(fixture* f)
 {
+  s_inflight_slots = 4;
   _ignore(AZ_MQTT_TEST_DISCONNECT(&f->client));
   free(f->transport);
   test_server_stop(f->server);
@@ -467,6 +507,284 @@ static void disconnect_cancels_a_started_connect(void** state)
   _teardown(&f);
 }
 
+/** @brief Run process_loop until @p cond holds (3 s at most). */
+#define PUMP_UNTIL(fx, cond)                                                                    \
+  do                                                                                            \
+  {                                                                                             \
+    int64_t const end_ = _now_ms() + 3000;                                                      \
+    while (!(cond) && _now_ms() < end_)                                                         \
+    {                                                                                           \
+      assert_int_equal(AZ_MQTT_T(client_process_loop)(&(fx)->client, 20), AZ_OK);              \
+    }                                                                                           \
+  } while (0)
+
+static AZ_MQTT_T(publish_options) _publish_options(az_mqtt_qos qos)
+{
+  AZ_MQTT_T(publish_options) p = AZ_MQTT_T(publish_options_default)();
+  p.topic = AZ_SPAN_FROM_STR("t");
+  p.payload = AZ_SPAN_FROM_STR("p");
+  p.qos = qos;
+  return p;
+}
+
+static az_result _subscribe(fixture* f)
+{
+  AZ_MQTT_T(subscription) sub;
+  memset(&sub, 0, sizeof(sub));
+  sub.topic_filter = AZ_SPAN_FROM_STR("t");
+  return AZ_MQTT_T(client_subscribe)(&f->client, &sub, 1, NULL);
+}
+
+static void inflight_slots_bound_requests(void** state)
+{
+  (void)state;
+  test_server_options so = _plain(); // Never acknowledges a PUBLISH.
+  s_inflight_slots = 3;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  AZ_MQTT_T(publish_options) const qos1 = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE);
+  uint16_t ids[3];
+  for (int i = 0; i < 3; i++)
+  {
+    assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, &ids[i]), AZ_OK);
+    assert_int_not_equal(ids[i], 0);
+    for (int j = 0; j < i; j++)
+    {
+      assert_int_not_equal(ids[i], ids[j]);
+    }
+  }
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, NULL), AZ_MQTT_ERROR_FLOW_CONTROL);
+  assert_int_equal(_subscribe(&f), AZ_MQTT_ERROR_FLOW_CONTROL);
+  AZ_MQTT_T(publish_options) const qos0 = _publish_options(AZ_MQTT_QOS_AT_MOST_ONCE);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos0, NULL), AZ_OK);
+  PUMP_UNTIL(&f, test_server_publishes(f.server) == 4);
+  assert_int_equal(test_server_publishes(f.server), 4); // Refused requests were never sent.
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+  _teardown(&f);
+}
+
+static void acknowledged_requests_free_their_slots(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.ack_publishes = true;
+  s_inflight_slots = 1;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  AZ_MQTT_T(publish_options) const qos1 = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE);
+  AZ_MQTT_T(publish_options) const qos2 = _publish_options(AZ_MQTT_QOS_EXACTLY_ONCE);
+  for (int i = 1; i <= 3; i++)
+  {
+    assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, NULL), AZ_OK);
+    PUMP_UNTIL(&f, g.pubacks == i);
+    assert_int_equal(g.pubacks, i);
+  }
+  for (int i = 1; i <= 3; i++)
+  {
+    assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos2, NULL), AZ_OK);
+    PUMP_UNTIL(&f, g.pubcomps == i);
+    assert_int_equal(g.pubcomps, i);
+  }
+  assert_int_equal(test_server_pubrels(f.server), 3);
+  assert_int_equal(_subscribe(&f), AZ_OK);
+  PUMP_UNTIL(&f, g.subacks == 1);
+  az_span const filter = AZ_SPAN_FROM_STR("t");
+  assert_int_equal(AZ_MQTT_T(client_unsubscribe)(&f.client, &filter, 1, NULL), AZ_OK);
+  PUMP_UNTIL(&f, g.unsubacks == 1);
+  assert_int_equal(g.subacks, 1);
+  assert_int_equal(g.unsubacks, 1);
+  _teardown(&f);
+}
+
+static void a_held_packet_identifier_is_not_reused(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.ack_publishes = true;
+  so.hold_first_publish = true;
+  s_inflight_slots = 2;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  AZ_MQTT_T(publish_options) const qos1 = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE);
+  uint16_t held;
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, &held), AZ_OK);
+  for (int i = 1; i <= 65535; i++) // Every identifier comes round once.
+  {
+    uint16_t id;
+    assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, &id), AZ_OK);
+    assert_int_not_equal(id, held);
+    PUMP_UNTIL(&f, g.pubacks == i);
+    assert_int_equal(g.pubacks, i);
+  }
+  _teardown(&f);
+}
+
+static void a_session_end_abandons_what_is_in_flight(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  s_inflight_slots = 1;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  AZ_MQTT_T(publish_options) const qos1 = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, NULL), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, NULL), AZ_MQTT_ERROR_FLOW_CONTROL);
+  assert_int_equal(AZ_MQTT_TEST_DISCONNECT(&f.client), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, NULL), AZ_OK);
+  _teardown(&f);
+}
+
+static void inbound_qos2_duplicates_are_delivered_once(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.send_qos2_sequence = true; // 7, 7 (DUP), PUBREL 7, 7, PUBREL 7
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  PUMP_UNTIL(&f, test_server_pubcomps(f.server) == 2);
+  assert_int_equal(test_server_pubcomps(f.server), 2);
+  assert_int_equal(g.publishes, 2);
+  assert_int_equal(g.pubcomps, 2); // Inbound exchanges completed.
+  _teardown(&f);
+}
+
+static void inbound_qos2_without_a_free_slot_is_still_delivered(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.send_qos2_sequence = true;
+  s_inflight_slots = 0;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  PUMP_UNTIL(&f, test_server_pubcomps(f.server) == 2);
+  assert_int_equal(test_server_pubcomps(f.server), 2); // Every PUBREL still answered.
+  assert_int_equal(g.publishes, 3);                    // No duplicate detection.
+  assert_int_equal(g.pubcomps, 0);                     // Untracked: not reported.
+  _teardown(&f);
+}
+
+static void unknown_acknowledgements_are_ignored(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.send_unknown_acks = true;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  PUMP_UNTIL(&f, test_server_pubrels(f.server) == 1 && test_server_pubcomps(f.server) == 1);
+  assert_int_equal(test_server_pubrels(f.server), 1);  // Answers the PUBREC,
+  assert_int_equal(test_server_pubcomps(f.server), 1); // and the PUBREL.
+#if AZ_MQTT_TEST_VERSION == 5
+  assert_int_equal(test_server_last_pubrel_reason(f.server), 0x92); // Packet Identifier not found
+#endif
+  assert_int_equal(g.pubacks, 0);
+  assert_int_equal(g.pubcomps, 0);
+  assert_int_equal(g.subacks, 0);
+  assert_int_equal(g.unsubacks, 0);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+  _teardown(&f);
+}
+
+#if AZ_MQTT_TEST_VERSION == 5
+static void the_server_receive_maximum_limits_publishes(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.receive_maximum = 2;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  AZ_MQTT_T(publish_options) const qos1 = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE);
+  AZ_MQTT_T(publish_options) const qos2 = _publish_options(AZ_MQTT_QOS_EXACTLY_ONCE);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, NULL), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos2, NULL), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, NULL), AZ_MQTT_ERROR_FLOW_CONTROL);
+  assert_int_equal(_subscribe(&f), AZ_OK); // Not a PUBLISH: not limited by Receive Maximum.
+  _teardown(&f);
+}
+
+static void the_server_limits_are_enforced(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.maximum_qos_present = true;
+  so.maximum_qos = 1;
+  so.retain_unavailable = true;
+  so.maximum_packet_size = 64;
+  s_inflight_slots = 1;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  AZ_MQTT_T(publish_options) p = _publish_options(AZ_MQTT_QOS_EXACTLY_ONCE);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &p, NULL), AZ_MQTT_ERROR_NOT_SUPPORTED);
+  p = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE);
+  p.retain = true;
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &p, NULL), AZ_MQTT_ERROR_NOT_SUPPORTED);
+  p = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE);
+  p.topic_alias = 1; // The server sent no Topic Alias Maximum: 0.
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &p, NULL), AZ_MQTT_ERROR_NOT_SUPPORTED);
+  p = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE);
+  p.payload = AZ_SPAN_FROM_STR("0123456789012345678901234567890123456789012345678901234567890123");
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &p, NULL), AZ_MQTT_ERROR_PACKET_TOO_LARGE);
+  p = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE); // The refused one freed its slot.
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &p, NULL), AZ_OK);
+  PUMP_UNTIL(&f, test_server_publishes(f.server) == 1);
+  _sleep_ms(50);
+  assert_int_equal(test_server_publishes(f.server), 1);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+  _teardown(&f);
+}
+
+static void an_acknowledgement_over_the_server_maximum_packet_size_closes(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.maximum_packet_size = 3; // A PUBREC is 4 bytes.
+  so.send_qos2_sequence = true;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  int64_t const end = _now_ms() + 3000;
+  az_result rc = AZ_OK;
+  while (rc == AZ_OK && _now_ms() < end)
+  {
+    rc = AZ_MQTT_T(client_process_loop)(&f.client, 20);
+  }
+  assert_int_equal(rc, AZ_MQTT_ERROR_PACKET_TOO_LARGE);
+  assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_PACKET_TOO_LARGE);
+  assert_int_equal(g.publishes, 0); // Not delivered: it could not be acknowledged.
+  _teardown(&f);
+}
+
+static void a_failed_pubrec_ends_the_exchange(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.ack_publishes = true;
+  so.pubrec_reason = 0x80;
+  s_inflight_slots = 1;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  AZ_MQTT_T(publish_options) const qos2 = _publish_options(AZ_MQTT_QOS_EXACTLY_ONCE);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos2, NULL), AZ_OK);
+  PUMP_UNTIL(&f, g.pubcomps == 1);
+  assert_int_equal(g.pubcomps, 1);
+  assert_int_equal(g.last_pubcomp_reason, 0x80);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos2, NULL), AZ_OK); // Slot freed.
+  PUMP_UNTIL(&f, g.pubcomps == 2);
+  assert_int_equal(test_server_pubrels(f.server), 0);
+  _teardown(&f);
+}
+#endif
+
 static void reconnect_after_a_lost_session_works(void** state)
 {
   (void)state;
@@ -659,6 +977,19 @@ int main(void)
     cmocka_unit_test(a_started_connect_to_a_silent_peer_times_out),
     cmocka_unit_test(a_started_connect_reports_a_refused_connack),
     cmocka_unit_test(disconnect_cancels_a_started_connect),
+    cmocka_unit_test(inflight_slots_bound_requests),
+    cmocka_unit_test(acknowledged_requests_free_their_slots),
+    cmocka_unit_test(a_held_packet_identifier_is_not_reused),
+    cmocka_unit_test(a_session_end_abandons_what_is_in_flight),
+    cmocka_unit_test(inbound_qos2_duplicates_are_delivered_once),
+    cmocka_unit_test(inbound_qos2_without_a_free_slot_is_still_delivered),
+    cmocka_unit_test(unknown_acknowledgements_are_ignored),
+#if AZ_MQTT_TEST_VERSION == 5
+    cmocka_unit_test(the_server_receive_maximum_limits_publishes),
+    cmocka_unit_test(the_server_limits_are_enforced),
+    cmocka_unit_test(an_acknowledgement_over_the_server_maximum_packet_size_closes),
+    cmocka_unit_test(a_failed_pubrec_ends_the_exchange),
+#endif
     cmocka_unit_test(reconnect_after_a_lost_session_works),
     cmocka_unit_test(a_refused_connack_code_is_reported_verbatim),
     cmocka_unit_test(suback_reason_codes_never_exceed_the_buffer),

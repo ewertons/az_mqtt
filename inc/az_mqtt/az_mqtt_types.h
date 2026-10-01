@@ -28,7 +28,10 @@ enum az_mqtt_result
   AZ_MQTT_ERROR_TIMEOUT = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 14),
   AZ_MQTT_ERROR_NOT_CONNECTED = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 15),
   AZ_MQTT_ERROR_INVALID_STATE = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 16),
-  /** @brief The request needs a capability this build does not have (e.g. TLS without a backend). */
+  /**
+   * @brief The request needs a capability this build, or the server, does not have (e.g. TLS
+   * without a backend; an MQTT 5.0 server's Maximum QoS, Retain Available or Topic Alias Maximum).
+   */
   AZ_MQTT_ERROR_NOT_SUPPORTED = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 17),
   /** @brief The options are inconsistent (e.g. a client certificate without its key). */
   AZ_MQTT_ERROR_INVALID_CONFIG = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 18),
@@ -36,6 +39,16 @@ enum az_mqtt_result
   AZ_MQTT_ERROR_KEEP_ALIVE_TIMEOUT = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 19),
   /** @brief The server ended the session with a DISCONNECT packet. */
   AZ_MQTT_ERROR_SERVER_DISCONNECTED = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 20),
+  /**
+   * @brief No in-flight entry is free, or the MQTT 5.0 server's Receive Maximum is reached.
+   * Nothing was sent; retry after an acknowledgement.
+   */
+  AZ_MQTT_ERROR_FLOW_CONTROL = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 21),
+  /**
+   * @brief The packet exceeds the MQTT 5.0 server's Maximum Packet Size. Nothing was sent; for
+   * an acknowledgement, the session is closed with this reason.
+   */
+  AZ_MQTT_ERROR_PACKET_TOO_LARGE = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 22),
 };
 
 // ──────────────────────── Packet Types ───────────────────────

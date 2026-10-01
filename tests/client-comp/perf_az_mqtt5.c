@@ -50,6 +50,8 @@
 // ─────────────── static buffers (zero-allocation) ────────────
 
 static uint8_t s_send_buf[SEND_BUFFER_SIZE];
+// QoS 1 publishes awaiting PUBACK, plus the subscription.
+static az_mqtt_inflight_entry s_inflight_control_buffer[256];
 static uint8_t s_recv_buf[RECV_BUFFER_SIZE];
 // Large enough for either TLS backend. The transport struct embeds backend
 // state directly (OpenSSL: a few pointers; mbedTLS: full ssl_context,
@@ -237,6 +239,8 @@ int main(int argc, char* argv[])
   opts.transport = transport;
   opts.send_buffer = AZ_SPAN_FROM_BUFFER(s_send_buf);
   opts.receive_buffer = AZ_SPAN_FROM_BUFFER(s_recv_buf);
+  opts.inflight_control_buffer = az_span_create(
+      (uint8_t*)s_inflight_control_buffer, (int32_t)sizeof(s_inflight_control_buffer));
   opts.connect_options = conn_opts;
   opts.hostname = az_span_create((uint8_t*)host, (int32_t)strlen(host));
   opts.port = port;
@@ -305,6 +309,11 @@ int main(int argc, char* argv[])
     if (az_result_succeeded(rc))
     {
       g_pub_sent++;
+    }
+    else if (rc == AZ_MQTT_ERROR_FLOW_CONTROL)
+    {
+      az_result const drained = az_mqtt5_client_process_loop(&client, 1); // Window full: wait for PUBACKs.
+      (void)drained;
     }
     else
     {

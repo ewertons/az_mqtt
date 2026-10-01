@@ -21,6 +21,7 @@ typedef struct
 {
   uint8_t send_buf[E2E_SEND_BUF_SIZE];
   uint8_t recv_buf[E2E_RECV_BUF_SIZE];
+  az_mqtt_inflight_entry inflight_control_buffer[8];
   union
   {
     uint8_t bytes[E2E_TRANSPORT_BUF_SIZE];
