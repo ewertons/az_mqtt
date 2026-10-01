@@ -44,6 +44,7 @@ struct test_server
   int pubrels;
   int last_pubrel_reason;
   int pubcomps;
+  int last_pubcomp_reason;
   bool client_closed;
   int silent_fds[MAX_SILENT];
   int silent_count;
@@ -576,7 +577,10 @@ static void _serve(test_server* s, conn* c)
     }
     if (type == 7)
     {
-      _add(s, &s->pubcomps, 1);
+      pthread_mutex_lock(&s->lock);
+      s->pubcomps++;
+      s->last_pubcomp_reason = len >= 3 ? body[2] : 0;
+      pthread_mutex_unlock(&s->lock);
     }
     if (type == 10 && len >= 2)
     {
@@ -757,6 +761,7 @@ int test_server_publishes(test_server* s) { return _get(s, &s->publishes); }
 int test_server_pubrels(test_server* s) { return _get(s, &s->pubrels); }
 int test_server_last_pubrel_reason(test_server* s) { return _get(s, &s->last_pubrel_reason); }
 int test_server_pubcomps(test_server* s) { return _get(s, &s->pubcomps); }
+int test_server_last_pubcomp_reason(test_server* s) { return _get(s, &s->last_pubcomp_reason); }
 bool test_server_client_closed(test_server* s)
 {
   pthread_mutex_lock(&s->lock);

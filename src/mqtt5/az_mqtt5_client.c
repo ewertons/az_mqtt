@@ -205,8 +205,10 @@ static az_result _handle_ack(az_mqtt5_client* client, az_mqtt_packet_type type, 
         = _az_mqtt_core_inflight_release_entry(core, _AZ_MQTT_INFLIGHT_INBOUND_QOS2, ack.packet_id);
     // Always acknowledged: an untracked one may have been delivered without an entry.
     az_span send_buf = _SEND_BUFFER(client);
-    _az_RETURN_IF_FAILED(
-        az_mqtt5_codec_encode_pubcomp(&send_buf, ack.packet_id, AZ_MQTT5_REASON_SUCCESS));
+    _az_RETURN_IF_FAILED(az_mqtt5_codec_encode_pubcomp(
+        &send_buf,
+        ack.packet_id,
+        tracked ? AZ_MQTT5_REASON_SUCCESS : AZ_MQTT5_REASON_PACKET_IDENTIFIER_NOT_FOUND));
     _az_RETURN_IF_FAILED(_az_mqtt_core_send(core, send_buf));
     if (!tracked)
     {
