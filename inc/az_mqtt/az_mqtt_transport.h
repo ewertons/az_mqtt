@@ -182,6 +182,9 @@ AZ_NODISCARD az_result az_mqtt_transport_init(az_mqtt_transport* transport);
  * @retval AZ_MQTT_ERROR_NOT_SUPPORTED TLS requested from a build without a TLS
  *         backend, or an option the backend cannot honour. Never downgrades.
  * @retval AZ_MQTT_ERROR_INVALID_CONFIG Only one of client_cert_path / client_key_path set.
+ * @retval AZ_MQTT_ERROR_NAME_RESOLUTION, AZ_MQTT_ERROR_CONNECTION_REFUSED,
+ *         AZ_MQTT_ERROR_TLS_HANDSHAKE, AZ_MQTT_ERROR_TLS_VERIFY, AZ_MQTT_ERROR_TRANSPORT
+ *         See az_mqtt_transport_get_last_native_error().
  */
 AZ_NODISCARD az_result az_mqtt_transport_connect(
     az_mqtt_transport* transport,
@@ -215,7 +218,7 @@ az_mqtt_transport_connect_poll(az_mqtt_transport* transport, int32_t timeout_ms)
 
 /**
  * @brief Send bytes over the transport.
- * @return AZ_OK on success, or an error.
+ * @retval AZ_MQTT_ERROR_CONNECTION_CLOSED The peer closed or reset the connection.
  */
 AZ_NODISCARD az_result az_mqtt_transport_send(az_mqtt_transport* transport, az_span data);
 
@@ -227,6 +230,7 @@ AZ_NODISCARD az_result az_mqtt_transport_send(az_mqtt_transport* transport, az_s
  * @param timeout_ms   Timeout in milliseconds. 0 = non-blocking, -1 = block forever.
  * @param out_received Output: the sub-span of buffer that was filled.
  * @return AZ_OK on success (out_received size can be 0 on timeout), or an error.
+ * @retval AZ_MQTT_ERROR_CONNECTION_CLOSED The peer closed or reset the connection.
  */
 AZ_NODISCARD az_result az_mqtt_transport_receive(
     az_mqtt_transport* transport,
@@ -238,6 +242,38 @@ AZ_NODISCARD az_result az_mqtt_transport_receive(
  * @brief Close the transport connection and release resources.
  */
 void az_mqtt_transport_close(az_mqtt_transport* transport);
+
+/** @brief What az_mqtt_native_error.code is. */
+typedef enum
+{
+  /** @brief No native error recorded (e.g. the peer closed the connection cleanly). */
+  AZ_MQTT_NATIVE_ERROR_NONE = 0,
+  /** @brief errno (POSIX) or WSAGetLastError() (Windows). */
+  AZ_MQTT_NATIVE_ERROR_SOCKET = 1,
+  /** @brief getaddrinfo() result: EAI_* (POSIX) or WSA* (Windows). */
+  AZ_MQTT_NATIVE_ERROR_NAME_RESOLUTION = 2,
+  /** @brief OpenSSL ERR_peek_last_error(), mbedTLS error code, or Schannel SECURITY_STATUS. */
+  AZ_MQTT_NATIVE_ERROR_TLS = 3,
+  /**
+   * @brief OpenSSL X509_V_ERR_*, mbedTLS verification flags (MBEDTLS_X509_BADCERT_*), or
+   * Schannel certificate chain policy error (CERT_E_*).
+   */
+  AZ_MQTT_NATIVE_ERROR_TLS_VERIFY = 4,
+} az_mqtt_native_error_source;
+
+/** @brief The platform's own error code behind a transport failure, for diagnostics. */
+typedef struct
+{
+  az_mqtt_native_error_source source;
+  int32_t code;
+} az_mqtt_native_error;
+
+/**
+ * @brief The native error behind the last failure of @p transport. Kept until the next connect
+ * starts; closing does not clear it.
+ */
+AZ_NODISCARD az_mqtt_native_error
+az_mqtt_transport_get_last_native_error(az_mqtt_transport const* transport);
 
 /**
  * @brief Monotonic clock in milliseconds, used for keep-alive and timeouts.

@@ -361,7 +361,7 @@ static void _serve(test_server* s, conn* c)
   uint8_t connack_v5[5 + sizeof(props)] = { 0x20, (uint8_t)(3 + p), 0x00, s->options.connack_code, (uint8_t)p };
   memcpy(&connack_v5[5], props, (size_t)p);
   bool ok = v5 ? _write(c, connack_v5, 5 + p) : _write(c, connack_v3, (int)sizeof(connack_v3));
-  if (!ok || s->options.connack_code != 0)
+  if (!ok || s->options.connack_code != 0 || s->options.close_after_connack)
   {
     return;
   }

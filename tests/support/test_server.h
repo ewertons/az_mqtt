@@ -86,6 +86,8 @@ typedef struct
   bool send_qos2_sequence;
   /** @brief After CONNACK: PUBACK, PUBCOMP, PUBREC, PUBREL, SUBACK, UNSUBACK for unused packet ids. */
   bool send_unknown_acks;
+  /** @brief Close the connection right after CONNACK (TLS: without close_notify). */
+  bool close_after_connack;
 } test_server_options;
 
 typedef struct test_server test_server;

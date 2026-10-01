@@ -163,6 +163,10 @@ static void _sleep_ms(int ms)
 /** @brief In-flight entries the next _setup() gives the client (at most 8); then back to 4. */
 static int s_inflight_slots = 4;
 
+/** @brief Next _setup() connects with credentials, a will and a client id that must never be logged. */
+static bool s_with_secrets;
+static AZ_MQTT_T(will_options) s_will;
+
 static void _setup(fixture* f, test_server_options const* so, uint16_t keep_alive_s)
 {
   memset(f, 0, sizeof(*f));
@@ -181,6 +185,17 @@ static void _setup(fixture* f, test_server_options const* so, uint16_t keep_aliv
   o.connect_options = AZ_MQTT_T(connect_options_default)();
   o.connect_options.client_id = AZ_SPAN_FROM_STR("session-test");
   o.connect_options.keep_alive_seconds = keep_alive_s;
+  if (s_with_secrets)
+  {
+    s_with_secrets = false;
+    memset(&s_will, 0, sizeof(s_will));
+    s_will.topic = AZ_SPAN_FROM_STR("SECRET-WILL-TOPIC");
+    s_will.payload = AZ_SPAN_FROM_STR("SECRET-WILL-PAYLOAD");
+    o.connect_options.client_id = AZ_SPAN_FROM_STR("SECRET-CLIENT-ID");
+    o.connect_options.username = AZ_SPAN_FROM_STR("SECRET-USERNAME");
+    o.connect_options.password = AZ_SPAN_FROM_STR("SECRET-PASSWORD");
+    o.connect_options.will = &s_will;
+  }
   o.hostname = AZ_SPAN_FROM_STR("127.0.0.1");
   if (so->tls)
   {
@@ -790,6 +805,94 @@ static void a_failed_pubrec_ends_the_exchange(void** state)
 }
 #endif
 
+static void a_peer_close_is_reported_as_connection_closed(void** state)
+{
+  (void)state;
+#if defined(AZ_MQTT_TEST_BACKEND_NONE)
+  int const tls_cases = 1;
+#else
+  int const tls_cases = 2;
+#endif
+  for (int tls = 0; tls < tls_cases; tls++)
+  {
+    test_server_options so = _plain();
+    so.tls = tls == 1;
+    so.close_after_connack = true;
+    fixture f;
+    _setup(&f, &so, 30);
+    az_result const rc = AZ_MQTT_T(client_connect)(&f.client, 3000);
+    // The close may be read in the same loop as the CONNACK.
+    assert_true(rc == AZ_OK || rc == AZ_MQTT_ERROR_CONNECTION_CLOSED);
+    _ignore(_pump_until_closed(&f, 3000));
+    assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_CONNECTION_CLOSED);
+    _teardown(&f);
+  }
+}
+
+#ifndef AZ_NO_LOGGING
+/** @brief Every az_log message, each followed by '\n'. */
+static char s_log[16384];
+static size_t s_log_size;
+
+static void _on_log(az_log_classification classification, az_span message)
+{
+  (void)classification;
+  size_t const size = (size_t)az_span_size(message);
+  if (s_log_size + size + 2 <= sizeof(s_log))
+  {
+    memcpy(s_log + s_log_size, az_span_ptr(message), size);
+    s_log_size += size;
+    s_log[s_log_size++] = '\n';
+    s_log[s_log_size] = '\0';
+  }
+}
+
+static void logs_never_contain_credentials_topics_or_payloads(void** state)
+{
+  (void)state;
+  s_log_size = 0;
+  s_log[0] = '\0';
+  az_log_set_message_callback(_on_log);
+  test_server_options so = test_server_options_default(); // TLS
+#if defined(AZ_MQTT_TEST_BACKEND_NONE)
+  so.tls = false;
+#endif
+  so.ack_publishes = true;
+  s_with_secrets = true;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  AZ_MQTT_T(subscription) sub;
+  memset(&sub, 0, sizeof(sub));
+  sub.topic_filter = AZ_SPAN_FROM_STR("SECRET-FILTER");
+  assert_int_equal(AZ_MQTT_T(client_subscribe)(&f.client, &sub, 1, NULL), AZ_OK);
+  AZ_MQTT_T(publish_options) p = AZ_MQTT_T(publish_options_default)();
+  p.topic = AZ_SPAN_FROM_STR("SECRET-TOPIC");
+  p.payload = AZ_SPAN_FROM_STR("SECRET-PAYLOAD");
+  p.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &p, NULL), AZ_OK);
+  int64_t const end = _now_ms() + 3000;
+  while ((g.subacks == 0 || g.pubacks == 0) && _now_ms() < end)
+  {
+    assert_int_equal(AZ_MQTT_T(client_process_loop)(&f.client, 20), AZ_OK);
+  }
+  assert_int_equal(AZ_MQTT_TEST_DISCONNECT(&f.client), AZ_OK);
+  az_log_set_message_callback(NULL);
+  _teardown(&f);
+
+  assert_non_null(strstr(s_log, "connect 127.0.0.1:"));
+#if !defined(AZ_MQTT_TEST_BACKEND_NONE)
+  assert_non_null(strstr(s_log, " tls\n"));
+#endif
+  assert_non_null(strstr(s_log, "sent CONNECT "));
+  assert_non_null(strstr(s_log, "received CONNACK "));
+  assert_non_null(strstr(s_log, "sent SUBSCRIBE "));
+  assert_non_null(strstr(s_log, "received PUBACK "));
+  assert_non_null(strstr(s_log, "closed 0x00010000 native 0:0\n"));
+  assert_null(strstr(s_log, "SECRET"));
+}
+#endif // AZ_NO_LOGGING
+
 static void reconnect_after_a_lost_session_works(void** state)
 {
   (void)state;
@@ -994,6 +1097,10 @@ int main(void)
     cmocka_unit_test(the_server_limits_are_enforced),
     cmocka_unit_test(an_acknowledgement_over_the_server_maximum_packet_size_closes),
     cmocka_unit_test(a_failed_pubrec_ends_the_exchange),
+#endif
+    cmocka_unit_test(a_peer_close_is_reported_as_connection_closed),
+#ifndef AZ_NO_LOGGING
+    cmocka_unit_test(logs_never_contain_credentials_topics_or_payloads),
 #endif
     cmocka_unit_test(reconnect_after_a_lost_session_works),
     cmocka_unit_test(a_refused_connack_code_is_reported_verbatim),

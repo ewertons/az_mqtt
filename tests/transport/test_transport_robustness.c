@@ -14,6 +14,7 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <setjmp.h>
+#include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -174,6 +175,18 @@ static void connect_poll_completes_a_plain_connection(void** state)
   test_server_stop(s);
 }
 
+static void an_unresolvable_host_is_a_name_resolution_error(void** state)
+{
+  (void)state;
+  az_mqtt_transport* t = _transport_new();
+  az_result rc = az_mqtt_transport_connect(t, _str("az-mqtt-test.invalid"), 1883, NULL);
+  assert_int_equal(rc, AZ_MQTT_ERROR_NAME_RESOLUTION);
+  az_mqtt_native_error const native = az_mqtt_transport_get_last_native_error(t);
+  assert_int_equal(native.source, AZ_MQTT_NATIVE_ERROR_NAME_RESOLUTION);
+  assert_int_not_equal(native.code, 0);
+  _transport_free(t);
+}
+
 static void connect_to_a_closed_port_fails(void** state)
 {
   (void)state;
@@ -186,7 +199,10 @@ static void connect_to_a_closed_port_fails(void** state)
 
   az_mqtt_transport* t = _transport_new();
   az_result rc = az_mqtt_transport_connect(t, _str("127.0.0.1"), port, NULL);
-  assert_int_equal(rc, AZ_MQTT_ERROR_TRANSPORT);
+  assert_int_equal(rc, AZ_MQTT_ERROR_CONNECTION_REFUSED);
+  az_mqtt_native_error const native = az_mqtt_transport_get_last_native_error(t);
+  assert_int_equal(native.source, AZ_MQTT_NATIVE_ERROR_SOCKET);
+  assert_int_equal(native.code, ECONNREFUSED);
   _transport_free(t);
 }
 
@@ -305,11 +321,14 @@ static void _address(struct addrinfo* ai, struct sockaddr_in* sa, uint16_t port,
 }
 
 /** @brief Poll until connected or @p budget_ms; returns the last result. */
+/** @brief Native error output of the _az_mqtt_tcp_connect_* calls. */
+static az_mqtt_native_error s_native_error;
+
 static az_result _poll_tcp(_az_mqtt_tcp_connect* c, int budget_ms)
 {
   az_result rc;
   int64_t const end = _now_ms() + budget_ms;
-  while ((rc = _az_mqtt_tcp_connect_poll(c, 50)) == AZ_MQTT_ERROR_TIMEOUT && _now_ms() < end)
+  while ((rc = _az_mqtt_tcp_connect_poll(c, 50, &s_native_error)) == AZ_MQTT_ERROR_TIMEOUT && _now_ms() < end)
   {
   }
   return rc;
@@ -334,7 +353,7 @@ static void a_refused_address_falls_back_to_the_next(void** state)
 
   _az_mqtt_tcp_connect c;
   _az_mqtt_tcp_connect_init(&c);
-  assert_int_equal(_az_mqtt_tcp_connect_start_addresses(&c, &ai[0]), AZ_OK);
+  assert_int_equal(_az_mqtt_tcp_connect_start_addresses(&c, &ai[0], &s_native_error), AZ_OK);
   assert_int_equal(_poll_tcp(&c, 3000), AZ_OK);
   int fd = c.fd;
   _az_mqtt_tcp_connect_init(&c); // Handed over.
@@ -382,7 +401,7 @@ static void an_unanswered_address_falls_back_after_its_attempt_budget(void** sta
   _az_mqtt_tcp_connect c;
   _az_mqtt_tcp_connect_init(&c);
   int64_t t0 = _now_ms();
-  assert_int_equal(_az_mqtt_tcp_connect_start_addresses(&c, &ai[0]), AZ_OK);
+  assert_int_equal(_az_mqtt_tcp_connect_start_addresses(&c, &ai[0], &s_native_error), AZ_OK);
   assert_int_equal(_poll_tcp(&c, 6000), AZ_OK);
   int64_t elapsed = _now_ms() - t0;
   assert_true(elapsed >= AZ_MQTT_TRANSPORT_ADDRESS_ATTEMPT_MS - 100);
@@ -431,6 +450,7 @@ int main(void)
     cmocka_unit_test(tls_handshake_with_a_silent_peer_times_out),
     cmocka_unit_test(tcp_connect_to_a_full_backlog_times_out),
     cmocka_unit_test(connect_poll_completes_a_plain_connection),
+    cmocka_unit_test(an_unresolvable_host_is_a_name_resolution_error),
     cmocka_unit_test(connect_to_a_closed_port_fails),
     cmocka_unit_test(plain_receive_waits_for_the_timeout),
     cmocka_unit_test(tls_receive_waits_for_the_timeout),

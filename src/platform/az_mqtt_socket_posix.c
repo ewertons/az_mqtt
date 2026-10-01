@@ -59,6 +59,25 @@ int32_t _az_mqtt_remaining_ms(int64_t deadline_ms)
   return left <= 0 ? 0 : (left > INT32_MAX ? INT32_MAX : (int32_t)left);
 }
 
+az_result _az_mqtt_socket_error(int err, az_mqtt_native_error* out_error)
+{
+  out_error->source = err == 0 ? AZ_MQTT_NATIVE_ERROR_NONE : AZ_MQTT_NATIVE_ERROR_SOCKET;
+  out_error->code = err;
+  switch (err)
+  {
+    case 0:
+    case ECONNRESET:
+    case ECONNABORTED:
+    case EPIPE:
+    case ENOTCONN:
+      return AZ_MQTT_ERROR_CONNECTION_CLOSED;
+    case ECONNREFUSED:
+      return AZ_MQTT_ERROR_CONNECTION_REFUSED;
+    default:
+      return AZ_MQTT_ERROR_TRANSPORT;
+  }
+}
+
 bool _az_mqtt_would_block(void)
 {
   return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
@@ -108,6 +127,10 @@ int32_t _az_mqtt_recv_nonblocking(int fd, uint8_t* buffer, int32_t size)
   {
     return 0;
   }
+  if (n == 0)
+  {
+    errno = 0; // Orderly close.
+  }
   return -1;
 }
 
@@ -118,6 +141,7 @@ void _az_mqtt_tcp_connect_init(_az_mqtt_tcp_connect* c)
   c->next = NULL;
   c->owns_addresses = false;
   c->attempt_start_ms = 0;
+  c->last_errno = 0;
 }
 
 static void _release_addresses(_az_mqtt_tcp_connect* c)
@@ -142,11 +166,13 @@ static az_result _connect_next(_az_mqtt_tcp_connect* c)
     int fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
     if (fd < 0)
     {
+      c->last_errno = errno;
       continue;
     }
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0)
     {
+      c->last_errno = errno;
       close(fd);
       continue;
     }
@@ -155,6 +181,7 @@ static az_result _connect_next(_az_mqtt_tcp_connect* c)
     int one = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one)) != 0)
     {
+      c->last_errno = errno;
       close(fd); // It could raise SIGPIPE.
       continue;
     }
@@ -165,12 +192,17 @@ static az_result _connect_next(_az_mqtt_tcp_connect* c)
       c->attempt_start_ms = _az_mqtt_now_ms();
       return AZ_OK;
     }
+    c->last_errno = errno;
     close(fd);
   }
   return AZ_MQTT_ERROR_TRANSPORT;
 }
 
-az_result _az_mqtt_tcp_connect_start(_az_mqtt_tcp_connect* c, az_span host, uint16_t port)
+az_result _az_mqtt_tcp_connect_start(
+    _az_mqtt_tcp_connect* c,
+    az_span host,
+    uint16_t port,
+    az_mqtt_native_error* out_error)
 {
   _az_mqtt_tcp_connect_cancel(c);
 
@@ -190,11 +222,14 @@ az_result _az_mqtt_tcp_connect_start(_az_mqtt_tcp_connect* c, az_span host, uint
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   struct addrinfo* addresses = NULL;
-  if (getaddrinfo(host_str, port_str, &hints, &addresses) != 0 || addresses == NULL)
+  int const resolved = getaddrinfo(host_str, port_str, &hints, &addresses);
+  if (resolved != 0 || addresses == NULL)
   {
-    return AZ_MQTT_ERROR_TRANSPORT;
+    out_error->source = AZ_MQTT_NATIVE_ERROR_NAME_RESOLUTION;
+    out_error->code = resolved;
+    return AZ_MQTT_ERROR_NAME_RESOLUTION;
   }
-  az_result rc = _az_mqtt_tcp_connect_start_addresses(c, addresses);
+  az_result rc = _az_mqtt_tcp_connect_start_addresses(c, addresses, out_error);
   if (az_result_succeeded(rc))
   {
     c->owns_addresses = true;
@@ -206,7 +241,10 @@ az_result _az_mqtt_tcp_connect_start(_az_mqtt_tcp_connect* c, az_span host, uint
   return rc;
 }
 
-az_result _az_mqtt_tcp_connect_start_addresses(_az_mqtt_tcp_connect* c, struct addrinfo* addresses)
+az_result _az_mqtt_tcp_connect_start_addresses(
+    _az_mqtt_tcp_connect* c,
+    struct addrinfo* addresses,
+    az_mqtt_native_error* out_error)
 {
   _az_mqtt_tcp_connect_cancel(c);
   c->addresses = addresses;
@@ -214,12 +252,16 @@ az_result _az_mqtt_tcp_connect_start_addresses(_az_mqtt_tcp_connect* c, struct a
   az_result rc = _connect_next(c);
   if (az_result_failed(rc))
   {
+    rc = _az_mqtt_socket_error(c->last_errno, out_error);
     _az_mqtt_tcp_connect_init(c);
   }
   return rc;
 }
 
-az_result _az_mqtt_tcp_connect_poll(_az_mqtt_tcp_connect* c, int32_t timeout_ms)
+az_result _az_mqtt_tcp_connect_poll(
+    _az_mqtt_tcp_connect* c,
+    int32_t timeout_ms,
+    az_mqtt_native_error* out_error)
 {
   int64_t const deadline = _az_mqtt_deadline(timeout_ms);
   while (c->fd >= 0)
@@ -253,6 +295,7 @@ az_result _az_mqtt_tcp_connect_poll(_az_mqtt_tcp_connect* c, int32_t timeout_ms)
       return AZ_OK;
     }
     // Failed, or its attempt budget ran out: move on to the next address.
+    c->last_errno = r < 0 ? errno : (r == 0 ? ETIMEDOUT : (err != 0 ? err : errno));
     close(c->fd);
     c->fd = -1;
     if (az_result_failed(_connect_next(c)))
@@ -260,8 +303,9 @@ az_result _az_mqtt_tcp_connect_poll(_az_mqtt_tcp_connect* c, int32_t timeout_ms)
       break;
     }
   }
+  az_result const rc = _az_mqtt_socket_error(c->last_errno, out_error);
   _az_mqtt_tcp_connect_cancel(c);
-  return AZ_MQTT_ERROR_TRANSPORT;
+  return rc;
 }
 
 void _az_mqtt_tcp_connect_cancel(_az_mqtt_tcp_connect* c)

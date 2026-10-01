@@ -117,9 +117,28 @@ static void _expect_rejected(test_server_options const* o, char const* host)
   fixture f;
   assert_int_equal(_setup(&f, o), 0);
   az_mqtt_tls_options t = _trusting(&f);
-  assert_true(az_result_failed(_connect(&f, host, &t)));
+  assert_int_equal(_connect(&f, host, &t), AZ_MQTT_ERROR_TLS_VERIFY);
+  az_mqtt_native_error const native = az_mqtt_transport_get_last_native_error(f.transport);
+  assert_int_equal(native.source, AZ_MQTT_NATIVE_ERROR_TLS_VERIFY);
+  assert_int_not_equal(native.code, 0);
   assert_int_equal(test_server_handshakes(f.server), 0);
   _teardown(&f);
+}
+
+static void tls_to_a_server_without_tls_is_a_handshake_error(void** state)
+{
+  (void)state;
+  test_server_options o = test_server_options_default();
+  test_server* trust = test_server_start(&o); // Only for its CA: a plain server has none.
+  assert_non_null(trust);
+  o.tls = false;
+  fixture f;
+  assert_int_equal(_setup(&f, &o), 0);
+  az_mqtt_tls_options t = az_mqtt_tls_options_default();
+  t.ca_cert_path = az_span_create_from_str((char*)(uintptr_t)test_server_ca_path(trust));
+  assert_int_equal(_connect(&f, "localhost", &t), AZ_MQTT_ERROR_TLS_HANDSHAKE);
+  _teardown(&f);
+  test_server_stop(trust);
 }
 
 static void trusted_server_by_dns_name_is_accepted(void** state)
@@ -192,7 +211,7 @@ static void missing_trust_anchor_never_trusts_the_server(void** state)
   assert_int_equal(test_server_accepted(f.server), 0);
 #else
   // The system store does not contain the test CA.
-  assert_true(az_result_failed(rc));
+  assert_int_equal(rc, AZ_MQTT_ERROR_TLS_VERIFY);
   assert_int_equal(test_server_handshakes(f.server), 0);
 #endif
   _teardown(&f);
@@ -284,6 +303,7 @@ int main(void)
     cmocka_unit_test(half_a_client_identity_is_refused_before_connecting),
     cmocka_unit_test(client_certificate_is_presented),
     cmocka_unit_test(server_requiring_a_client_certificate_refuses_one_without),
+    cmocka_unit_test(tls_to_a_server_without_tls_is_a_handshake_error),
     cmocka_unit_test(reconnect_after_a_rejected_handshake_succeeds),
   };
   return cmocka_run_group_tests_name("transport_tls", tests, NULL, NULL);

@@ -99,6 +99,10 @@ target_include_directories(az_mqtt_core
 target_include_directories(az_mqtt_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
 
 target_link_libraries(az_mqtt_core PUBLIC az::core)
+if(NOT LOGGING)
+  # azure-sdk-for-c built without az_log (its LOGGING option): compile our logging out too.
+  target_compile_definitions(az_mqtt_core PUBLIC AZ_NO_LOGGING)
+endif()
 
 # Wire the selected TLS backend.
 if(WIN32)
