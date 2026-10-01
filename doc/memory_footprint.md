@@ -7,19 +7,19 @@ GCC 12.2, `-O3 -DNDEBUG`, x86-64, Debian 12, no TLS. An application links `az_mq
 
 | Module | Library | .text | .rodata | .data | .bss |
 |---|---|---:|---:|---:|---:|
-| az_mqtt_core.c | core | 3,558 B | 0 | 0 | 0 |
+| az_mqtt_core.c | core | 3,766 B | 0 | 0 | 0 |
 | az_mqtt_codec_common.c | core | 1,399 B | 0 | 0 | 0 |
 | transport_posix.c | core | 1,361 B | 0 | 0 | 0 |
 | az_mqtt_socket_posix.c | core | 3,215 B | 7 B | 0 | 0 |
-| az_mqtt3_client.c | mqttv3 | 2,384 B | 56 B | 0 | 0 |
+| az_mqtt3_client.c | mqttv3 | 2,400 B | 56 B | 0 | 0 |
 | az_mqtt3_codec.c | mqttv3 | 2,651 B | 37 B | 0 | 0 |
 | az_mqtt5_client.c | mqttv5 | 3,374 B | 64 B | 0 | 0 |
 | az_mqtt5_codec.c | mqttv5 | 9,993 B | 299 B | 0 | 0 |
-| **mqttv3 application** | core + mqttv3 | **14,568 B** | **100 B** | **0** | **0** |
-| **mqttv5 application** | core + mqttv5 | **22,900 B** | **370 B** | **0** | **0** |
-| **Both versions** | core + mqttv3 + mqttv5 | **27,935 B** | **463 B** | **0** | **0** |
+| **mqttv3 application** | core + mqttv3 | **14,792 B** | **100 B** | **0** | **0** |
+| **mqttv5 application** | core + mqttv5 | **23,108 B** | **370 B** | **0** | **0** |
+| **Both versions** | core + mqttv3 + mqttv5 | **28,159 B** | **463 B** | **0** | **0** |
 
-RAM per client: `az_mqtt3_client` 256 B, `az_mqtt5_client` 456 B (x86-64), plus 4 B per `inflight` slot
+RAM per client: `az_mqtt3_client` 264 B, `az_mqtt5_client` 456 B (x86-64), plus 4 B per `inflight_control_buffer` entry
 (caller storage).
 
 ## Before the shared core (az_mqtt5 library)

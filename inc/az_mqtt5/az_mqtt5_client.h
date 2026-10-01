@@ -64,7 +64,7 @@ typedef void (*az_mqtt5_on_puback_fn)(az_mqtt5_client* client, az_mqtt5_ack_data
 /**
  * @brief A QoS 2 exchange ended: PUBCOMP received; or a PUBREC with a reason code
  * of 0x80 or more (failed: no PUBREL is sent, @p ack is the PUBREC); or, for an
- * inbound one held in an in-flight slot, PUBREL received and PUBCOMP sent.
+ * inbound one held in an in-flight entry, PUBREL received and PUBCOMP sent.
  */
 typedef void (*az_mqtt5_on_pubcomp_fn)(az_mqtt5_client* client, az_mqtt5_ack_data const* ack);
 
@@ -134,15 +134,16 @@ typedef struct
   az_mqtt5_connect_options connect_options;
 
   /**
-   * @brief In-flight table (az_mqtt_inflight[]). Each QoS 1/2 PUBLISH, SUBSCRIBE and
-   * UNSUBSCRIBE holds a slot until acknowledged, and each inbound QoS 2 PUBLISH until its
-   * PUBREL. A request with no free slot fails with AZ_MQTT_ERROR_FLOW_CONTROL; an inbound
-   * QoS 2 PUBLISH with none is delivered without duplicate detection. May be empty if only
-   * QoS 0 is published and nothing is subscribed. Acknowledgements for packet identifiers
-   * not in flight are ignored. Whatever is in flight when the session ends is abandoned:
-   * nothing is resent on resume.
+   * @brief In-flight entries (az_mqtt_inflight_entry[]; at most UINT16_MAX used).
+   *
+   * Each QoS 1/2 PUBLISH, SUBSCRIBE and UNSUBSCRIBE holds an entry until acknowledged, and each
+   * inbound QoS 2 PUBLISH until its PUBREL. A request with no free entry fails with
+   * AZ_MQTT_ERROR_FLOW_CONTROL; an inbound QoS 2 PUBLISH with none is delivered without duplicate
+   * detection. May be empty if only QoS 0 is published and nothing is subscribed.
+   * Acknowledgements for packet identifiers not in flight are ignored. Whatever is in flight when
+   * the session ends is abandoned: nothing is resent on resume.
    */
-  az_span inflight;
+  az_span inflight_control_buffer;
 
   // Callbacks (all optional, set to NULL if not needed)
   az_mqtt5_on_connack_fn on_connack;
@@ -182,8 +183,7 @@ struct az_mqtt5_client
     az_mqtt5_on_disconnect_fn on_disconnect;
     az_mqtt5_on_connection_closed_fn on_connection_closed;
     void* user_context;
-    /** @brief From the accepted CONNACK (MQTT 5.0 defaults when absent). */
-    uint32_t server_maximum_packet_size;
+    /** @brief From the accepted CONNACK (MQTT 5.0 defaults when absent); see also the core. */
     uint16_t server_receive_maximum;
     uint16_t server_topic_alias_maximum;
     uint8_t server_maximum_qos;
@@ -255,10 +255,10 @@ AZ_NODISCARD az_result az_mqtt5_client_process_loop(az_mqtt5_client* client, int
 /**
  * @brief Publish a message.
  *
- * QoS 1/2 holds an in-flight slot until PUBACK / PUBCOMP (see options.inflight).
+ * QoS 1/2 holds an in-flight entry until PUBACK / PUBCOMP (see options.inflight_control_buffer).
  *
  * @param[out] out_packet_id  Packet ID assigned (for QoS > 0). Can be NULL.
- * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free slot, or the server's Receive Maximum is reached.
+ * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free entry, or the server's Receive Maximum is reached.
  * @retval AZ_MQTT_ERROR_NOT_SUPPORTED QoS above the server's Maximum QoS, retain without
  *         Retain Available, or a Topic Alias above its Topic Alias Maximum.
  * @retval AZ_MQTT_ERROR_PACKET_TOO_LARGE Over the server's Maximum Packet Size.
@@ -269,9 +269,9 @@ AZ_NODISCARD az_result az_mqtt5_client_publish(
     uint16_t* out_packet_id);
 
 /**
- * @brief Subscribe to topic(s). Holds an in-flight slot until SUBACK.
+ * @brief Subscribe to topic(s). Holds an in-flight entry until SUBACK.
  * @param[out] out_packet_id  Packet ID assigned. Can be NULL.
- * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free in-flight slot.
+ * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free in-flight entry.
  * @retval AZ_MQTT_ERROR_PACKET_TOO_LARGE Over the server's Maximum Packet Size.
  */
 AZ_NODISCARD az_result az_mqtt5_client_subscribe(
@@ -281,9 +281,9 @@ AZ_NODISCARD az_result az_mqtt5_client_subscribe(
     uint16_t* out_packet_id);
 
 /**
- * @brief Unsubscribe from topic(s). Holds an in-flight slot until UNSUBACK.
+ * @brief Unsubscribe from topic(s). Holds an in-flight entry until UNSUBACK.
  * @param[out] out_packet_id  Packet ID assigned. Can be NULL.
- * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free in-flight slot.
+ * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free in-flight entry.
  * @retval AZ_MQTT_ERROR_PACKET_TOO_LARGE Over the server's Maximum Packet Size.
  */
 AZ_NODISCARD az_result az_mqtt5_client_unsubscribe(

@@ -34,7 +34,7 @@ typedef struct
   uint8_t send_buf[1024];
   uint8_t recv_buf[1024];
   az_mqtt_tls_options tls;
-  az_mqtt_inflight inflight[8];
+  az_mqtt_inflight_entry inflight_control_buffer[8];
 #if AZ_MQTT_TEST_VERSION == 5
   AZ_MQTT_T(user_property) props[4][4];
   int32_t sub_ids[4];
@@ -195,8 +195,9 @@ static void _setup(fixture* f, test_server_options const* so, uint16_t keep_aliv
   o.on_unsuback = _on_unsuback;
   o.on_puback = _on_puback;
   o.on_pubcomp = _on_pubcomp;
-  o.inflight = az_span_create(
-      (uint8_t*)f->inflight, s_inflight_slots * (int32_t)sizeof(az_mqtt_inflight));
+  o.inflight_control_buffer = az_span_create(
+      (uint8_t*)f->inflight_control_buffer,
+      s_inflight_slots * (int32_t)sizeof(az_mqtt_inflight_entry));
   o.on_connection_closed = _on_closed;
 #if AZ_MQTT_TEST_VERSION == 5
   o.on_disconnect = _on_disconnect;
@@ -741,6 +742,27 @@ static void the_server_limits_are_enforced(void** state)
   _teardown(&f);
 }
 
+static void an_acknowledgement_over_the_server_maximum_packet_size_closes(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.maximum_packet_size = 3; // A PUBREC is 4 bytes.
+  so.send_qos2_sequence = true;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  int64_t const end = _now_ms() + 3000;
+  az_result rc = AZ_OK;
+  while (rc == AZ_OK && _now_ms() < end)
+  {
+    rc = AZ_MQTT_T(client_process_loop)(&f.client, 20);
+  }
+  assert_int_equal(rc, AZ_MQTT_ERROR_PACKET_TOO_LARGE);
+  assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_PACKET_TOO_LARGE);
+  assert_int_equal(g.publishes, 0); // Not delivered: it could not be acknowledged.
+  _teardown(&f);
+}
+
 static void a_failed_pubrec_ends_the_exchange(void** state)
 {
   (void)state;
@@ -965,6 +987,7 @@ int main(void)
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(the_server_receive_maximum_limits_publishes),
     cmocka_unit_test(the_server_limits_are_enforced),
+    cmocka_unit_test(an_acknowledgement_over_the_server_maximum_packet_size_closes),
     cmocka_unit_test(a_failed_pubrec_ends_the_exchange),
 #endif
     cmocka_unit_test(reconnect_after_a_lost_session_works),

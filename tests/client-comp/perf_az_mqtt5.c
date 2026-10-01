@@ -51,7 +51,7 @@
 
 static uint8_t s_send_buf[SEND_BUFFER_SIZE];
 // QoS 1 publishes awaiting PUBACK, plus the subscription.
-static az_mqtt_inflight s_inflight[256];
+static az_mqtt_inflight_entry s_inflight_control_buffer[256];
 static uint8_t s_recv_buf[RECV_BUFFER_SIZE];
 // Large enough for either TLS backend. The transport struct embeds backend
 // state directly (OpenSSL: a few pointers; mbedTLS: full ssl_context,
@@ -239,7 +239,8 @@ int main(int argc, char* argv[])
   opts.transport = transport;
   opts.send_buffer = AZ_SPAN_FROM_BUFFER(s_send_buf);
   opts.receive_buffer = AZ_SPAN_FROM_BUFFER(s_recv_buf);
-  opts.inflight = az_span_create((uint8_t*)s_inflight, (int32_t)sizeof(s_inflight));
+  opts.inflight_control_buffer = az_span_create(
+      (uint8_t*)s_inflight_control_buffer, (int32_t)sizeof(s_inflight_control_buffer));
   opts.connect_options = conn_opts;
   opts.hostname = az_span_create((uint8_t*)host, (int32_t)strlen(host));
   opts.port = port;

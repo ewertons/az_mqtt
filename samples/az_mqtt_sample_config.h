@@ -29,6 +29,6 @@ static union
 } s_transport_buffer;
 
 // In-flight QoS 1/2 publishes, subscribes and unsubscribes.
-static az_mqtt_inflight s_inflight[8];
+static az_mqtt_inflight_entry s_inflight_control_buffer[8];
 
 #endif // AZ_MQTT_SAMPLE_CONFIG_H

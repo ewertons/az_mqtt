@@ -169,7 +169,8 @@ int main(int argc, char* argv[])
   client_opts.transport = transport;
   client_opts.send_buffer = AZ_SPAN_FROM_BUFFER(s_send_buffer);
   client_opts.receive_buffer = AZ_SPAN_FROM_BUFFER(s_recv_buffer);
-  client_opts.inflight = az_span_create((uint8_t*)s_inflight, (int32_t)sizeof(s_inflight));
+  client_opts.inflight_control_buffer = az_span_create(
+      (uint8_t*)s_inflight_control_buffer, (int32_t)sizeof(s_inflight_control_buffer));
   client_opts.connect_options = connect_opts;
   client_opts.hostname = az_span_create((uint8_t*)(uintptr_t)host, (int32_t)strlen(host));
   client_opts.port = port;

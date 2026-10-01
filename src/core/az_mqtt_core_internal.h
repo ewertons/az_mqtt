@@ -66,6 +66,7 @@ AZ_NODISCARD az_result _az_mqtt_core_process_loop(
  * @brief Send the send-buffer bytes an encoder wrote, @p remaining being what it left.
  *
  * Does not close on failure.
+ * @retval AZ_MQTT_ERROR_PACKET_TOO_LARGE Over the server's Maximum Packet Size; nothing sent.
  */
 AZ_NODISCARD az_result _az_mqtt_core_send(
     az_mqtt_core* core,
@@ -93,7 +94,7 @@ AZ_NODISCARD AZ_INLINE az_result _az_mqtt_core_send_request(az_mqtt_core* core, 
   return rc;
 }
 
-/** @brief What an in-flight slot holds. PUBLISH_QOS1 to PUBREL are what Receive Maximum counts. */
+/** @brief What an in-flight entry holds. PUBLISH_QOS1 to PUBREL are what Receive Maximum counts. */
 typedef enum
 {
   _AZ_MQTT_INFLIGHT_FREE = 0,
@@ -109,55 +110,59 @@ typedef enum
   _AZ_MQTT_INFLIGHT_INBOUND_QOS2,
 } _az_mqtt_inflight_kind;
 
-/** @brief Use @p storage (az_mqtt_inflight[]) as the in-flight table; all slots free. */
-void _az_mqtt_core_inflight_init(az_mqtt_core* core, az_span storage);
+/** @brief Use @p buffer (az_mqtt_inflight_entry[]; at most UINT16_MAX used); all entries free. */
+void _az_mqtt_core_inflight_init(az_mqtt_core* core, az_span buffer);
 
 /**
- * @brief Take a free slot for an outgoing request, with a packet identifier no
+ * @brief Reserve a free entry for an outgoing request, with a packet identifier no
  * other outgoing request holds.
  *
  * @param publish_limit Fail if this many outgoing QoS 1/2 PUBLISH exchanges are
  * incomplete (the server's Receive Maximum); UINT16_MAX for none.
- * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free slot, or @p publish_limit reached.
+ * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free entry, or @p publish_limit reached.
  */
-AZ_NODISCARD az_result _az_mqtt_core_inflight_reserve(
+AZ_NODISCARD az_result _az_mqtt_core_inflight_reserve_entry(
     az_mqtt_core* core,
     _az_mqtt_inflight_kind kind,
     uint16_t publish_limit,
-    az_mqtt_inflight** out_slot);
+    az_mqtt_inflight_entry** out_entry);
 
-/** @brief The slot of @p kind holding @p packet_id, or NULL. */
-az_mqtt_inflight*
-_az_mqtt_core_inflight_find(az_mqtt_core* core, _az_mqtt_inflight_kind kind, uint16_t packet_id);
+/** @brief The entry of @p kind holding @p packet_id, or NULL. */
+AZ_NODISCARD az_mqtt_inflight_entry* _az_mqtt_core_inflight_find_entry(
+    az_mqtt_core* core,
+    _az_mqtt_inflight_kind kind,
+    uint16_t packet_id);
 
-/** @brief Free the slot of @p kind holding @p packet_id; whether there was one. */
-bool _az_mqtt_core_inflight_complete(
+/** @brief Free the entry of @p kind holding @p packet_id; whether there was one. */
+AZ_NODISCARD bool _az_mqtt_core_inflight_release_entry(
     az_mqtt_core* core,
     _az_mqtt_inflight_kind kind,
     uint16_t packet_id);
 
 /**
- * @brief Record an inbound QoS 2 PUBLISH until its PUBREL.
+ * @brief Track an inbound QoS 2 PUBLISH until its PUBREL.
  *
- * @return true if @p packet_id is already awaiting PUBREL (a duplicate: do not
- * deliver it again). Without a free slot nothing is recorded and a resent
+ * @param[out] out_is_duplicate Whether @p packet_id already awaits PUBREL (do not
+ * deliver it again). Without a free entry nothing is tracked, so a resent
  * duplicate would be delivered again.
  */
-bool _az_mqtt_core_inflight_inbound_qos2(az_mqtt_core* core, uint16_t packet_id);
+void _az_mqtt_core_inflight_track_inbound_qos2(
+    az_mqtt_core* core,
+    uint16_t packet_id,
+    bool* out_is_duplicate);
 
 /**
- * @brief Send a request the client encoded into the send buffer (@p encoded:
- * the encoder's result, @p remaining: what it left of the buffer).
+ * @brief Send a request encoded into the send buffer (@p encode_result: the
+ * encoder's result; @p remaining: what it left of the buffer).
  *
- * On an encoding failure, or a packet over @p maximum_packet_size (0: no
- * limit; AZ_MQTT_ERROR_PACKET_TOO_LARGE), frees @p slot (may be NULL) and sends
+ * On an encoding failure, or a packet over the server's Maximum Packet Size
+ * (AZ_MQTT_ERROR_PACKET_TOO_LARGE), frees @p entry (may be NULL) and sends
  * nothing. A send failure closes the session, as _az_mqtt_core_send_request().
  */
-AZ_NODISCARD az_result _az_mqtt_core_send_tracked(
+AZ_NODISCARD az_result _az_mqtt_core_send_tracked_request(
     az_mqtt_core* core,
-    az_mqtt_inflight* slot,
-    az_result encoded,
-    az_span remaining,
-    uint32_t maximum_packet_size);
+    az_mqtt_inflight_entry* entry,
+    az_result encode_result,
+    az_span remaining);
 
 #endif // AZ_MQTT_CORE_INTERNAL_H

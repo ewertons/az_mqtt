@@ -37,8 +37,8 @@ static uint8_t s_recv3[1024];
 static uint8_t s_send5[1024];
 static uint8_t s_recv5[1024];
 static az_mqtt5_reason_code s_suback_codes[4];
-static az_mqtt_inflight s_inflight3[2];
-static az_mqtt_inflight s_inflight5[2];
+static az_mqtt_inflight_entry s_inflight3[2];
+static az_mqtt_inflight_entry s_inflight5[2];
 
 static int s_subacks;
 static int s_received;
@@ -75,7 +75,7 @@ static void test_mqtt3_publishes_mqtt5_receives(void** state)
   o5.transport = t5;
   o5.send_buffer = AZ_SPAN_FROM_BUFFER(s_send5);
   o5.receive_buffer = AZ_SPAN_FROM_BUFFER(s_recv5);
-  o5.inflight = az_span_create((uint8_t*)s_inflight5, (int32_t)sizeof(s_inflight5));
+  o5.inflight_control_buffer = az_span_create((uint8_t*)s_inflight5, (int32_t)sizeof(s_inflight5));
   o5.hostname = AZ_SPAN_FROM_STR("localhost");
   o5.port = 1883;
   o5.connect_options = az_mqtt5_connect_options_default();
@@ -92,7 +92,7 @@ static void test_mqtt3_publishes_mqtt5_receives(void** state)
   o3.transport = t3;
   o3.send_buffer = AZ_SPAN_FROM_BUFFER(s_send3);
   o3.receive_buffer = AZ_SPAN_FROM_BUFFER(s_recv3);
-  o3.inflight = az_span_create((uint8_t*)s_inflight3, (int32_t)sizeof(s_inflight3));
+  o3.inflight_control_buffer = az_span_create((uint8_t*)s_inflight3, (int32_t)sizeof(s_inflight3));
   o3.hostname = AZ_SPAN_FROM_STR("localhost");
   o3.port = 1883;
   o3.connect_options = az_mqtt3_connect_options_default();

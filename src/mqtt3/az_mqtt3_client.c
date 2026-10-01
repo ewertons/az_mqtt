@@ -12,6 +12,7 @@
 #include "az_mqtt_core_internal.h"
 
 #include <azure/core/internal/az_precondition_internal.h>
+#include <azure/core/internal/az_result_internal.h>
 #include <azure/core/az_result.h>
 #include <azure/core/az_span.h>
 
@@ -78,10 +79,11 @@ static az_result _handle_publish(az_mqtt3_client* client, az_span body, uint8_t 
   }
   else if (publish.qos == AZ_MQTT_QOS_EXACTLY_ONCE)
   {
-    bool const duplicate
-        = _az_mqtt_core_inflight_inbound_qos2(&client->_internal.core, publish.packet_id);
+    bool is_duplicate;
+    _az_mqtt_core_inflight_track_inbound_qos2(
+        &client->_internal.core, publish.packet_id, &is_duplicate);
     rc = _send_ack(client, az_mqtt3_codec_encode_pubrec, publish.packet_id);
-    if (duplicate)
+    if (is_duplicate)
       return rc; // Delivered already.
   }
   if (az_result_failed(rc))
@@ -112,19 +114,17 @@ static az_result _handle_ack(az_mqtt3_client* client, az_mqtt_packet_type type, 
       break;
     case AZ_MQTT_PACKET_TYPE_PUBREC:
     {
-      az_mqtt_inflight* slot
-          = _az_mqtt_core_inflight_find(core, _AZ_MQTT_INFLIGHT_PUBLISH_QOS2, ack.packet_id);
-      if (slot != NULL)
+      az_mqtt_inflight_entry* entry
+          = _az_mqtt_core_inflight_find_entry(core, _AZ_MQTT_INFLIGHT_PUBLISH_QOS2, ack.packet_id);
+      if (entry != NULL)
       {
-        slot->_internal.kind = _AZ_MQTT_INFLIGHT_PUBREL;
+        entry->_internal.kind = _AZ_MQTT_INFLIGHT_PUBREL;
       }
       return _send_ack(client, az_mqtt3_codec_encode_pubrel, ack.packet_id);
     }
     case AZ_MQTT_PACKET_TYPE_PUBREL:
-      // Always acknowledged: an untracked one may have been delivered without a slot.
-      rc = _send_ack(client, az_mqtt3_codec_encode_pubcomp, ack.packet_id);
-      if (az_result_failed(rc))
-        return rc;
+      // Always acknowledged: an untracked one may have been delivered without an entry.
+      _az_RETURN_IF_FAILED(_send_ack(client, az_mqtt3_codec_encode_pubcomp, ack.packet_id));
       callback = client->_internal.on_pubcomp;
       kind = _AZ_MQTT_INFLIGHT_INBOUND_QOS2;
       break;
@@ -136,7 +136,7 @@ static az_result _handle_ack(az_mqtt3_client* client, az_mqtt_packet_type type, 
       callback = client->_internal.on_unsuback;
       break;
   }
-  if (!_az_mqtt_core_inflight_complete(core, kind, ack.packet_id))
+  if (!_az_mqtt_core_inflight_release_entry(core, kind, ack.packet_id))
   {
     return AZ_OK; // Not in flight.
   }
@@ -152,7 +152,7 @@ static az_result _handle_suback(az_mqtt3_client* client, az_span body)
   az_mqtt3_suback_data suback;
   az_result rc = az_mqtt3_codec_decode_suback(body, &suback);
   if (az_result_failed(rc)
-      || !_az_mqtt_core_inflight_complete(
+      || !_az_mqtt_core_inflight_release_entry(
           &client->_internal.core, _AZ_MQTT_INFLIGHT_SUBSCRIBE, suback.packet_id))
     return rc;
 
@@ -219,7 +219,7 @@ az_mqtt3_client_init(az_mqtt3_client* client, az_mqtt3_client_options const* opt
   client->_internal.on_pubcomp = options->on_pubcomp;
   client->_internal.on_connection_closed = options->on_connection_closed;
   client->_internal.user_context = options->user_context;
-  _az_mqtt_core_inflight_init(&client->_internal.core, options->inflight);
+  _az_mqtt_core_inflight_init(&client->_internal.core, options->inflight_control_buffer);
   return AZ_OK;
 }
 
@@ -268,30 +268,22 @@ AZ_NODISCARD az_result az_mqtt3_client_publish(
     return AZ_MQTT_ERROR_NOT_CONNECTED;
   }
 
-  az_mqtt_inflight* slot = NULL;
+  az_mqtt_inflight_entry* entry = NULL;
   uint16_t packet_id = 0;
   if (options->qos != AZ_MQTT_QOS_AT_MOST_ONCE)
   {
-    az_result rc = _az_mqtt_core_inflight_reserve(
+    _az_RETURN_IF_FAILED(_az_mqtt_core_inflight_reserve_entry(
         &client->_internal.core,
         options->qos == AZ_MQTT_QOS_AT_LEAST_ONCE ? _AZ_MQTT_INFLIGHT_PUBLISH_QOS1
                                                   : _AZ_MQTT_INFLIGHT_PUBLISH_QOS2,
         UINT16_MAX,
-        &slot);
-    if (az_result_failed(rc))
-    {
-      return rc;
-    }
-    packet_id = slot->_internal.packet_id;
+        &entry));
+    packet_id = entry->_internal.packet_id;
   }
 
   az_span send_buf = _SEND_BUFFER(client);
-  az_result rc = _az_mqtt_core_send_tracked(
-      &client->_internal.core,
-      slot,
-      az_mqtt3_codec_encode_publish(&send_buf, options, packet_id),
-      send_buf,
-      0);
+  az_result rc = az_mqtt3_codec_encode_publish(&send_buf, options, packet_id);
+  rc = _az_mqtt_core_send_tracked_request(&client->_internal.core, entry, rc, send_buf);
   if (az_result_succeeded(rc) && out_packet_id != NULL)
   {
     *out_packet_id = packet_id;
@@ -313,21 +305,14 @@ AZ_NODISCARD az_result az_mqtt3_client_subscribe(
     return AZ_MQTT_ERROR_NOT_CONNECTED;
   }
 
-  az_mqtt_inflight* slot = NULL;
-  az_result rc = _az_mqtt_core_inflight_reserve(
-      &client->_internal.core, _AZ_MQTT_INFLIGHT_SUBSCRIBE, UINT16_MAX, &slot);
-  if (az_result_failed(rc))
-  {
-    return rc;
-  }
-  uint16_t const packet_id = slot->_internal.packet_id;
+  az_mqtt_inflight_entry* entry = NULL;
+  _az_RETURN_IF_FAILED(_az_mqtt_core_inflight_reserve_entry(
+      &client->_internal.core, _AZ_MQTT_INFLIGHT_SUBSCRIBE, UINT16_MAX, &entry));
+  uint16_t const packet_id = entry->_internal.packet_id;
   az_span send_buf = _SEND_BUFFER(client);
-  rc = _az_mqtt_core_send_tracked(
-      &client->_internal.core,
-      slot,
-      az_mqtt3_codec_encode_subscribe(&send_buf, subscriptions, subscription_count, packet_id),
-      send_buf,
-      0);
+  az_result rc = az_mqtt3_codec_encode_subscribe(
+      &send_buf, subscriptions, subscription_count, packet_id);
+  rc = _az_mqtt_core_send_tracked_request(&client->_internal.core, entry, rc, send_buf);
   if (az_result_succeeded(rc) && out_packet_id != NULL)
   {
     *out_packet_id = packet_id;
@@ -349,21 +334,14 @@ AZ_NODISCARD az_result az_mqtt3_client_unsubscribe(
     return AZ_MQTT_ERROR_NOT_CONNECTED;
   }
 
-  az_mqtt_inflight* slot = NULL;
-  az_result rc = _az_mqtt_core_inflight_reserve(
-      &client->_internal.core, _AZ_MQTT_INFLIGHT_UNSUBSCRIBE, UINT16_MAX, &slot);
-  if (az_result_failed(rc))
-  {
-    return rc;
-  }
-  uint16_t const packet_id = slot->_internal.packet_id;
+  az_mqtt_inflight_entry* entry = NULL;
+  _az_RETURN_IF_FAILED(_az_mqtt_core_inflight_reserve_entry(
+      &client->_internal.core, _AZ_MQTT_INFLIGHT_UNSUBSCRIBE, UINT16_MAX, &entry));
+  uint16_t const packet_id = entry->_internal.packet_id;
   az_span send_buf = _SEND_BUFFER(client);
-  rc = _az_mqtt_core_send_tracked(
-      &client->_internal.core,
-      slot,
-      az_mqtt3_codec_encode_unsubscribe(&send_buf, topic_filters, filter_count, packet_id),
-      send_buf,
-      0);
+  az_result rc
+      = az_mqtt3_codec_encode_unsubscribe(&send_buf, topic_filters, filter_count, packet_id);
+  rc = _az_mqtt_core_send_tracked_request(&client->_internal.core, entry, rc, send_buf);
   if (az_result_succeeded(rc) && out_packet_id != NULL)
   {
     *out_packet_id = packet_id;
