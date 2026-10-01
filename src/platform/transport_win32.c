@@ -28,10 +28,25 @@
 
 #define AZ_MQTT_SCHANNEL_IO_BUFFER_SIZE 65536
 
+/** @brief Connect progress (connect_start / connect_poll). */
+typedef enum
+{
+  _WIN_IDLE = 0,
+  _WIN_TCP,
+  _WIN_TLS,
+  _WIN_CONNECTED,
+} _win_state;
+
 struct az_mqtt_transport
 {
   SOCKET socket_fd;
   bool connected;
+  _win_state state;
+
+  /** @brief _WIN_TCP: resolved addresses, the next one to try, and when the current one started. */
+  struct addrinfo* addresses;
+  struct addrinfo* next_address;
+  int64_t attempt_start_ms;
 
 #ifdef AZ_MQTT_TLS_SCHANNEL
   bool tls_active;
@@ -51,6 +66,12 @@ struct az_mqtt_transport
   int32_t decrypted_pending_pos;
 
   uint8_t tls_send_buf[AZ_MQTT_SCHANNEL_IO_BUFFER_SIZE];
+
+  /** @brief Handshake: TLS requested, server name, trust anchor (NULL: system store). */
+  bool tls_requested;
+  bool handshake_needs_read;
+  char host[256];
+  HCERTSTORE custom_root;
 #endif
 };
 
@@ -99,7 +120,60 @@ static az_result _span_to_cstr(az_span src, char* buf, int32_t buf_size)
   return AZ_OK;
 }
 
-static az_result _tcp_connect(az_mqtt_transport* transport, az_span host, uint16_t port)
+static int64_t _now_ms(void) { return (int64_t)GetTickCount64(); }
+
+/** @brief Deadline @p timeout_ms from now; -1 (none) for a negative timeout. */
+static int64_t _deadline(int32_t timeout_ms) { return timeout_ms < 0 ? -1 : _now_ms() + timeout_ms; }
+
+/** @brief Milliseconds left until @p deadline_ms, 0 if passed, -1 if none. */
+static int32_t _remaining(int64_t deadline_ms)
+{
+  if (deadline_ms < 0)
+  {
+    return -1;
+  }
+  int64_t const left = deadline_ms - _now_ms();
+  return left <= 0 ? 0 : (left > INT32_MAX ? INT32_MAX : (int32_t)left);
+}
+
+static void _release_addresses(az_mqtt_transport* transport)
+{
+  if (transport->addresses != NULL)
+  {
+    freeaddrinfo(transport->addresses);
+  }
+  transport->addresses = NULL;
+  transport->next_address = NULL;
+}
+
+/** @brief Start a non-blocking connect to the next untried address. */
+static az_result _tcp_connect_next(az_mqtt_transport* transport)
+{
+  while (transport->next_address != NULL)
+  {
+    struct addrinfo* const a = transport->next_address;
+    transport->next_address = a->ai_next;
+    SOCKET fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+    if (fd == INVALID_SOCKET)
+    {
+      continue;
+    }
+    u_long non_blocking = 1;
+    if (ioctlsocket(fd, FIONBIO, &non_blocking) == 0
+        && (connect(fd, a->ai_addr, (int)a->ai_addrlen) == 0
+            || WSAGetLastError() == WSAEWOULDBLOCK))
+    {
+      transport->socket_fd = fd;
+      transport->attempt_start_ms = _now_ms();
+      return AZ_OK;
+    }
+    closesocket(fd);
+  }
+  return AZ_MQTT_ERROR_TRANSPORT;
+}
+
+/** @brief Resolve @p host (the one blocking step) and start connecting to the first address. */
+static az_result _tcp_connect_start(az_mqtt_transport* transport, az_span host, uint16_t port)
 {
   char host_str[256];
   az_result rc = _span_to_cstr(host, host_str, (int32_t)sizeof(host_str));
@@ -121,31 +195,93 @@ static az_result _tcp_connect(az_mqtt_transport* transport, az_span host, uint16
   {
     return AZ_MQTT_ERROR_TRANSPORT;
   }
-
-  SOCKET fd = INVALID_SOCKET;
-  for (struct addrinfo* rp = res; rp != NULL; rp = rp->ai_next)
+  transport->addresses = res;
+  transport->next_address = res;
+  rc = _tcp_connect_next(transport);
+  if (az_result_failed(rc))
   {
-    fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-    if (fd == INVALID_SOCKET)
+    _release_addresses(transport);
+  }
+  return rc;
+}
+
+/**
+ * @brief Wait up to @p deadline_ms for the TCP connect; on success the socket is
+ * made blocking again, with AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS on sends.
+ *
+ * An address that neither connects nor fails within
+ * AZ_MQTT_TRANSPORT_ADDRESS_ATTEMPT_MS is abandoned while others remain.
+ *
+ * @retval AZ_MQTT_ERROR_TIMEOUT Still connecting.
+ */
+static az_result _tcp_connect_poll(az_mqtt_transport* transport, int64_t deadline_ms)
+{
+  while (transport->socket_fd != INVALID_SOCKET)
+  {
+    int32_t wait_ms = _remaining(deadline_ms);
+    bool const bounded_attempt = transport->next_address != NULL;
+    if (bounded_attempt)
     {
-      continue;
+      int32_t const attempt_left
+          = _remaining(transport->attempt_start_ms + AZ_MQTT_TRANSPORT_ADDRESS_ATTEMPT_MS);
+      if (wait_ms < 0 || attempt_left < wait_ms)
+      {
+        wait_ms = attempt_left;
+      }
     }
-    if (connect(fd, rp->ai_addr, (int)rp->ai_addrlen) == 0)
+
+    fd_set write_fds;
+    fd_set error_fds;
+    FD_ZERO(&write_fds);
+    FD_ZERO(&error_fds);
+    FD_SET(transport->socket_fd, &write_fds);
+    FD_SET(transport->socket_fd, &error_fds);
+    struct timeval tv;
+    tv.tv_sec = wait_ms / 1000;
+    tv.tv_usec = (wait_ms % 1000) * 1000;
+    int const sel = select(0, NULL, &write_fds, &error_fds, wait_ms < 0 ? NULL : &tv);
+    if (sel < 0)
+    {
+      return AZ_MQTT_ERROR_TRANSPORT;
+    }
+    if (sel == 0
+        && !(bounded_attempt
+             && _now_ms() - transport->attempt_start_ms >= AZ_MQTT_TRANSPORT_ADDRESS_ATTEMPT_MS))
+    {
+      return AZ_MQTT_ERROR_TIMEOUT;
+    }
+
+    int err = 0;
+    int len = (int)sizeof(err);
+    if (sel > 0 && FD_ISSET(transport->socket_fd, &write_fds)
+        && getsockopt(transport->socket_fd, SOL_SOCKET, SO_ERROR, (char*)&err, &len) == 0 && err == 0)
+    {
+      u_long blocking = 0;
+      DWORD const send_timeout_ms = AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS;
+      if (ioctlsocket(transport->socket_fd, FIONBIO, &blocking) != 0
+          || setsockopt(
+                 transport->socket_fd,
+                 SOL_SOCKET,
+                 SO_SNDTIMEO,
+                 (char const*)&send_timeout_ms,
+                 (int)sizeof(send_timeout_ms))
+              != 0)
+      {
+        return AZ_MQTT_ERROR_TRANSPORT;
+      }
+      _release_addresses(transport);
+      return AZ_OK;
+    }
+
+    // Failed, or its attempt budget ran out: move on to the next address.
+    closesocket(transport->socket_fd);
+    transport->socket_fd = INVALID_SOCKET;
+    if (az_result_failed(_tcp_connect_next(transport)))
     {
       break;
     }
-    closesocket(fd);
-    fd = INVALID_SOCKET;
   }
-  freeaddrinfo(res);
-
-  if (fd == INVALID_SOCKET)
-  {
-    return AZ_MQTT_ERROR_TRANSPORT;
-  }
-
-  transport->socket_fd = fd;
-  return AZ_OK;
+  return AZ_MQTT_ERROR_TRANSPORT;
 }
 
 static az_result _socket_wait_readable(SOCKET fd, int32_t timeout_ms, bool* out_ready)
@@ -361,20 +497,17 @@ static az_result _build_custom_root_store(
   return AZ_OK;
 }
 
+/** @brief Check @p server_cert chains to @p custom_root (NULL: system store) and names @p host. */
 static az_result _validate_server_certificate(
-    az_span host,
-    az_mqtt_tls_options const* tls_options,
+    char const* host,
+    HCERTSTORE custom_root,
     PCCERT_CONTEXT server_cert)
 {
   wchar_t host_w[256];
-  az_result rc = _host_to_wstr(host, host_w, (int32_t)sizeof(host_w) / (int32_t)sizeof(host_w[0]));
-  if (az_result_failed(rc))
-  {
-    return rc;
-  }
-
-  HCERTSTORE custom_root = NULL;
-  rc = _build_custom_root_store(tls_options, &custom_root);
+  az_result rc = _host_to_wstr(
+      az_span_create_from_str((char*)(uintptr_t)host),
+      host_w,
+      (int32_t)sizeof(host_w) / (int32_t)sizeof(host_w[0]));
   if (az_result_failed(rc))
   {
     return rc;
@@ -390,7 +523,6 @@ static az_result _validate_server_certificate(
 
     if (!CertCreateCertificateChainEngine(&cfg, &chain_engine))
     {
-      CertCloseStore(custom_root, 0);
       return AZ_MQTT_ERROR_TRANSPORT;
     }
   }
@@ -415,10 +547,6 @@ static az_result _validate_server_certificate(
     if (chain_engine != NULL)
     {
       CertFreeCertificateChainEngine(chain_engine);
-    }
-    if (custom_root != NULL)
-    {
-      CertCloseStore(custom_root, 0);
     }
     return AZ_MQTT_ERROR_TRANSPORT;
   }
@@ -446,10 +574,6 @@ static az_result _validate_server_certificate(
   {
     CertFreeCertificateChainEngine(chain_engine);
   }
-  if (custom_root != NULL)
-  {
-    CertCloseStore(custom_root, 0);
-  }
 
   if (!policy_ok || policy_status.dwError != 0)
   {
@@ -459,13 +583,27 @@ static az_result _validate_server_certificate(
   return AZ_OK;
 }
 
-static az_result _schannel_setup(
+/** @brief Acquire credentials and keep what the handshake needs; reads @p tls_options only here. */
+static az_result _schannel_prepare(
     az_mqtt_transport* transport,
     az_span host,
     az_mqtt_tls_options const* tls_options)
 {
   _reset_security_handle(&transport->cred_handle);
   _reset_security_handle(&transport->context_handle);
+  transport->encrypted_in_len = 0;
+  transport->handshake_needs_read = false;
+
+  az_result rc = _span_to_cstr(host, transport->host, (int32_t)sizeof(transport->host));
+  if (az_result_failed(rc))
+  {
+    return rc;
+  }
+  rc = _build_custom_root_store(tls_options, &transport->custom_root);
+  if (az_result_failed(rc))
+  {
+    return rc;
+  }
 
   SCHANNEL_CRED cred;
   memset(&cred, 0, sizeof(cred));
@@ -488,22 +626,55 @@ static az_result _schannel_setup(
     return AZ_MQTT_ERROR_TRANSPORT;
   }
   transport->has_cred = true;
+  transport->tls_requested = true;
+  return AZ_OK;
+}
 
-  char host_str[256];
-  az_result rc = _span_to_cstr(host, host_str, (int32_t)sizeof(host_str));
-  if (az_result_failed(rc))
-  {
-    return rc;
-  }
-
-  DWORD req_flags = ISC_REQ_SEQUENCE_DETECT | ISC_REQ_REPLAY_DETECT | ISC_REQ_CONFIDENTIALITY
+/**
+ * @brief Progress the TLS handshake until done, failed or @p deadline_ms.
+ *
+ * Resumable: a wait for server data that reaches the deadline returns
+ * AZ_MQTT_ERROR_TIMEOUT and the next call continues from there.
+ */
+static az_result _schannel_handshake(az_mqtt_transport* transport, int64_t deadline_ms)
+{
+  DWORD const req_flags = ISC_REQ_SEQUENCE_DETECT | ISC_REQ_REPLAY_DETECT | ISC_REQ_CONFIDENTIALITY
       | ISC_REQ_EXTENDED_ERROR | ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_STREAM;
   DWORD out_flags = 0;
-
-  transport->encrypted_in_len = 0;
+  TimeStamp expiry;
+  az_result rc;
 
   for (;;)
   {
+    if (transport->handshake_needs_read)
+    {
+      if (transport->encrypted_in_len == (int32_t)sizeof(transport->encrypted_in))
+      {
+        return AZ_MQTT_ERROR_TRANSPORT;
+      }
+      bool ready = false;
+      rc = _socket_wait_readable(transport->socket_fd, _remaining(deadline_ms), &ready);
+      if (az_result_failed(rc))
+      {
+        return rc;
+      }
+      if (!ready)
+      {
+        return AZ_MQTT_ERROR_TIMEOUT;
+      }
+      int const n = recv(
+          transport->socket_fd,
+          (char*)transport->encrypted_in + transport->encrypted_in_len,
+          (int)sizeof(transport->encrypted_in) - transport->encrypted_in_len,
+          0);
+      if (n <= 0)
+      {
+        return AZ_MQTT_ERROR_TRANSPORT; // Error or closed mid-handshake.
+      }
+      transport->encrypted_in_len += n;
+      transport->handshake_needs_read = false;
+    }
+
     SecBuffer out_buf;
     SecBufferDesc out_desc;
     memset(&out_buf, 0, sizeof(out_buf));
@@ -522,7 +693,7 @@ static az_result _schannel_setup(
       status = InitializeSecurityContextA(
           &transport->cred_handle,
           NULL,
-          host_str,
+          transport->host,
           req_flags,
           0,
           SECURITY_NATIVE_DREP,
@@ -550,7 +721,7 @@ static az_result _schannel_setup(
       status = InitializeSecurityContextA(
           &transport->cred_handle,
           &transport->context_handle,
-          host_str,
+          transport->host,
           req_flags,
           0,
           SECURITY_NATIVE_DREP,
@@ -579,23 +750,7 @@ static az_result _schannel_setup(
 
       if (status == SEC_E_INCOMPLETE_MESSAGE)
       {
-        if (transport->encrypted_in_len == (int32_t)sizeof(transport->encrypted_in))
-        {
-          return AZ_MQTT_ERROR_TRANSPORT;
-        }
-
-        int32_t n = 0;
-        rc = _socket_recv_timeout(
-            transport->socket_fd,
-            transport->encrypted_in + transport->encrypted_in_len,
-            (int32_t)sizeof(transport->encrypted_in) - transport->encrypted_in_len,
-            -1,
-            &n);
-        if (az_result_failed(rc) || n <= 0)
-        {
-          return AZ_MQTT_ERROR_TRANSPORT;
-        }
-        transport->encrypted_in_len += n;
+        transport->handshake_needs_read = true;
         continue;
       }
     }
@@ -620,30 +775,14 @@ static az_result _schannel_setup(
     {
       break;
     }
-
     if (status != SEC_I_CONTINUE_NEEDED)
     {
       return AZ_MQTT_ERROR_TRANSPORT;
     }
-
-    if (transport->encrypted_in_len == 0)
-    {
-      int32_t n = 0;
-      rc = _socket_recv_timeout(
-          transport->socket_fd,
-          transport->encrypted_in,
-          (int32_t)sizeof(transport->encrypted_in),
-          -1,
-          &n);
-      if (az_result_failed(rc) || n <= 0)
-      {
-        return AZ_MQTT_ERROR_TRANSPORT;
-      }
-      transport->encrypted_in_len = n;
-    }
+    transport->handshake_needs_read = transport->encrypted_in_len == 0;
   }
 
-  sec = QueryContextAttributesA(
+  SECURITY_STATUS sec = QueryContextAttributesA(
       &transport->context_handle,
       SECPKG_ATTR_STREAM_SIZES,
       &transport->stream_sizes);
@@ -661,7 +800,7 @@ static az_result _schannel_setup(
   {
     return AZ_MQTT_ERROR_TRANSPORT;
   }
-  rc = _validate_server_certificate(host, tls_options, server_cert);
+  rc = _validate_server_certificate(transport->host, transport->custom_root, server_cert);
   CertFreeCertificateContext(server_cert);
   if (az_result_failed(rc))
   {
@@ -671,7 +810,6 @@ static az_result _schannel_setup(
   transport->tls_active = true;
   transport->decrypted_pending_len = 0;
   transport->decrypted_pending_pos = 0;
-
   return AZ_OK;
 }
 
@@ -914,7 +1052,15 @@ static void _schannel_shutdown(az_mqtt_transport* transport)
     transport->remote_server_cert = NULL;
   }
 
+  if (transport->custom_root != NULL)
+  {
+    CertCloseStore(transport->custom_root, 0);
+    transport->custom_root = NULL;
+  }
+
   transport->tls_active = false;
+  transport->tls_requested = false;
+  transport->handshake_needs_read = false;
   transport->has_context = false;
   transport->has_cred = false;
   transport->encrypted_in_len = 0;
@@ -923,7 +1069,9 @@ static void _schannel_shutdown(az_mqtt_transport* transport)
 }
 #endif // AZ_MQTT_TLS_SCHANNEL
 
-AZ_NODISCARD az_result az_mqtt_transport_connect(
+AZ_NODISCARD int64_t az_mqtt_transport_clock_ms(void) { return _now_ms(); }
+
+AZ_NODISCARD az_result az_mqtt_transport_connect_start(
     az_mqtt_transport* transport,
     az_span host,
     uint16_t port,
@@ -931,13 +1079,15 @@ AZ_NODISCARD az_result az_mqtt_transport_connect(
 {
   _az_PRECONDITION_NOT_NULL(transport);
 
+  az_mqtt_transport_close(transport);
+
 #ifdef AZ_MQTT_TLS_SCHANNEL
   if (tls_options != NULL)
   {
-    az_result const check = az_mqtt_tls_options_check(tls_options);
-    if (az_result_failed(check))
+    az_result rc = az_mqtt_tls_options_check(tls_options);
+    if (az_result_failed(rc))
     {
-      return check; // Same contract as the other backends.
+      return rc; // Same contract as the other backends.
     }
     // Not implemented for Schannel yet: refuse rather than connect without
     // the identity, trust or hook the caller asked for.
@@ -946,6 +1096,12 @@ AZ_NODISCARD az_result az_mqtt_transport_connect(
         || az_span_size(tls_options->ca_cert_pem) > 0 || tls_options->configure != NULL)
     {
       return AZ_MQTT_ERROR_NOT_SUPPORTED;
+    }
+    rc = _schannel_prepare(transport, host, tls_options);
+    if (az_result_failed(rc))
+    {
+      az_mqtt_transport_close(transport);
+      return rc;
     }
   }
 #else
@@ -956,50 +1112,86 @@ AZ_NODISCARD az_result az_mqtt_transport_connect(
   }
 #endif
 
-  az_result rc = _tcp_connect(transport, host, port);
+  az_result rc = _tcp_connect_start(transport, host, port);
   if (az_result_failed(rc))
   {
+    az_mqtt_transport_close(transport);
     return rc;
   }
-
-#ifdef AZ_MQTT_TLS_SCHANNEL
-  if (tls_options != NULL)
-  {
-    rc = _schannel_setup(transport, host, tls_options);
-    if (az_result_failed(rc))
-    {
-      _schannel_shutdown(transport);
-      closesocket(transport->socket_fd);
-      transport->socket_fd = INVALID_SOCKET;
-      return rc;
-    }
-  }
-#else
-  (void)host;
-#endif
-
-  transport->connected = true;
+  transport->state = _WIN_TCP;
   return AZ_OK;
-}
-
-AZ_NODISCARD int64_t az_mqtt_transport_clock_ms(void) { return (int64_t)GetTickCount64(); }
-
-AZ_NODISCARD az_result az_mqtt_transport_connect_start(
-    az_mqtt_transport* transport,
-    az_span host,
-    uint16_t port,
-    az_mqtt_tls_options const* tls_options)
-{
-  // Schannel connects synchronously; az_mqtt_transport_connect_poll() only reports the result.
-  return az_mqtt_transport_connect(transport, host, port, tls_options);
 }
 
 AZ_NODISCARD az_result
 az_mqtt_transport_connect_poll(az_mqtt_transport* transport, int32_t timeout_ms)
 {
   _az_PRECONDITION_NOT_NULL(transport);
-  (void)timeout_ms;
-  return transport->connected ? AZ_OK : AZ_MQTT_ERROR_TRANSPORT;
+  int64_t const deadline = _deadline(timeout_ms);
+  az_result rc = AZ_OK;
+
+  if (transport->state == _WIN_TCP)
+  {
+    rc = _tcp_connect_poll(transport, deadline);
+    if (rc == AZ_MQTT_ERROR_TIMEOUT)
+    {
+      return rc;
+    }
+    if (az_result_succeeded(rc))
+    {
+      transport->state = _WIN_CONNECTED;
+#ifdef AZ_MQTT_TLS_SCHANNEL
+      if (transport->tls_requested)
+      {
+        transport->state = _WIN_TLS;
+      }
+#endif
+    }
+  }
+
+#ifdef AZ_MQTT_TLS_SCHANNEL
+  if (az_result_succeeded(rc) && transport->state == _WIN_TLS)
+  {
+    rc = _schannel_handshake(transport, deadline);
+    if (rc == AZ_MQTT_ERROR_TIMEOUT)
+    {
+      return rc;
+    }
+    if (az_result_succeeded(rc))
+    {
+      transport->state = _WIN_CONNECTED;
+    }
+  }
+#endif
+
+  if (az_result_succeeded(rc) && transport->state != _WIN_CONNECTED)
+  {
+    rc = AZ_MQTT_ERROR_INVALID_STATE;
+  }
+  if (az_result_failed(rc))
+  {
+    az_mqtt_transport_close(transport);
+    return rc;
+  }
+  transport->connected = true;
+  return AZ_OK;
+}
+
+AZ_NODISCARD az_result az_mqtt_transport_connect(
+    az_mqtt_transport* transport,
+    az_span host,
+    uint16_t port,
+    az_mqtt_tls_options const* tls_options)
+{
+  az_result rc = az_mqtt_transport_connect_start(transport, host, port, tls_options);
+  if (az_result_succeeded(rc))
+  {
+    rc = az_mqtt_transport_connect_poll(transport, AZ_MQTT_TRANSPORT_CONNECT_TIMEOUT_MS);
+    if (rc == AZ_MQTT_ERROR_TIMEOUT)
+    {
+      az_mqtt_transport_close(transport);
+    }
+  }
+  return rc;
 }
 
 AZ_NODISCARD az_result az_mqtt_transport_send(az_mqtt_transport* transport, az_span data)
@@ -1071,6 +1263,8 @@ void az_mqtt_transport_close(az_mqtt_transport* transport)
     closesocket(transport->socket_fd);
     transport->socket_fd = INVALID_SOCKET;
   }
+  _release_addresses(transport);
 
+  transport->state = _WIN_IDLE;
   transport->connected = false;
 }

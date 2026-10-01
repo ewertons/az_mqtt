@@ -183,22 +183,51 @@ AZ_NODISCARD az_result az_mqtt5_client_init(az_mqtt5_client* client, az_mqtt5_cl
  * @brief Connect to the broker (TCP + optional TLS + MQTT CONNECT).
  *
  * Blocks until the CONNACK arrives; @p timeout_ms bounds the whole sequence
- * (AZ_MQTT_ERROR_TIMEOUT). A refused CONNACK returns AZ_MQTT_ERROR_NOT_CONNECTED
- * after on_connack reports its reason code.
+ * (AZ_MQTT_ERROR_TIMEOUT; -1: no bound). A refused CONNACK returns
+ * AZ_MQTT_ERROR_NOT_CONNECTED after on_connack reports its reason code.
+ * Equivalent to az_mqtt5_client_connect_start() followed by
+ * az_mqtt5_client_process_loop() until the state leaves CONNECTING.
+ *
+ * @retval AZ_MQTT_ERROR_INVALID_STATE Not DISCONNECTED.
  */
 AZ_NODISCARD az_result az_mqtt5_client_connect(az_mqtt5_client* client, int32_t timeout_ms);
+
+/**
+ * @brief Start connecting without waiting.
+ *
+ * Returns once the TCP connect has started; only name resolution may block
+ * (see az_mqtt_transport_connect_start()). az_mqtt5_client_process_loop() then
+ * completes the TCP/TLS connect, sends CONNECT and handles the CONNACK, each call
+ * waiting for the peer no longer than its own timeout. Sending CONNECT, like
+ * every send, is bounded by AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS instead; it waits
+ * only if CONNECT exceeds the socket send buffer. The state is CONNECTING until
+ * an accepted CONNACK makes it CONNECTED (on_connack runs first).
+ *
+ * @p timeout_ms bounds the whole sequence (-1: no bound). If it expires, the
+ * CONNACK refuses, or anything fails, the session ends: process_loop returns the
+ * result (AZ_MQTT_ERROR_TIMEOUT, AZ_MQTT_ERROR_NOT_CONNECTED, ...) and
+ * on_connection_closed reports it. az_mqtt5_client_disconnect() cancels.
+ *
+ * @retval AZ_OK Started.
+ * @retval AZ_MQTT_ERROR_INVALID_STATE Not DISCONNECTED.
+ */
+AZ_NODISCARD az_result
+az_mqtt5_client_connect_start(az_mqtt5_client* client, int32_t timeout_ms);
 
 /**
  * @brief Run the I/O processing loop once.
  *
  * Handles every complete packet available (up to a bound), dispatches
- * callbacks, and sends PINGREQ when due. Returns early when keep-alive needs
+ * callbacks, and sends PINGREQ when due. While CONNECTING, also progresses the
+ * connect (see az_mqtt5_client_connect_start()). Returns early when keep-alive needs
  * attention, so a long @p timeout_ms never delays a PINGREQ.
  *
  * Any failure ends the session: the transport is closed, the state becomes
  * DISCONNECTED and on_connection_closed reports the same result.
  *
- * @param timeout_ms  Max time to wait for incoming data; -1 waits until keep-alive is due.
+ * @param timeout_ms  Max time to wait for incoming data (or connect progress);
+ *                    -1 waits until keep-alive is due. Sends are bounded by
+ *                    AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS, not by this.
  * @retval AZ_MQTT_ERROR_KEEP_ALIVE_TIMEOUT A PINGREQ got nothing back within the keep-alive.
  * @retval AZ_MQTT_ERROR_NOT_CONNECTED Called while disconnected.
  */

@@ -228,6 +228,63 @@ static void test_connect_failure(void** state)
 }
 
 /**
+ * @brief Test: connect_start, then process_loop until connected (plain TCP, every platform).
+ */
+static void test_started_connect(void** state)
+{
+  (void)state;
+  reset_callback_state();
+
+  AZ_MQTT_T(client) client;
+  az_result rc = init_client(&client, AZ_SPAN_FROM_STR("test-started-01"));
+  assert_int_equal(rc, AZ_OK);
+
+  rc = AZ_MQTT_T(client_connect_start)(&client, 5000);
+  assert_int_equal(rc, AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&client), AZ_MQTT_CLIENT_STATE_CONNECTING);
+  for (int i = 0; i < 500 && az_result_succeeded(rc)
+       && AZ_MQTT_T(client_get_state)(&client) == AZ_MQTT_CLIENT_STATE_CONNECTING;
+       i++)
+  {
+    rc = AZ_MQTT_T(client_process_loop)(&client, 10);
+  }
+  assert_int_equal(rc, AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+  assert_true(s_connack_received);
+  assert_int_equal(s_connack_reason, AZ_MQTT_TEST_CONNACK_ACCEPTED);
+
+  rc = AZ_MQTT_TEST_DISCONNECT(&client);
+  assert_int_equal(rc, AZ_OK);
+}
+
+/**
+ * @brief Test: a started connect to a closed port fails in process_loop and ends the session.
+ */
+static void test_started_connect_failure(void** state)
+{
+  (void)state;
+  reset_callback_state();
+
+  AZ_MQTT_T(client) client;
+  az_result rc = init_client(&client, AZ_SPAN_FROM_STR("test-started-02"));
+  assert_int_equal(rc, AZ_OK);
+  client._internal.core._internal.hostname = AZ_SPAN_FROM_STR("127.0.0.1");
+  client._internal.core._internal.port = 19999; // Nothing is listening here.
+
+  rc = AZ_MQTT_T(client_connect_start)(&client, 10000);
+  for (int i = 0; i < 2000 && az_result_succeeded(rc)
+       && AZ_MQTT_T(client_get_state)(&client) == AZ_MQTT_CLIENT_STATE_CONNECTING;
+       i++)
+  {
+    rc = AZ_MQTT_T(client_process_loop)(&client, 10);
+  }
+  assert_true(az_result_failed(rc));
+  assert_int_not_equal(rc, AZ_MQTT_ERROR_TIMEOUT); // Refused, not timed out.
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&client), AZ_MQTT_CLIENT_STATE_DISCONNECTED);
+  assert_false(s_connack_received);
+}
+
+/**
  * @brief Test: process_loop on a disconnected client returns NOT_CONNECTED.
  */
 static void test_process_loop_while_disconnected(void** state)
@@ -253,6 +310,8 @@ int main(void)
     cmocka_unit_test(test_reconnect_with_session),
     cmocka_unit_test(test_connect_failure),
     cmocka_unit_test(test_process_loop_while_disconnected),
+    cmocka_unit_test(test_started_connect),
+    cmocka_unit_test(test_started_connect_failure),
   };
 
   return cmocka_run_group_tests(tests, NULL, NULL);

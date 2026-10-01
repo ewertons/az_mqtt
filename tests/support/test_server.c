@@ -523,6 +523,10 @@ static void* _run(void* arg)
     {
       struct timeval tv = { 5, 0 };
       setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+      if (s->options.handshake_delay_ms > 0)
+      {
+        usleep((useconds_t)s->options.handshake_delay_ms * 1000);
+      }
       c.ssl = SSL_new(s->ctx);
       if (c.ssl != NULL && SSL_set_fd(c.ssl, fd) == 1 && SSL_accept(c.ssl) == 1)
       {
