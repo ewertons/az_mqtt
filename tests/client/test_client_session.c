@@ -160,7 +160,7 @@ static void _sleep_ms(int ms)
   nanosleep(&ts, NULL);
 }
 
-/** @brief In-flight slots the next _setup() gives the client (at most 8). */
+/** @brief In-flight entries the next _setup() gives the client (at most 8); then back to 4. */
 static int s_inflight_slots = 4;
 
 static void _setup(fixture* f, test_server_options const* so, uint16_t keep_alive_s)
@@ -198,6 +198,7 @@ static void _setup(fixture* f, test_server_options const* so, uint16_t keep_aliv
   o.inflight_control_buffer = az_span_create(
       (uint8_t*)f->inflight_control_buffer,
       s_inflight_slots * (int32_t)sizeof(az_mqtt_inflight_entry));
+  s_inflight_slots = 4; // Reset here: a failed test skips _teardown().
   o.on_connection_closed = _on_closed;
 #if AZ_MQTT_TEST_VERSION == 5
   o.on_disconnect = _on_disconnect;
@@ -214,7 +215,6 @@ static void _setup(fixture* f, test_server_options const* so, uint16_t keep_aliv
 
 static void _teardown(fixture* f)
 {
-  s_inflight_slots = 4;
   _ignore(AZ_MQTT_TEST_DISCONNECT(&f->client));
   free(f->transport);
   test_server_stop(f->server);
@@ -651,6 +651,7 @@ static void inbound_qos2_duplicates_are_delivered_once(void** state)
   assert_int_equal(test_server_pubcomps(f.server), 2);
   assert_int_equal(g.publishes, 2);
   assert_int_equal(g.pubcomps, 2); // Inbound exchanges completed.
+  assert_int_equal(test_server_last_pubcomp_reason(f.server), 0);
   _teardown(&f);
 }
 
@@ -667,6 +668,9 @@ static void inbound_qos2_without_a_free_slot_is_still_delivered(void** state)
   assert_int_equal(test_server_pubcomps(f.server), 2); // Every PUBREL still answered.
   assert_int_equal(g.publishes, 3);                    // No duplicate detection.
   assert_int_equal(g.pubcomps, 0);                     // Untracked: not reported.
+#if AZ_MQTT_TEST_VERSION == 5
+  assert_int_equal(test_server_last_pubcomp_reason(f.server), 0x92); // Packet Identifier not found
+#endif
   _teardown(&f);
 }
 
@@ -683,6 +687,7 @@ static void unknown_acknowledgements_are_ignored(void** state)
   assert_int_equal(test_server_pubcomps(f.server), 1); // and the PUBREL.
 #if AZ_MQTT_TEST_VERSION == 5
   assert_int_equal(test_server_last_pubrel_reason(f.server), 0x92); // Packet Identifier not found
+  assert_int_equal(test_server_last_pubcomp_reason(f.server), 0x92);
 #endif
   assert_int_equal(g.pubacks, 0);
   assert_int_equal(g.pubcomps, 0);

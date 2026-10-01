@@ -129,8 +129,9 @@ int test_server_publishes(test_server* server);
 int test_server_pubrels(test_server* server);
 int test_server_last_pubrel_reason(test_server* server);
 
-/** @brief PUBCOMP packets received. */
+/** @brief PUBCOMP packets received, and the reason code of the last (0 if absent). */
 int test_server_pubcomps(test_server* server);
+int test_server_last_pubcomp_reason(test_server* server);
 
 /** @brief Whether the client closed the last connection (orderly or not). */
 bool test_server_client_closed(test_server* server);
