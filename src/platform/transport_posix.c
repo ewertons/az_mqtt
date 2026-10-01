@@ -178,6 +178,16 @@ static az_result _check_tls_options(az_mqtt_tls_options const* tls_options)
   return rc;
 }
 
+/** @brief Drop the end-of-input error PEM_read_bio_X509() leaves after the last certificate. */
+static void _clear_pem_end(void)
+{
+  unsigned long const e = ERR_peek_last_error();
+  if (ERR_GET_LIB(e) == ERR_LIB_PEM && ERR_GET_REASON(e) == PEM_R_NO_START_LINE)
+  {
+    ERR_clear_error();
+  }
+}
+
 /** @brief A read-only memory BIO over @p pem. */
 static BIO* _pem_bio(az_span pem)
 {
@@ -196,7 +206,10 @@ static az_result _load_ca_pem(SSL_CTX* ctx, az_span pem)
     added += X509_STORE_add_cert(store, cert) == 1;
     X509_free(cert);
   }
-  ERR_clear_error(); // End of input is reported as an error.
+  if (added > 0)
+  {
+    _clear_pem_end(); // Otherwise kept: why nothing was added.
+  }
   BIO_free(bio);
   return added > 0 ? AZ_OK : AZ_MQTT_ERROR_TRANSPORT;
 }
@@ -217,7 +230,10 @@ static az_result _load_cert_pem(SSL_CTX* ctx, az_span pem)
       X509_free(extra);
     }
   }
-  ERR_clear_error();
+  if (ok)
+  {
+    _clear_pem_end();
+  }
   BIO_free(bio);
   return ok ? AZ_OK : AZ_MQTT_ERROR_TRANSPORT;
 }
@@ -419,6 +435,11 @@ static az_result _tls_failure(
   {
     az_result const rc = _az_mqtt_socket_error(
         ssl_error == SSL_ERROR_SYSCALL ? saved_errno : 0, &transport->last_error);
+    if (library_error != 0) // Closed without close_notify: keep OpenSSL's diagnostic.
+    {
+      transport->last_error.source = AZ_MQTT_NATIVE_ERROR_TLS;
+      transport->last_error.code = (int32_t)library_error;
+    }
     return rc == AZ_MQTT_ERROR_TRANSPORT ? rc : AZ_MQTT_ERROR_CONNECTION_CLOSED;
   }
   if (library_error != 0)

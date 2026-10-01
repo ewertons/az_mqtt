@@ -257,39 +257,49 @@ static int _parse_key(void* transport_ptr, unsigned char const* buf, size_t len)
 /**
  * @brief Build the TLS configuration and session for @p host; the socket is attached later.
  */
+/** @brief Record @p ret (an mbedTLS or PSA error) as the native error; AZ_MQTT_ERROR_TRANSPORT. */
+static az_result _tls_setup_failure(az_mqtt_transport* transport, int ret)
+{
+  transport->last_error.source = AZ_MQTT_NATIVE_ERROR_TLS;
+  transport->last_error.code = ret;
+  return AZ_MQTT_ERROR_TRANSPORT;
+}
+
 static az_result _tls_prepare(
     az_mqtt_transport* transport,
     az_span host,
     az_mqtt_tls_options const* tls_options)
 {
+  int ret = 0;
 #if defined(MBEDTLS_PSA_CRYPTO_C) || MBEDTLS_VERSION_MAJOR >= 4
   // Required by mbedTLS 4 and by 3.x TLS 1.3; idempotent.
-  if (psa_crypto_init() != PSA_SUCCESS)
+  psa_status_t const status = psa_crypto_init();
+  if (status != PSA_SUCCESS)
   {
-    return AZ_MQTT_ERROR_TRANSPORT;
+    return _tls_setup_failure(transport, (int)status);
   }
 #endif
 #if _AZ_MQTT_MBEDTLS_LEGACY_RNG
   static const char pers[] = "az_mqtt_mbedtls";
-  if (mbedtls_ctr_drbg_seed(
-          &transport->ctr_drbg,
-          mbedtls_entropy_func,
-          &transport->entropy,
-          (const unsigned char*)pers,
-          sizeof(pers) - 1)
-      != 0)
+  ret = mbedtls_ctr_drbg_seed(
+      &transport->ctr_drbg,
+      mbedtls_entropy_func,
+      &transport->entropy,
+      (const unsigned char*)pers,
+      sizeof(pers) - 1);
+  if (ret != 0)
   {
-    return AZ_MQTT_ERROR_TRANSPORT;
+    return _tls_setup_failure(transport, ret);
   }
 #endif
-  if (mbedtls_ssl_config_defaults(
-          &transport->conf,
-          MBEDTLS_SSL_IS_CLIENT,
-          MBEDTLS_SSL_TRANSPORT_STREAM,
-          MBEDTLS_SSL_PRESET_DEFAULT)
-      != 0)
+  ret = mbedtls_ssl_config_defaults(
+      &transport->conf,
+      MBEDTLS_SSL_IS_CLIENT,
+      MBEDTLS_SSL_TRANSPORT_STREAM,
+      MBEDTLS_SSL_PRESET_DEFAULT);
+  if (ret != 0)
   {
-    return AZ_MQTT_ERROR_TRANSPORT;
+    return _tls_setup_failure(transport, ret);
   }
 #if _AZ_MQTT_MBEDTLS_LEGACY_RNG
   mbedtls_ssl_conf_rng(&transport->conf, mbedtls_ctr_drbg_random, &transport->ctr_drbg);
@@ -297,7 +307,6 @@ static az_result _tls_prepare(
 
   char path[256];
   az_result rc = AZ_OK;
-  int ret = 0;
   if (az_span_size(tls_options->ca_cert_path) > 0)
   {
     rc = _span_to_cstr(tls_options->ca_cert_path, path, (int32_t)sizeof(path));
@@ -309,7 +318,7 @@ static az_result _tls_prepare(
   }
   if (az_result_failed(rc) || ret != 0)
   {
-    return az_result_failed(rc) ? rc : AZ_MQTT_ERROR_TRANSPORT;
+    return az_result_failed(rc) ? rc : _tls_setup_failure(transport, ret);
   }
   if (az_span_size(tls_options->ca_cert_path) > 0 || az_span_size(tls_options->ca_cert_pem) > 0)
   {
@@ -369,7 +378,7 @@ static az_result _tls_prepare(
   }
   if (az_result_failed(rc) || ret != 0)
   {
-    return az_result_failed(rc) ? rc : AZ_MQTT_ERROR_TRANSPORT;
+    return az_result_failed(rc) ? rc : _tls_setup_failure(transport, ret);
   }
 
   if (tls_options->configure != NULL)
@@ -383,9 +392,10 @@ static az_result _tls_prepare(
     mbedtls_ssl_conf_authmode(&transport->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
   }
 
-  if (mbedtls_ssl_setup(&transport->ssl, &transport->conf) != 0)
+  ret = mbedtls_ssl_setup(&transport->ssl, &transport->conf);
+  if (ret != 0)
   {
-    return AZ_MQTT_ERROR_TRANSPORT;
+    return _tls_setup_failure(transport, ret);
   }
 
   // Sets both SNI and the name the certificate is verified against.
@@ -395,9 +405,10 @@ static az_result _tls_prepare(
   {
     return rc;
   }
-  if (mbedtls_ssl_set_hostname(&transport->ssl, host_str) != 0)
+  ret = mbedtls_ssl_set_hostname(&transport->ssl, host_str);
+  if (ret != 0)
   {
-    return AZ_MQTT_ERROR_TRANSPORT;
+    return _tls_setup_failure(transport, ret);
   }
   transport->use_tls = true;
   return AZ_OK;

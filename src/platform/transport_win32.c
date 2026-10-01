@@ -423,11 +423,20 @@ static az_result _host_to_wstr(az_span host, wchar_t* out_host, int32_t out_host
   return AZ_OK;
 }
 
+/** @brief Record @p err (a Win32 error or SECURITY_STATUS) as a TLS native error; AZ_MQTT_ERROR_TRANSPORT. */
+static az_result _tls_setup_failure(az_mqtt_native_error* out_error, DWORD err)
+{
+  out_error->source = AZ_MQTT_NATIVE_ERROR_TLS;
+  out_error->code = (int32_t)err;
+  return AZ_MQTT_ERROR_TRANSPORT;
+}
+
 static az_result _decode_cert_file_to_der(
     az_mqtt_tls_options const* tls_options,
     uint8_t* der_out,
     DWORD der_capacity,
-    DWORD* out_der_len)
+    DWORD* out_der_len,
+    az_mqtt_native_error* out_error)
 {
   char cert_path[260];
   az_result rc = _span_to_cstr(tls_options->ca_cert_path, cert_path, (int32_t)sizeof(cert_path));
@@ -439,24 +448,26 @@ static az_result _decode_cert_file_to_der(
   HANDLE h = CreateFileA(cert_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
   if (h == INVALID_HANDLE_VALUE)
   {
-    return AZ_MQTT_ERROR_TRANSPORT;
+    return _tls_setup_failure(out_error, GetLastError());
   }
 
   LARGE_INTEGER file_size;
   if (!GetFileSizeEx(h, &file_size) || file_size.QuadPart <= 0 || file_size.QuadPart > 64 * 1024)
   {
+    DWORD const err = GetLastError();
     CloseHandle(h);
-    return AZ_MQTT_ERROR_TRANSPORT;
+    return _tls_setup_failure(out_error, err != 0 ? err : ERROR_INVALID_DATA);
   }
 
   uint32_t file_len = (uint32_t)file_size.QuadPart;
   char file_buf[(64 * 1024) + 1];
   DWORD read_bytes = 0;
   BOOL ok = ReadFile(h, file_buf, file_len, &read_bytes, NULL);
+  DWORD const read_error = ok ? ERROR_HANDLE_EOF : GetLastError(); // Short read: EOF.
   CloseHandle(h);
   if (!ok || read_bytes != file_len)
   {
-    return AZ_MQTT_ERROR_TRANSPORT;
+    return _tls_setup_failure(out_error, read_error);
   }
 
   file_buf[file_len] = '\0';
@@ -466,7 +477,7 @@ static az_result _decode_cert_file_to_der(
     DWORD decoded_len = 0;
     if (!CryptStringToBinaryA(file_buf, file_len, CRYPT_STRING_BASE64HEADER, NULL, &decoded_len, NULL, NULL))
     {
-      return AZ_MQTT_ERROR_TRANSPORT;
+      return _tls_setup_failure(out_error, GetLastError());
     }
 
     if (decoded_len > der_capacity)
@@ -483,7 +494,7 @@ static az_result _decode_cert_file_to_der(
             NULL,
             NULL))
     {
-      return AZ_MQTT_ERROR_TRANSPORT;
+      return _tls_setup_failure(out_error, GetLastError());
     }
 
     *out_der_len = decoded_len;
@@ -502,7 +513,8 @@ static az_result _decode_cert_file_to_der(
 
 static az_result _build_custom_root_store(
     az_mqtt_tls_options const* tls_options,
-    HCERTSTORE* out_store)
+    HCERTSTORE* out_store,
+    az_mqtt_native_error* out_error)
 {
   *out_store = NULL;
 
@@ -513,7 +525,8 @@ static az_result _build_custom_root_store(
 
   uint8_t der_buf[64 * 1024];
   DWORD der_len = 0;
-  az_result rc = _decode_cert_file_to_der(tls_options, der_buf, (DWORD)sizeof(der_buf), &der_len);
+  az_result rc
+      = _decode_cert_file_to_der(tls_options, der_buf, (DWORD)sizeof(der_buf), &der_len, out_error);
   if (az_result_failed(rc))
   {
     return rc;
@@ -522,7 +535,7 @@ static az_result _build_custom_root_store(
   HCERTSTORE store = CertOpenStore(CERT_STORE_PROV_MEMORY, X509_ASN_ENCODING, 0, CERT_STORE_CREATE_NEW_FLAG, NULL);
   if (store == NULL)
   {
-    return AZ_MQTT_ERROR_TRANSPORT;
+    return _tls_setup_failure(out_error, GetLastError());
   }
 
   if (!CertAddEncodedCertificateToStore(
@@ -533,8 +546,9 @@ static az_result _build_custom_root_store(
           CERT_STORE_ADD_REPLACE_EXISTING,
           NULL))
   {
+    DWORD const err = GetLastError();
     CertCloseStore(store, 0);
-    return AZ_MQTT_ERROR_TRANSPORT;
+    return _tls_setup_failure(out_error, err);
   }
 
   *out_store = store;
@@ -615,6 +629,7 @@ static az_result _validate_server_certificate(
 
   BOOL policy_ok = CertVerifyCertificateChainPolicy(
       CERT_CHAIN_POLICY_SSL, chain_ctx, &policy_para, &policy_status);
+  DWORD const policy_error = policy_ok ? policy_status.dwError : GetLastError(); // Before cleanup.
 
   CertFreeCertificateChain(chain_ctx);
   if (chain_engine != NULL)
@@ -625,7 +640,7 @@ static az_result _validate_server_certificate(
   if (!policy_ok || policy_status.dwError != 0)
   {
     out_error->source = AZ_MQTT_NATIVE_ERROR_TLS_VERIFY;
-    out_error->code = (int32_t)(policy_ok ? policy_status.dwError : GetLastError());
+    out_error->code = (int32_t)policy_error;
     return AZ_MQTT_ERROR_TLS_VERIFY;
   }
 
@@ -648,7 +663,7 @@ static az_result _schannel_prepare(
   {
     return rc;
   }
-  rc = _build_custom_root_store(tls_options, &transport->custom_root);
+  rc = _build_custom_root_store(tls_options, &transport->custom_root, &transport->last_error);
   if (az_result_failed(rc))
   {
     return rc;
@@ -672,7 +687,7 @@ static az_result _schannel_prepare(
       &expiry);
   if (sec != SEC_E_OK)
   {
-    return AZ_MQTT_ERROR_TRANSPORT;
+    return _tls_setup_failure(&transport->last_error, (DWORD)sec);
   }
   transport->has_cred = true;
   transport->tls_requested = true;

@@ -127,6 +127,24 @@ static void ca_from_memory_is_trusted(void** state)
   _teardown(&f);
 }
 
+static void a_malformed_ca_from_memory_reports_the_tls_library_error(void** state)
+{
+  (void)state;
+  test_server_options o = test_server_options_default();
+  fixture f;
+  _setup(&f, &o);
+  char* body = strstr(f.ca, "\n") + 1; // Corrupt the base64 body.
+  body[0] = body[0] == '!' ? '?' : '!';
+  az_mqtt_tls_options t = az_mqtt_tls_options_default();
+  t.ca_cert_pem = _pem(f.ca);
+  assert_int_equal(_connect(&f, &t), AZ_MQTT_ERROR_TRANSPORT);
+  az_mqtt_native_error const native = az_mqtt_transport_get_last_native_error(f.transport);
+  assert_int_equal(native.source, AZ_MQTT_NATIVE_ERROR_TLS);
+  assert_int_not_equal(native.code, 0);
+  assert_int_equal(test_server_accepted(f.server), 0);
+  _teardown(&f);
+}
+
 static void untrusted_server_is_rejected_with_ca_from_memory(void** state)
 {
   (void)state;
@@ -386,6 +404,7 @@ int main(void)
 {
   const struct CMUnitTest tests[] = {
     cmocka_unit_test(ca_from_memory_is_trusted),
+    cmocka_unit_test(a_malformed_ca_from_memory_reports_the_tls_library_error),
     cmocka_unit_test(untrusted_server_is_rejected_with_ca_from_memory),
     cmocka_unit_test(client_identity_from_memory_is_presented),
     cmocka_unit_test(conflicting_sources_are_refused_before_connecting),

@@ -252,7 +252,10 @@ typedef enum
   AZ_MQTT_NATIVE_ERROR_SOCKET = 1,
   /** @brief getaddrinfo() result: EAI_* (POSIX) or WSA* (Windows). */
   AZ_MQTT_NATIVE_ERROR_NAME_RESOLUTION = 2,
-  /** @brief OpenSSL ERR_peek_last_error(), mbedTLS error code, or Schannel SECURITY_STATUS. */
+  /**
+   * @brief OpenSSL ERR_peek_last_error(), mbedTLS or PSA error code, or Schannel SECURITY_STATUS
+   * (Win32 error while loading a certificate file).
+   */
   AZ_MQTT_NATIVE_ERROR_TLS = 3,
   /**
    * @brief OpenSSL X509_V_ERR_*, mbedTLS verification flags (MBEDTLS_X509_BADCERT_*), or
