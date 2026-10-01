@@ -98,10 +98,46 @@ static void test_tls_connect_and_disconnect_win32(void** state)
   assert_int_equal(rc, AZ_OK);
 }
 
+/** @brief connect_start + process_loop: the Schannel handshake spans several calls. */
+static void test_tls_started_connect_win32(void** state)
+{
+  (void)state;
+  reset_state();
+
+  char const* run_tls = getenv("AZ_MQTT_RUN_TLS_E2E");
+  if (run_tls == NULL || strcmp(run_tls, "1") != 0 || !E2E_WIN32_TLS_BACKEND_AVAILABLE)
+  {
+    return; // Same opt-in as test_tls_connect_and_disconnect_win32.
+  }
+
+  AZ_MQTT_T(client) client;
+  az_result rc = init_tls_client(&client, AZ_SPAN_FROM_STR("test-tls-win32-02"));
+  assert_int_equal(rc, AZ_OK);
+
+  rc = AZ_MQTT_T(client_connect_start)(&client, 5000);
+  assert_int_equal(rc, AZ_OK);
+  int calls = 0;
+  while (az_result_succeeded(rc)
+         && AZ_MQTT_T(client_get_state)(&client) == AZ_MQTT_CLIENT_STATE_CONNECTING && calls < 500)
+  {
+    rc = AZ_MQTT_T(client_process_loop)(&client, 10);
+    calls++;
+  }
+  assert_int_equal(rc, AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+  assert_true(calls > 1);
+  assert_true(s_connack_received);
+  assert_int_equal(s_connack_reason, AZ_MQTT_TEST_CONNACK_ACCEPTED);
+
+  rc = AZ_MQTT_TEST_DISCONNECT(&client);
+  assert_int_equal(rc, AZ_OK);
+}
+
 int main(void)
 {
   const struct CMUnitTest tests[] = {
     cmocka_unit_test(test_tls_connect_and_disconnect_win32),
+    cmocka_unit_test(test_tls_started_connect_win32),
   };
 
   return cmocka_run_group_tests(tests, NULL, NULL);

@@ -135,10 +135,6 @@ AZ_NODISCARD AZ_INLINE az_result az_mqtt_tls_options_check(az_mqtt_tls_options c
 
 // ──────────────────────── Limits ─────────────────────────────
 
-// These bounds apply to the POSIX transports (OpenSSL, mbedTLS, no TLS). The
-// Windows (Schannel) transport still connects synchronously and is not bounded
-// by them.
-
 #ifndef AZ_MQTT_TRANSPORT_CONNECT_TIMEOUT_MS
 /** @brief Bound of az_mqtt_transport_connect() (TCP connect + TLS handshake). */
 #define AZ_MQTT_TRANSPORT_CONNECT_TIMEOUT_MS 30000
@@ -181,7 +177,7 @@ AZ_NODISCARD az_result az_mqtt_transport_init(az_mqtt_transport* transport);
  * @param port        Destination port (e.g. 1883 or 8883).
  * @param tls_options TLS settings. Pass NULL for plain TCP.
  *
- * Bounded by AZ_MQTT_TRANSPORT_CONNECT_TIMEOUT_MS (AZ_MQTT_ERROR_TIMEOUT) on POSIX.
+ * Bounded by AZ_MQTT_TRANSPORT_CONNECT_TIMEOUT_MS (AZ_MQTT_ERROR_TIMEOUT).
  *
  * @retval AZ_MQTT_ERROR_NOT_SUPPORTED TLS requested from a build without a TLS
  *         backend, or an option the backend cannot honour. Never downgrades.
@@ -197,9 +193,7 @@ AZ_NODISCARD az_result az_mqtt_transport_connect(
  * @brief Start a connect without waiting for it: resolves @p host and begins
  * the TCP connect. Drive it with az_mqtt_transport_connect_poll().
  *
- * Name resolution is the only step that may block. Windows (Schannel) completes
- * the whole connect here, synchronously and without the connect bound, and
- * az_mqtt_transport_connect_poll() returns at once.
+ * Name resolution is the only step that may block.
  *
  * @param tls_options Same as az_mqtt_transport_connect(); read only during this call.
  */
