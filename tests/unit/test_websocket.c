@@ -211,6 +211,10 @@ static void a_valid_reply_upgrades_in_any_number_of_pieces(void** state)
     // mosquitto's spelling; no protocol; LF line ends; other tokens; spaces around values.
     "HTTP/1.1 101 Switching Protocols\nupgrade:h2c, WebSocket\nCONNECTION: keep-alive ,  upgrade\n"
     "Server: x\nsec-websocket-accept:  \t" K_ACCEPT " \n\n",
+    // Repeated list headers combine; a long line's whole tokens count.
+    "HTTP/1.1 101 OK\r\nUpgrade: h2c\r\nUpgrade: websocket\r\nConnection: keep-alive\r\n"
+    "Connection: upgrade\r\nSec-WebSocket-Accept: " K_ACCEPT "\r\n"
+    "Connection: upgrade, a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w\r\n\r\n",
   };
   for (size_t r = 0; r < sizeof(replies) / sizeof(replies[0]); r++)
   {
@@ -283,10 +287,16 @@ static void invalid_replies_are_refused(void** state)
     { "HTTP/1.1 101 OK\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
       "Sec-WebSocket-Accept: " K_ACCEPT "\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n",
       101 },
-    // A header the handshake depends on, too long to check whole.
+    // The Accept line, too long to check whole.
     { "HTTP/1.1 101 OK\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-      "Sec-WebSocket-Accept: " K_ACCEPT "\r\nConnection: a, b, c, d, e, f, g, h, i, j, k, l, m, "
-      "n, o, p, q, r, s, t, u, v, w, x, y, z\r\n\r\n",
+      "Sec-WebSocket-Accept: " K_ACCEPT "                                                    x\r\n\r\n",
+      101 },
+    // The token only past where a long line is cut, or cut in it.
+    { "HTTP/1.1 101 OK\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: " K_ACCEPT "\r\n"
+      "Connection: a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, upgrade\r\n\r\n",
+      101 },
+    { "HTTP/1.1 101 OK\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " K_ACCEPT "\r\n"
+      "Upgrade: " "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, websocketx\r\n\r\n",
       101 },
     { "SSH-2.0-OpenSSH\r\n\r\n", 0 },
     { "HTTP/1.1 101 OK\r\nUpgrade: websocket\x01\r\n\r\n", 0 },
@@ -350,7 +360,7 @@ static void masking_continues_across_pieces(void** state)
 {
   (void)state;
   uint8_t const mask[4] = { 0xA1, 0xB2, 0xC3, 0xD4 };
-  uint8_t data[11] = "hello world";
+  uint8_t data[11] = { 'h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd' };
   uint8_t whole[11];
   memcpy(whole, data, sizeof(data));
   _az_mqtt_websocket_mask(whole, 11, mask, 0);

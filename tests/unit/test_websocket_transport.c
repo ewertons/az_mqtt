@@ -340,6 +340,54 @@ static void a_server_close_is_echoed_and_reported(void** state)
   assert_int_equal(f.fake.closes, 1);
 }
 
+static void _data_then_close(fixture* f)
+{
+  _feed_frame(f, 0x82, "ab", 2);
+  _feed_frame(f, 0x88, "\x03\xe8", 2);
+}
+
+static void _data_then_text_frame(fixture* f)
+{
+  _feed_frame(f, 0x82, "ab", 2);
+  _feed_frame(f, 0x81, "x", 1);
+}
+
+static void payload_before_a_close_or_bad_frame_is_delivered_first(void** state)
+{
+  (void)state;
+  void (*const streams[])(fixture*) = { _data_then_close, _data_then_text_frame };
+  az_result const ends[] = { AZ_MQTT_ERROR_CONNECTION_CLOSED, AZ_MQTT_ERROR_WEBSOCKET };
+  for (int i = 0; i < 2; i++)
+  {
+    // with_reply: the frames arrive in the same read as the upgrade reply; else in a later one.
+    for (int with_reply = 0; with_reply < 2; with_reply++)
+    {
+      fixture f;
+      _init(&f, NULL);
+      assert_int_equal(
+          _connect(&f, K_REPLY_PREFIX, K_REPLY_SUFFIX, 4096, with_reply ? streams[i] : NULL), AZ_OK);
+      if (!with_reply)
+      {
+        streams[i](&f);
+      }
+      uint8_t buffer[16];
+      az_span received;
+      assert_int_equal(
+          az_mqtt_transport_receive(f.t, AZ_SPAN_FROM_BUFFER(buffer), 0, &received), AZ_OK);
+      assert_int_equal(az_span_size(received), 2);
+      assert_memory_equal(buffer, "ab", 2);
+      for (int k = 0; k < 2; k++) // And after.
+      {
+        assert_int_equal(
+            az_mqtt_transport_receive(f.t, AZ_SPAN_FROM_BUFFER(buffer), 0, &received), ends[i]);
+        assert_int_equal(az_span_size(received), 0);
+      }
+      assert_int_equal(s_native.count, i == 0 ? 0 : 1); // Close 1000 is not an error.
+      az_mqtt_transport_close(f.t);
+    }
+  }
+}
+
 static void _text_frame(fixture* f) { _feed_frame(f, 0x81, "x", 1); }
 
 static void a_forbidden_frame_fails_with_1002(void** state)
@@ -463,6 +511,7 @@ int main(void)
     cmocka_unit_test(a_lower_failure_ends_the_upgrade),
     cmocka_unit_test(a_server_close_is_echoed_and_reported),
     cmocka_unit_test(a_forbidden_frame_fails_with_1002),
+    cmocka_unit_test(payload_before_a_close_or_bad_frame_is_delivered_first),
     cmocka_unit_test(shutdown_sends_close_1000_once),
     cmocka_unit_test(each_connect_upgrades_afresh),
     cmocka_unit_test(the_request_uses_the_path_host_and_port),

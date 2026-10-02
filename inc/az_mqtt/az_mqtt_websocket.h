@@ -74,6 +74,8 @@ typedef struct
     az_span host;
     az_mqtt_transport_error_fn error_callback;
     void* error_context;
+    /** @brief Failure found after payload that was returned first; returned by the next receive. */
+    az_result pending;
     uint64_t frame_left;
     uint32_t connect_attempts;
     uint32_t http[2];

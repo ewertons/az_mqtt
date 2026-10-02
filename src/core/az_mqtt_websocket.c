@@ -128,6 +128,7 @@ void _az_mqtt_sha1(uint8_t const* data, size_t size, uint8_t out[20])
 /** @brief Clear the per-connection state (stage IDLE). */
 static void _reset(az_mqtt_websocket* ws)
 {
+  _W(ws).pending = AZ_OK;
   _W(ws).frame_left = 0;
   memset(_W(ws).http, 0, sizeof(_W(ws).http));
   _W(ws).stash_start = 0;
@@ -329,19 +330,30 @@ static void _on_header(az_mqtt_websocket* ws)
   az_span const name = az_span_slice(line, 0, colon);
   az_span const value = _trim(az_span_slice_to_end(line, colon + 1));
   bool const truncated = (_W(ws).flags & _FLAG_LINE_TRUNCATED) != 0;
+  // Upgrade and Connection are token lists: repeated lines combine (RFC 9110 §5.3), so a line
+  // only adds what it has. Of a truncated line, the tokens before its last comma are whole.
+  bool const upgrade = _equals_ignore_case(name, AZ_SPAN_FROM_STR("Upgrade"));
+  if (upgrade || _equals_ignore_case(name, AZ_SPAN_FROM_STR("Connection")))
+  {
+    az_span list = value;
+    if (truncated)
+    {
+      int32_t last_comma = -1;
+      for (int32_t i = 0; i < az_span_size(list); i++)
+      {
+        last_comma = az_span_ptr(list)[i] == ',' ? i : last_comma;
+      }
+      list = az_span_slice(list, 0, last_comma < 0 ? 0 : last_comma);
+    }
+    if (_has_token(list, upgrade ? AZ_SPAN_FROM_STR("websocket") : AZ_SPAN_FROM_STR("upgrade")))
+    {
+      _W(ws).flags |= upgrade ? _FLAG_UPGRADE : _FLAG_CONNECTION;
+    }
+    return;
+  }
   uint8_t flag = 0;
   bool valid = true;
-  if (_equals_ignore_case(name, AZ_SPAN_FROM_STR("Upgrade")))
-  {
-    flag = _FLAG_UPGRADE;
-    valid = _has_token(value, AZ_SPAN_FROM_STR("websocket"));
-  }
-  else if (_equals_ignore_case(name, AZ_SPAN_FROM_STR("Connection")))
-  {
-    flag = _FLAG_CONNECTION;
-    valid = _has_token(value, AZ_SPAN_FROM_STR("upgrade"));
-  }
-  else if (_equals_ignore_case(name, AZ_SPAN_FROM_STR("Sec-WebSocket-Accept")))
+  if (_equals_ignore_case(name, AZ_SPAN_FROM_STR("Sec-WebSocket-Accept")))
   {
     flag = _FLAG_ACCEPT;
     valid = az_span_is_content_equal(value, AZ_SPAN_FROM_BUFFER(_W(ws).accept));
@@ -874,6 +886,10 @@ _ws_receive(az_mqtt_transport* t, az_span buffer, int32_t timeout_ms, az_span* o
 {
   az_mqtt_websocket* const ws = _WS(t);
   *out_received = az_span_slice(buffer, 0, 0);
+  if (az_result_failed(_W(ws).pending))
+  {
+    return _W(ws).pending;
+  }
   if (_W(ws).stage != _AZ_MQTT_WEBSOCKET_OPEN)
   {
     return AZ_MQTT_ERROR_NOT_CONNECTED;
@@ -898,6 +914,11 @@ _ws_receive(az_mqtt_transport* t, az_span buffer, int32_t timeout_ms, az_span* o
   int32_t produced = 0;
   az_result const rc = _deframe(ws, in, size, out, &produced);
   *out_received = az_span_slice(buffer, 0, produced);
+  if (az_result_failed(rc) && produced > 0)
+  {
+    _W(ws).pending = rc; // Payload before a close or a bad frame is delivered first.
+    return AZ_OK;
+  }
   return rc;
 }
 
