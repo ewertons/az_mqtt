@@ -179,6 +179,37 @@ static void a_tls_session_runs_through_a_slow_proxy(void** state)
 #endif
 }
 
+static void a_started_connect_keeps_its_proxy(void** state)
+{
+  (void)state;
+  e2e_proxy* proxy = _slow_proxy();
+  AZ_MQTT_T(client) client;
+  assert_int_equal(_init(&client, proxy, "127.0.0.1", 1883, NULL), AZ_OK);
+  az_mqtt_transport* const transport = (az_mqtt_transport*)s_fixture.transport_buf.bytes;
+  assert_int_equal(AZ_MQTT_T(client_connect_start)(&client, 15000), AZ_OK);
+  // Cleared mid-connect: the started connect still goes through the tunnel to the broker.
+  assert_int_equal(az_mqtt_transport_set_proxy(transport, NULL), AZ_OK);
+  az_result rc = AZ_OK;
+  for (int i = 0; i < 2000 && az_result_succeeded(rc)
+       && AZ_MQTT_T(client_get_state)(&client) == AZ_MQTT_CLIENT_STATE_CONNECTING;
+       i++)
+  {
+    rc = AZ_MQTT_T(client_process_loop)(&client, 20);
+  }
+  assert_int_equal(rc, AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+  _roundtrip(&client);
+  assert_int_equal(e2e_proxy_tunnels(proxy), 1);
+  assert_int_equal(AZ_MQTT_TEST_DISCONNECT(&client), AZ_OK);
+
+  // The next connect is direct.
+  assert_int_equal(AZ_MQTT_T(client_connect)(&client, 5000), AZ_OK);
+  _roundtrip(&client);
+  assert_int_equal(e2e_proxy_tunnels(proxy), 1);
+  assert_int_equal(AZ_MQTT_TEST_DISCONNECT(&client), AZ_OK);
+  e2e_proxy_stop(proxy);
+}
+
 static void a_refusing_proxy_fails_the_connect(void** state)
 {
   (void)state;
@@ -200,6 +231,7 @@ int main(void)
   const struct CMUnitTest tests[] = {
     cmocka_unit_test(a_plain_session_runs_through_a_slow_proxy),
     cmocka_unit_test(a_tls_session_runs_through_a_slow_proxy),
+    cmocka_unit_test(a_started_connect_keeps_its_proxy),
     cmocka_unit_test(a_refusing_proxy_fails_the_connect),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);

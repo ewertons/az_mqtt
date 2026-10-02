@@ -75,11 +75,17 @@ static int _readable(_socket_t fd)
   return select((int)fd + 1, &set, NULL, NULL, &tv);
 }
 
+#ifdef MSG_NOSIGNAL
+#define _SEND_FLAGS MSG_NOSIGNAL // A closed peer must not raise SIGPIPE.
+#else
+#define _SEND_FLAGS 0
+#endif
+
 static bool _send_all(_socket_t fd, char const* data, int size)
 {
   while (size > 0)
   {
-    int n = (int)send(fd, data, size, 0);
+    int n = (int)send(fd, data, size, _SEND_FLAGS);
     if (n <= 0)
     {
       return false;
