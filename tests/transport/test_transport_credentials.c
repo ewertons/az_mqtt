@@ -20,6 +20,7 @@
 #include <az_mqtt/az_mqtt_transport.h>
 #include <az_mqtt/az_mqtt_types.h>
 
+#include "test_native_errors.h"
 #include "test_server.h"
 
 #if defined(AZ_MQTT_TEST_BACKEND_OPENSSL)
@@ -137,10 +138,14 @@ static void a_malformed_ca_from_memory_reports_the_tls_library_error(void** stat
   body[0] = body[0] == '!' ? '?' : '!';
   az_mqtt_tls_options t = az_mqtt_tls_options_default();
   t.ca_cert_pem = _pem(f.ca);
+  test_native_errors n;
+  test_native_errors_clear(&n);
+  az_mqtt_transport_set_error_callback(f.transport, test_native_errors_record, &n);
   assert_int_equal(_connect(&f, &t), AZ_MQTT_ERROR_TRANSPORT);
-  az_mqtt_native_error const native = az_mqtt_transport_get_last_native_error(f.transport);
-  assert_int_equal(native.source, AZ_MQTT_NATIVE_ERROR_TLS);
-  assert_int_not_equal(native.code, 0);
+  assert_true(n.count >= 1); // Before any connect: no address errors.
+  assert_int_equal(test_native_errors_with_source(&n, AZ_MQTT_NATIVE_ERROR_TLS), n.count);
+  assert_int_not_equal(n.errors[0].code, 0);
+  assert_true(test_native_errors_all_belong_to(&n, AZ_MQTT_ERROR_TRANSPORT, 1));
   assert_int_equal(test_server_accepted(f.server), 0);
   _teardown(&f);
 }

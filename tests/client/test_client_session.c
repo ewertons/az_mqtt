@@ -11,6 +11,7 @@
 #include <setjmp.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <string.h>
 #include <time.h>
 
@@ -19,6 +20,7 @@
 
 #include "az_mqtt_test_api.h"
 
+#include "test_native_errors.h"
 #include "test_server.h"
 
 /** @brief Deliberately discard a result (gcc ignores a (void) cast on warn_unused_result). */
@@ -58,6 +60,10 @@ static struct
   int disconnects;
   int closed;
   az_result closed_reason;
+  /** @brief Native transport errors, and how many had arrived when the session closed. */
+  test_native_errors native;
+  int native_at_close;
+  AZ_MQTT_T(client) const* native_client;
   int reconnects_left;
   az_result reconnect_rc;
 } g;
@@ -134,12 +140,19 @@ static void _on_disconnect(AZ_MQTT_T(client)* c, AZ_MQTT_T(disconnect_data) cons
 }
 #endif
 
+static void _on_transport_error(AZ_MQTT_T(client)* c, az_mqtt_native_error const* error)
+{
+  g.native_client = c;
+  test_native_errors_record(error, &g.native);
+}
+
 static void _on_closed(AZ_MQTT_T(client)* c, az_result reason)
 {
   // The transport is already closed: the client must look disconnected.
   assert_int_equal(AZ_MQTT_T(client_get_state)(c), AZ_MQTT_CLIENT_STATE_DISCONNECTED);
   g.closed++;
   g.closed_reason = reason;
+  g.native_at_close = g.native.count;
   if (g.reconnects_left > 0)
   {
     g.reconnects_left--;
@@ -215,6 +228,7 @@ static void _setup(fixture* f, test_server_options const* so, uint16_t keep_aliv
       s_inflight_slots * (int32_t)sizeof(az_mqtt_inflight_entry));
   s_inflight_slots = 4; // Reset here: a failed test skips _teardown().
   o.on_connection_closed = _on_closed;
+  o.on_transport_error = _on_transport_error;
 #if AZ_MQTT_TEST_VERSION == 5
   o.on_disconnect = _on_disconnect;
   o.buffers.connack_user_properties = ARRAY_SPAN(f->props[0]);
@@ -805,6 +819,30 @@ static void a_failed_pubrec_ends_the_exchange(void** state)
 }
 #endif
 
+static void native_errors_reach_the_client_before_the_session_closes(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  fixture f;
+  _setup(&f, &so, 30);
+  test_server_stop(f.server); // Its port now refuses connections.
+  f.server = NULL;
+  for (uint32_t attempt = 1; attempt <= 2; attempt++)
+  {
+    test_native_errors_clear(&g.native);
+    assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_MQTT_ERROR_CONNECTION_REFUSED);
+    assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_CONNECTION_REFUSED);
+    assert_int_equal(g.native.count, 1);
+    assert_int_equal(g.native_at_close, 1); // Reported before on_connection_closed.
+    assert_ptr_equal(g.native_client, &f.client);
+    assert_int_equal(g.native.errors[0].source, AZ_MQTT_NATIVE_ERROR_SOCKET);
+    assert_int_equal(g.native.errors[0].code, ECONNREFUSED);
+    assert_true(
+        test_native_errors_all_belong_to(&g.native, AZ_MQTT_ERROR_CONNECTION_REFUSED, attempt));
+  }
+  _teardown(&f);
+}
+
 static void a_peer_close_is_reported_as_connection_closed(void** state)
 {
   (void)state;
@@ -888,7 +926,7 @@ static void logs_never_contain_credentials_topics_or_payloads(void** state)
   assert_non_null(strstr(s_log, "received CONNACK "));
   assert_non_null(strstr(s_log, "sent SUBSCRIBE "));
   assert_non_null(strstr(s_log, "received PUBACK "));
-  assert_non_null(strstr(s_log, "closed 0x00010000 native 0:0\n"));
+  assert_non_null(strstr(s_log, "closed 0x00010000\n"));
   assert_null(strstr(s_log, "SECRET"));
 }
 #endif // AZ_NO_LOGGING
@@ -1098,6 +1136,7 @@ int main(void)
     cmocka_unit_test(an_acknowledgement_over_the_server_maximum_packet_size_closes),
     cmocka_unit_test(a_failed_pubrec_ends_the_exchange),
 #endif
+    cmocka_unit_test(native_errors_reach_the_client_before_the_session_closes),
     cmocka_unit_test(a_peer_close_is_reported_as_connection_closed),
 #ifndef AZ_NO_LOGGING
     cmocka_unit_test(logs_never_contain_credentials_topics_or_payloads),

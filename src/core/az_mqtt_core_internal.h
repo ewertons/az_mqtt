@@ -94,6 +94,12 @@ AZ_NODISCARD AZ_INLINE az_result _az_mqtt_core_send_request(az_mqtt_core* core, 
   return rc;
 }
 
+/**
+ * @brief Have the transport's native errors logged and passed to on_transport_error. Call once
+ * the transport is set.
+ */
+void _az_mqtt_core_register_transport_errors(az_mqtt_core* core);
+
 /** @brief What an in-flight entry holds. PUBLISH_QOS1 to PUBREL are what Receive Maximum counts. */
 typedef enum
 {

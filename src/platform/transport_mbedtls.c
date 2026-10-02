@@ -75,7 +75,7 @@ struct az_mqtt_transport
   /** @brief Contexts are initialized (and own resources, e.g. mutexes) until freed. */
   bool tls_contexts_ready;
 #endif
-  az_mqtt_native_error last_error;
+  _az_mqtt_error_sink errors;
   bool connected;
 };
 
@@ -257,11 +257,10 @@ static int _parse_key(void* transport_ptr, unsigned char const* buf, size_t len)
 /**
  * @brief Build the TLS configuration and session for @p host; the socket is attached later.
  */
-/** @brief Record @p ret (an mbedTLS or PSA error) as the native error; AZ_MQTT_ERROR_TRANSPORT. */
+/** @brief Report @p ret (an mbedTLS or PSA error); AZ_MQTT_ERROR_TRANSPORT. */
 static az_result _tls_setup_failure(az_mqtt_transport* transport, int ret)
 {
-  transport->last_error.source = AZ_MQTT_NATIVE_ERROR_TLS;
-  transport->last_error.code = ret;
+  _az_mqtt_report_error(&transport->errors, AZ_MQTT_NATIVE_ERROR_TLS, ret, AZ_MQTT_ERROR_TRANSPORT);
   return AZ_MQTT_ERROR_TRANSPORT;
 }
 
@@ -424,27 +423,37 @@ static az_result _tls_failure(
     int saved_errno,
     bool handshake)
 {
+  _az_mqtt_error_sink const* const sink = &transport->errors;
   if (handshake && ret == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED)
   {
-    transport->last_error.source = AZ_MQTT_NATIVE_ERROR_TLS_VERIFY;
-    transport->last_error.code = (int32_t)mbedtls_ssl_get_verify_result(&transport->ssl);
+    _az_mqtt_report_error(
+        sink,
+        AZ_MQTT_NATIVE_ERROR_TLS_VERIFY,
+        (int32_t)mbedtls_ssl_get_verify_result(&transport->ssl),
+        AZ_MQTT_ERROR_TLS_VERIFY);
+    _az_mqtt_report_error(sink, AZ_MQTT_NATIVE_ERROR_TLS, ret, AZ_MQTT_ERROR_TLS_VERIFY);
     return AZ_MQTT_ERROR_TLS_VERIFY;
   }
+  if (!handshake
+      && (ret == 0 || ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || ret == MBEDTLS_ERR_SSL_CONN_EOF))
+  {
+    return AZ_MQTT_ERROR_CONNECTION_CLOSED; // Orderly: no native error.
+  }
+  az_result rc = handshake ? AZ_MQTT_ERROR_TLS_HANDSHAKE : AZ_MQTT_ERROR_TRANSPORT;
   if (ret == MBEDTLS_ERR_NET_SEND_FAILED || ret == MBEDTLS_ERR_NET_RECV_FAILED)
   {
-    az_result const rc = _az_mqtt_socket_error(saved_errno, &transport->last_error);
-    return handshake ? AZ_MQTT_ERROR_TLS_HANDSHAKE : rc;
+    rc = handshake ? rc : _az_mqtt_errno_result(saved_errno);
+    if (saved_errno != 0)
+    {
+      _az_mqtt_report_error(sink, AZ_MQTT_NATIVE_ERROR_SOCKET, saved_errno, rc);
+    }
   }
-  if (!handshake
-      && (ret == 0 || ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || ret == MBEDTLS_ERR_SSL_CONN_EOF
-          || ret == MBEDTLS_ERR_NET_CONN_RESET))
+  else if (!handshake && ret == MBEDTLS_ERR_NET_CONN_RESET)
   {
-    _az_mqtt_socket_error(0, &transport->last_error);
-    return AZ_MQTT_ERROR_CONNECTION_CLOSED;
+    rc = AZ_MQTT_ERROR_CONNECTION_CLOSED;
   }
-  transport->last_error.source = AZ_MQTT_NATIVE_ERROR_TLS;
-  transport->last_error.code = ret;
-  return handshake ? AZ_MQTT_ERROR_TLS_HANDSHAKE : AZ_MQTT_ERROR_TRANSPORT;
+  _az_mqtt_report_error(sink, AZ_MQTT_NATIVE_ERROR_TLS, ret, rc);
+  return rc;
 }
 
 /**
@@ -476,7 +485,7 @@ static int _tls_wait(
       _az_mqtt_remaining_ms(deadline));
   if (w < 0)
   {
-    *out_failure = _az_mqtt_socket_error(errno, &transport->last_error);
+    *out_failure = _az_mqtt_socket_error(errno, &transport->errors);
   }
   return w;
 }
@@ -495,8 +504,11 @@ static az_result _tls_handshake(az_mqtt_transport* transport, int64_t deadline)
       {
         return AZ_OK;
       }
-      transport->last_error.source = AZ_MQTT_NATIVE_ERROR_TLS_VERIFY;
-      transport->last_error.code = (int32_t)flags;
+      _az_mqtt_report_error(
+          &transport->errors,
+          AZ_MQTT_NATIVE_ERROR_TLS_VERIFY,
+          (int32_t)flags,
+          AZ_MQTT_ERROR_TLS_VERIFY);
       return AZ_MQTT_ERROR_TLS_VERIFY;
     }
     az_result failure = AZ_MQTT_ERROR_TLS_HANDSHAKE;
@@ -524,8 +536,7 @@ AZ_NODISCARD az_result az_mqtt_transport_connect_start(
   _az_PRECONDITION_NOT_NULL(transport);
 
   az_mqtt_transport_close(transport);
-  transport->last_error.source = AZ_MQTT_NATIVE_ERROR_NONE;
-  transport->last_error.code = 0;
+  transport->errors.connect_attempt++;
 
 #ifdef AZ_MQTT_TLS_MBEDTLS
   if (tls_options != NULL)
@@ -550,7 +561,7 @@ AZ_NODISCARD az_result az_mqtt_transport_connect_start(
   }
 #endif
 
-  az_result rc = _az_mqtt_tcp_connect_start(&transport->tcp, host, port, &transport->last_error);
+  az_result rc = _az_mqtt_tcp_connect_start(&transport->tcp, host, port, &transport->errors);
   if (az_result_failed(rc))
   {
     az_mqtt_transport_close(transport);
@@ -570,7 +581,7 @@ az_mqtt_transport_connect_poll(az_mqtt_transport* transport, int32_t timeout_ms)
   if (transport->state == _TRANSPORT_TCP)
   {
     rc = _az_mqtt_tcp_connect_poll(
-        &transport->tcp, _az_mqtt_remaining_ms(deadline), &transport->last_error);
+        &transport->tcp, _az_mqtt_remaining_ms(deadline), &transport->errors);
     if (rc == AZ_MQTT_ERROR_TIMEOUT)
     {
       return rc;
@@ -681,7 +692,7 @@ AZ_NODISCARD az_result az_mqtt_transport_send(az_mqtt_transport* transport, az_s
                     transport->socket_fd, _AZ_MQTT_WAIT_WRITE, _az_mqtt_remaining_ms(deadline));
       if (w < 0)
       {
-        failure = _az_mqtt_socket_error(errno, &transport->last_error);
+        failure = _az_mqtt_socket_error(errno, &transport->errors);
       }
     }
     if (w <= 0)
@@ -745,7 +756,7 @@ AZ_NODISCARD az_result az_mqtt_transport_receive(
       }
       if (w < 0)
       {
-        failure = _az_mqtt_socket_error(errno, &transport->last_error);
+        failure = _az_mqtt_socket_error(errno, &transport->errors);
       }
     }
     if (w == 0)
@@ -760,11 +771,14 @@ AZ_NODISCARD az_result az_mqtt_transport_receive(
   }
 }
 
-AZ_NODISCARD az_mqtt_native_error
-az_mqtt_transport_get_last_native_error(az_mqtt_transport const* transport)
+void az_mqtt_transport_set_error_callback(
+    az_mqtt_transport* transport,
+    az_mqtt_transport_error_fn callback,
+    void* context)
 {
   _az_PRECONDITION_NOT_NULL(transport);
-  return transport->last_error;
+  transport->errors.callback = callback;
+  transport->errors.context = context;
 }
 
 void az_mqtt_transport_close(az_mqtt_transport* transport)

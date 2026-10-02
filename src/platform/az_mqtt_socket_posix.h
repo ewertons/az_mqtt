@@ -21,6 +21,21 @@
 
 struct addrinfo;
 
+/** @brief Where a transport reports native errors (az_mqtt_transport_set_error_callback()). */
+typedef struct
+{
+  az_mqtt_transport_error_fn callback;
+  void* context;
+  uint32_t connect_attempt;
+} _az_mqtt_error_sink;
+
+/** @brief Report one native error to @p sink's callback, if any. */
+void _az_mqtt_report_error(
+    _az_mqtt_error_sink const* sink,
+    az_mqtt_native_error_source source,
+    int32_t code,
+    az_result result);
+
 /** @brief TCP connect in progress; walks every resolved address in turn. */
 typedef struct
 {
@@ -31,7 +46,7 @@ typedef struct
   bool owns_addresses;
   /** @brief When the current address was tried. */
   int64_t attempt_start_ms;
-  /** @brief errno of the last address that failed. */
+  /** @brief errno of the last address that failed (each is reported as it fails). */
   int last_errno;
 } _az_mqtt_tcp_connect;
 
@@ -61,13 +76,13 @@ void _az_mqtt_tcp_connect_init(_az_mqtt_tcp_connect* c);
  * Name resolution is the one step that blocks (getaddrinfo has no portable
  * non-blocking form).
  *
- * @retval AZ_MQTT_ERROR_NAME_RESOLUTION @p out_error holds the getaddrinfo() result.
+ * @retval AZ_MQTT_ERROR_NAME_RESOLUTION Reported with the getaddrinfo() result.
  */
 AZ_NODISCARD az_result _az_mqtt_tcp_connect_start(
     _az_mqtt_tcp_connect* c,
     az_span host,
     uint16_t port,
-    az_mqtt_native_error* out_error);
+    _az_mqtt_error_sink const* sink);
 
 /**
  * @brief Start a non-blocking connect over a caller-owned address list (tests;
@@ -76,7 +91,7 @@ AZ_NODISCARD az_result _az_mqtt_tcp_connect_start(
 AZ_NODISCARD az_result _az_mqtt_tcp_connect_start_addresses(
     _az_mqtt_tcp_connect* c,
     struct addrinfo* addresses,
-    az_mqtt_native_error* out_error);
+    _az_mqtt_error_sink const* sink);
 
 /**
  * @brief Wait up to @p timeout_ms for the connect to complete.
@@ -87,12 +102,13 @@ AZ_NODISCARD az_result _az_mqtt_tcp_connect_start_addresses(
  *
  * @retval AZ_OK Connected; c->fd is the socket and now belongs to the caller.
  * @retval AZ_MQTT_ERROR_TIMEOUT Still connecting; call again.
- * @retval other Every address failed: _az_mqtt_socket_error() of the last one's errno.
+ * @retval other Every address failed: _az_mqtt_socket_error() of the last one's errno. Each
+ *         address's failure was reported.
  */
 AZ_NODISCARD az_result _az_mqtt_tcp_connect_poll(
     _az_mqtt_tcp_connect* c,
     int32_t timeout_ms,
-    az_mqtt_native_error* out_error);
+    _az_mqtt_error_sink const* sink);
 
 /** @brief Abandon the connect; closes the socket unless it was handed over. */
 void _az_mqtt_tcp_connect_cancel(_az_mqtt_tcp_connect* c);
@@ -115,11 +131,11 @@ int32_t _az_mqtt_send_nosignal(int fd, uint8_t const* data, int32_t size);
  */
 int32_t _az_mqtt_recv_nonblocking(int fd, uint8_t* buffer, int32_t size);
 
-/**
- * @brief Record @p err (an errno value; 0: orderly close) in @p out_error.
- * @return AZ_MQTT_ERROR_CONNECTION_CLOSED, AZ_MQTT_ERROR_CONNECTION_REFUSED or AZ_MQTT_ERROR_TRANSPORT.
- */
-az_result _az_mqtt_socket_error(int err, az_mqtt_native_error* out_error);
+/** @brief Result for errno @p err (0: orderly close): CONNECTION_CLOSED, _REFUSED or TRANSPORT. */
+AZ_NODISCARD az_result _az_mqtt_errno_result(int err);
+
+/** @brief _az_mqtt_errno_result() of @p err, reported to @p sink unless @p err is 0. */
+az_result _az_mqtt_socket_error(int err, _az_mqtt_error_sink const* sink);
 
 /** @brief Whether the last socket call failed only because it would block. */
 bool _az_mqtt_would_block(void);

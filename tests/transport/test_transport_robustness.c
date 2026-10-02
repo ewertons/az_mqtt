@@ -28,6 +28,7 @@
 #include <az_mqtt/az_mqtt_types.h>
 
 #include "az_mqtt_socket_posix.h"
+#include "test_native_errors.h"
 #include "test_server.h"
 
 #if defined(AZ_MQTT_TEST_BACKEND_NONE)
@@ -179,11 +180,15 @@ static void an_unresolvable_host_is_a_name_resolution_error(void** state)
 {
   (void)state;
   az_mqtt_transport* t = _transport_new();
+  test_native_errors n;
+  test_native_errors_clear(&n);
+  az_mqtt_transport_set_error_callback(t, test_native_errors_record, &n);
   az_result rc = az_mqtt_transport_connect(t, _str("az-mqtt-test.invalid"), 1883, NULL);
   assert_int_equal(rc, AZ_MQTT_ERROR_NAME_RESOLUTION);
-  az_mqtt_native_error const native = az_mqtt_transport_get_last_native_error(t);
-  assert_int_equal(native.source, AZ_MQTT_NATIVE_ERROR_NAME_RESOLUTION);
-  assert_int_not_equal(native.code, 0);
+  assert_int_equal(n.count, 1);
+  assert_int_equal(n.errors[0].source, AZ_MQTT_NATIVE_ERROR_NAME_RESOLUTION);
+  assert_int_not_equal(n.errors[0].code, 0);
+  assert_true(test_native_errors_all_belong_to(&n, AZ_MQTT_ERROR_NAME_RESOLUTION, 1));
   _transport_free(t);
 }
 
@@ -198,11 +203,19 @@ static void connect_to_a_closed_port_fails(void** state)
   test_server_stop(s);
 
   az_mqtt_transport* t = _transport_new();
-  az_result rc = az_mqtt_transport_connect(t, _str("127.0.0.1"), port, NULL);
-  assert_int_equal(rc, AZ_MQTT_ERROR_CONNECTION_REFUSED);
-  az_mqtt_native_error const native = az_mqtt_transport_get_last_native_error(t);
-  assert_int_equal(native.source, AZ_MQTT_NATIVE_ERROR_SOCKET);
-  assert_int_equal(native.code, ECONNREFUSED);
+  test_native_errors n;
+  test_native_errors_clear(&n);
+  az_mqtt_transport_set_error_callback(t, test_native_errors_record, &n);
+  for (uint32_t attempt = 1; attempt <= 2; attempt++) // Each connect reports its own.
+  {
+    test_native_errors_clear(&n);
+    az_result rc = az_mqtt_transport_connect(t, _str("127.0.0.1"), port, NULL);
+    assert_int_equal(rc, AZ_MQTT_ERROR_CONNECTION_REFUSED);
+    assert_int_equal(n.count, 1);
+    assert_int_equal(n.errors[0].source, AZ_MQTT_NATIVE_ERROR_SOCKET);
+    assert_int_equal(n.errors[0].code, ECONNREFUSED);
+    assert_true(test_native_errors_all_belong_to(&n, AZ_MQTT_ERROR_CONNECTION_REFUSED, attempt));
+  }
   _transport_free(t);
 }
 
@@ -320,15 +333,17 @@ static void _address(struct addrinfo* ai, struct sockaddr_in* sa, uint16_t port,
   ai->ai_next = next;
 }
 
-/** @brief Poll until connected or @p budget_ms; returns the last result. */
-/** @brief Native error output of the _az_mqtt_tcp_connect_* calls. */
-static az_mqtt_native_error s_native_error;
+/** @brief Native errors the _az_mqtt_tcp_connect_* calls report. */
+static test_native_errors s_errors;
+static _az_mqtt_error_sink const s_sink = { test_native_errors_record, &s_errors, 7 };
 
+/** @brief Poll until connected or @p budget_ms; returns the last result. */
 static az_result _poll_tcp(_az_mqtt_tcp_connect* c, int budget_ms)
 {
   az_result rc;
   int64_t const end = _now_ms() + budget_ms;
-  while ((rc = _az_mqtt_tcp_connect_poll(c, 50, &s_native_error)) == AZ_MQTT_ERROR_TIMEOUT && _now_ms() < end)
+  while ((rc = _az_mqtt_tcp_connect_poll(c, 50, &s_sink)) == AZ_MQTT_ERROR_TIMEOUT
+         && _now_ms() < end)
   {
   }
   return rc;
@@ -353,8 +368,14 @@ static void a_refused_address_falls_back_to_the_next(void** state)
 
   _az_mqtt_tcp_connect c;
   _az_mqtt_tcp_connect_init(&c);
-  assert_int_equal(_az_mqtt_tcp_connect_start_addresses(&c, &ai[0], &s_native_error), AZ_OK);
+  test_native_errors_clear(&s_errors);
+  assert_int_equal(_az_mqtt_tcp_connect_start_addresses(&c, &ai[0], &s_sink), AZ_OK);
   assert_int_equal(_poll_tcp(&c, 3000), AZ_OK);
+  // The refused first address is reported even though the connect succeeds.
+  assert_int_equal(s_errors.count, 1);
+  assert_int_equal(s_errors.errors[0].source, AZ_MQTT_NATIVE_ERROR_SOCKET);
+  assert_int_equal(s_errors.errors[0].code, ECONNREFUSED);
+  assert_true(test_native_errors_all_belong_to(&s_errors, AZ_MQTT_ERROR_CONNECTION_REFUSED, 7));
   int fd = c.fd;
   _az_mqtt_tcp_connect_init(&c); // Handed over.
   for (int i = 0; i < 40 && test_server_accepted(s) == 0; i++)
@@ -401,8 +422,11 @@ static void an_unanswered_address_falls_back_after_its_attempt_budget(void** sta
   _az_mqtt_tcp_connect c;
   _az_mqtt_tcp_connect_init(&c);
   int64_t t0 = _now_ms();
-  assert_int_equal(_az_mqtt_tcp_connect_start_addresses(&c, &ai[0], &s_native_error), AZ_OK);
+  test_native_errors_clear(&s_errors);
+  assert_int_equal(_az_mqtt_tcp_connect_start_addresses(&c, &ai[0], &s_sink), AZ_OK);
   assert_int_equal(_poll_tcp(&c, 6000), AZ_OK);
+  assert_int_equal(s_errors.count, 1); // The abandoned address.
+  assert_int_equal(s_errors.errors[0].code, ETIMEDOUT);
   int64_t elapsed = _now_ms() - t0;
   assert_true(elapsed >= AZ_MQTT_TRANSPORT_ADDRESS_ATTEMPT_MS - 100);
   assert_true(elapsed < AZ_MQTT_TRANSPORT_ADDRESS_ATTEMPT_MS + 1500);

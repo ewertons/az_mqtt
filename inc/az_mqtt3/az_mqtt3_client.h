@@ -66,6 +66,14 @@ typedef void (*az_mqtt3_on_pubcomp_fn)(az_mqtt3_client* client, az_mqtt3_ack_dat
  */
 typedef void (*az_mqtt3_on_connection_closed_fn)(az_mqtt3_client* client, az_result reason);
 
+/**
+ * @brief Called for each native transport error (see az_mqtt_transport_error_fn), before the
+ * failing call returns. It must not call into the client or its transport.
+ */
+typedef void (*az_mqtt3_on_transport_error_fn)(
+    az_mqtt3_client* client,
+    az_mqtt_native_error const* error);
+
 // ──────────────────────── Client options ─────────────────────
 
 typedef struct
@@ -112,6 +120,8 @@ typedef struct
   az_mqtt3_on_pubcomp_fn on_pubcomp;
   /** @brief Optional. See az_mqtt3_on_connection_closed_fn. */
   az_mqtt3_on_connection_closed_fn on_connection_closed;
+  /** @brief Optional. See az_mqtt3_on_transport_error_fn. */
+  az_mqtt3_on_transport_error_fn on_transport_error;
 
   /** @brief User context pointer (passthrough, not used by the library). */
   void* user_context;
@@ -134,6 +144,7 @@ struct az_mqtt3_client
     az_mqtt3_on_puback_fn on_puback;
     az_mqtt3_on_pubcomp_fn on_pubcomp;
     az_mqtt3_on_connection_closed_fn on_connection_closed;
+    az_mqtt3_on_transport_error_fn on_transport_error;
     void* user_context;
   } _internal;
 };

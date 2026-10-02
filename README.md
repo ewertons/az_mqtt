@@ -26,8 +26,10 @@ the [Azure SDK for C](https://github.com/Azure/azure-sdk-for-c) span and platfor
   and Maximum Packet Size.
 - Transport failures have distinct results: `AZ_MQTT_ERROR_NAME_RESOLUTION`,
   `_CONNECTION_REFUSED`, `_TLS_HANDSHAKE`, `_TLS_VERIFY`, `_CONNECTION_CLOSED`, `_TIMEOUT`
-  (`_TRANSPORT` for anything else). `az_mqtt_transport_get_last_native_error()` returns the
-  platform's code behind the last one (errno/WSA, EAI_*, OpenSSL/mbedTLS/Schannel, X509 verify).
+  (`_TRANSPORT` for anything else). The client option `on_transport_error` receives each platform
+  error behind them, in order (errno/WSA, EAI_*, OpenSSL/mbedTLS/Schannel, certificate
+  verification), with the result it leads to and its connect attempt: every address that failed,
+  every queued OpenSSL error. The first with the returned result is the cause.
 - Logging uses azure-sdk-for-c `az_log` (`az_log_set_message_callback`), classifications
   `AZ_LOG_MQTT_CONNECTION` and `AZ_LOG_MQTT_PACKET`: host, port, packet types and lengths, results
   and native codes; never credentials, keys, certificates, topics or payloads. azure-sdk-for-c

@@ -118,15 +118,31 @@ static void _log_close(az_mqtt_core* core, az_result reason)
   {
     return;
   }
-  az_mqtt_native_error const native = az_mqtt_transport_get_last_native_error(_S(core).transport);
-  uint8_t buffer[48];
+  (void)core;
+  uint8_t buffer[24];
   az_span out = AZ_SPAN_FROM_BUFFER(buffer);
   _log_append(&out, AZ_SPAN_FROM_STR("closed "));
   _log_append_hex(&out, (uint32_t)reason);
-  _log_append(&out, AZ_SPAN_FROM_STR(" native "));
-  _log_append_i32(&out, (int32_t)native.source);
+  _log_write(AZ_LOG_MQTT_CONNECTION, AZ_SPAN_FROM_BUFFER(buffer), out);
+}
+
+/** @brief "native <source>:<code> <result> attempt <n>". */
+static void _log_native_error(az_mqtt_native_error const* error)
+{
+  if (!_az_LOG_SHOULD_WRITE(AZ_LOG_MQTT_CONNECTION))
+  {
+    return;
+  }
+  uint8_t buffer[64];
+  az_span out = AZ_SPAN_FROM_BUFFER(buffer);
+  _log_append(&out, AZ_SPAN_FROM_STR("native "));
+  _log_append_i32(&out, (int32_t)error->source);
   _log_append(&out, AZ_SPAN_FROM_STR(":"));
-  _log_append_i32(&out, native.code);
+  _log_append_i32(&out, error->code);
+  _log_append(&out, AZ_SPAN_FROM_STR(" "));
+  _log_append_hex(&out, (uint32_t)error->result);
+  _log_append(&out, AZ_SPAN_FROM_STR(" attempt "));
+  _log_append_i32(&out, (int32_t)error->connect_attempt);
   _log_write(AZ_LOG_MQTT_CONNECTION, AZ_SPAN_FROM_BUFFER(buffer), out);
 }
 
@@ -152,8 +168,24 @@ static void _log_packet(az_span direction, uint8_t first_byte, int32_t length)
 #else
 #define _log_connect(core)
 #define _log_close(core, reason)
+#define _log_native_error(error)
 #define _log_packet(direction, first_byte, length)
 #endif // AZ_NO_LOGGING
+
+static void _on_native_error(az_mqtt_native_error const* error, void* context)
+{
+  az_mqtt_core* const core = (az_mqtt_core*)context;
+  _log_native_error(error);
+  if (_S(core).on_transport_error != NULL)
+  {
+    _S(core).on_transport_error(core, error);
+  }
+}
+
+void _az_mqtt_core_register_transport_errors(az_mqtt_core* core)
+{
+  az_mqtt_transport_set_error_callback(_S(core).transport, _on_native_error, core);
+}
 
 /** @brief Free every in-flight entry. */
 static void _clear_inflight_entries(az_mqtt_core* core)

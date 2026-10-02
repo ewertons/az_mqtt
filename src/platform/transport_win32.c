@@ -42,7 +42,14 @@ struct az_mqtt_transport
   SOCKET socket_fd;
   bool connected;
   _win_state state;
-  az_mqtt_native_error last_error;
+  /** @brief Native error callback; connect_attempt counts az_mqtt_transport_connect_start(). */
+  az_mqtt_transport_error_fn error_callback;
+  void* error_context;
+  uint32_t connect_attempt;
+  /** @brief WSA error of the last address that failed (each is reported as it fails). */
+  int last_socket_error;
+  /** @brief The handshake is running: its native errors belong to AZ_MQTT_ERROR_TLS_HANDSHAKE. */
+  bool in_handshake;
 
   /** @brief _WIN_TCP: resolved addresses, the next one to try, and when the current one started. */
   struct addrinfo* addresses;
@@ -147,14 +154,26 @@ static void _release_addresses(az_mqtt_transport* transport)
   transport->next_address = NULL;
 }
 
-/**
- * @brief Record @p err (a WSA error; 0: orderly close) as the native error.
- * @return AZ_MQTT_ERROR_CONNECTION_CLOSED, AZ_MQTT_ERROR_CONNECTION_REFUSED or AZ_MQTT_ERROR_TRANSPORT.
- */
-static az_result _socket_error(az_mqtt_transport* transport, int err)
+/** @brief Report one native error to the callback, if any. */
+static void _report_error(
+    az_mqtt_transport* transport,
+    az_mqtt_native_error_source source,
+    int32_t code,
+    az_result result)
 {
-  transport->last_error.source = err == 0 ? AZ_MQTT_NATIVE_ERROR_NONE : AZ_MQTT_NATIVE_ERROR_SOCKET;
-  transport->last_error.code = err;
+  if (transport->error_callback != NULL)
+  {
+    az_mqtt_native_error const error = { source, code, result, transport->connect_attempt };
+    transport->error_callback(&error, transport->error_context);
+  }
+}
+
+/**
+ * @brief The result for WSA error @p err (0: orderly close): AZ_MQTT_ERROR_CONNECTION_CLOSED,
+ * AZ_MQTT_ERROR_CONNECTION_REFUSED or AZ_MQTT_ERROR_TRANSPORT.
+ */
+static az_result _wsa_result(int err)
+{
   switch (err)
   {
     case 0:
@@ -168,6 +187,21 @@ static az_result _socket_error(az_mqtt_transport* transport, int err)
     default:
       return AZ_MQTT_ERROR_TRANSPORT;
   }
+}
+
+/**
+ * @brief _wsa_result() of @p err, reported unless @p err is 0 (as AZ_MQTT_ERROR_TLS_HANDSHAKE
+ * during the handshake).
+ */
+static az_result _socket_error(az_mqtt_transport* transport, int err)
+{
+  az_result const rc = transport->in_handshake ? AZ_MQTT_ERROR_TLS_HANDSHAKE : _wsa_result(err);
+  transport->last_socket_error = err;
+  if (err != 0)
+  {
+    _report_error(transport, AZ_MQTT_NATIVE_ERROR_SOCKET, err, rc);
+  }
+  return rc;
 }
 
 /** @brief Start a non-blocking connect to the next untried address. */
@@ -220,8 +254,8 @@ static az_result _tcp_connect_start(az_mqtt_transport* transport, az_span host, 
   int const resolved = getaddrinfo(host_str, port_str, &hints, &res);
   if (resolved != 0 || res == NULL)
   {
-    transport->last_error.source = AZ_MQTT_NATIVE_ERROR_NAME_RESOLUTION;
-    transport->last_error.code = resolved;
+    _report_error(
+        transport, AZ_MQTT_NATIVE_ERROR_NAME_RESOLUTION, resolved, AZ_MQTT_ERROR_NAME_RESOLUTION);
     return AZ_MQTT_ERROR_NAME_RESOLUTION;
   }
   transport->addresses = res;
@@ -229,7 +263,7 @@ static az_result _tcp_connect_start(az_mqtt_transport* transport, az_span host, 
   rc = _tcp_connect_next(transport);
   if (az_result_failed(rc))
   {
-    rc = _socket_error(transport, transport->last_error.code);
+    rc = _wsa_result(transport->last_socket_error);
     _release_addresses(transport);
   }
   return rc;
@@ -312,7 +346,7 @@ static az_result _tcp_connect_poll(az_mqtt_transport* transport, int64_t deadlin
       break;
     }
   }
-  return _socket_error(transport, transport->last_error.code);
+  return _wsa_result(transport->last_socket_error);
 }
 
 static az_result _socket_wait_readable(az_mqtt_transport* transport, int32_t timeout_ms, bool* out_ready)
@@ -423,11 +457,10 @@ static az_result _host_to_wstr(az_span host, wchar_t* out_host, int32_t out_host
   return AZ_OK;
 }
 
-/** @brief Record @p err (a Win32 error or SECURITY_STATUS) as a TLS native error; AZ_MQTT_ERROR_TRANSPORT. */
-static az_result _tls_setup_failure(az_mqtt_native_error* out_error, DWORD err)
+/** @brief Report @p err (Win32 error, SECURITY_STATUS) as a TLS error; AZ_MQTT_ERROR_TRANSPORT. */
+static az_result _tls_setup_failure(az_mqtt_transport* transport, DWORD err)
 {
-  out_error->source = AZ_MQTT_NATIVE_ERROR_TLS;
-  out_error->code = (int32_t)err;
+  _report_error(transport, AZ_MQTT_NATIVE_ERROR_TLS, (int32_t)err, AZ_MQTT_ERROR_TRANSPORT);
   return AZ_MQTT_ERROR_TRANSPORT;
 }
 
@@ -436,7 +469,7 @@ static az_result _decode_cert_file_to_der(
     uint8_t* der_out,
     DWORD der_capacity,
     DWORD* out_der_len,
-    az_mqtt_native_error* out_error)
+    az_mqtt_transport* transport)
 {
   char cert_path[260];
   az_result rc = _span_to_cstr(tls_options->ca_cert_path, cert_path, (int32_t)sizeof(cert_path));
@@ -448,7 +481,7 @@ static az_result _decode_cert_file_to_der(
   HANDLE h = CreateFileA(cert_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
   if (h == INVALID_HANDLE_VALUE)
   {
-    return _tls_setup_failure(out_error, GetLastError());
+    return _tls_setup_failure(transport, GetLastError());
   }
 
   LARGE_INTEGER file_size;
@@ -456,7 +489,7 @@ static az_result _decode_cert_file_to_der(
   {
     DWORD const err = GetLastError();
     CloseHandle(h);
-    return _tls_setup_failure(out_error, err != 0 ? err : ERROR_INVALID_DATA);
+    return _tls_setup_failure(transport, err != 0 ? err : ERROR_INVALID_DATA);
   }
 
   uint32_t file_len = (uint32_t)file_size.QuadPart;
@@ -467,7 +500,7 @@ static az_result _decode_cert_file_to_der(
   CloseHandle(h);
   if (!ok || read_bytes != file_len)
   {
-    return _tls_setup_failure(out_error, read_error);
+    return _tls_setup_failure(transport, read_error);
   }
 
   file_buf[file_len] = '\0';
@@ -477,7 +510,7 @@ static az_result _decode_cert_file_to_der(
     DWORD decoded_len = 0;
     if (!CryptStringToBinaryA(file_buf, file_len, CRYPT_STRING_BASE64HEADER, NULL, &decoded_len, NULL, NULL))
     {
-      return _tls_setup_failure(out_error, GetLastError());
+      return _tls_setup_failure(transport, GetLastError());
     }
 
     if (decoded_len > der_capacity)
@@ -494,7 +527,7 @@ static az_result _decode_cert_file_to_der(
             NULL,
             NULL))
     {
-      return _tls_setup_failure(out_error, GetLastError());
+      return _tls_setup_failure(transport, GetLastError());
     }
 
     *out_der_len = decoded_len;
@@ -514,7 +547,7 @@ static az_result _decode_cert_file_to_der(
 static az_result _build_custom_root_store(
     az_mqtt_tls_options const* tls_options,
     HCERTSTORE* out_store,
-    az_mqtt_native_error* out_error)
+    az_mqtt_transport* transport)
 {
   *out_store = NULL;
 
@@ -526,7 +559,7 @@ static az_result _build_custom_root_store(
   uint8_t der_buf[64 * 1024];
   DWORD der_len = 0;
   az_result rc
-      = _decode_cert_file_to_der(tls_options, der_buf, (DWORD)sizeof(der_buf), &der_len, out_error);
+      = _decode_cert_file_to_der(tls_options, der_buf, (DWORD)sizeof(der_buf), &der_len, transport);
   if (az_result_failed(rc))
   {
     return rc;
@@ -535,7 +568,7 @@ static az_result _build_custom_root_store(
   HCERTSTORE store = CertOpenStore(CERT_STORE_PROV_MEMORY, X509_ASN_ENCODING, 0, CERT_STORE_CREATE_NEW_FLAG, NULL);
   if (store == NULL)
   {
-    return _tls_setup_failure(out_error, GetLastError());
+    return _tls_setup_failure(transport, GetLastError());
   }
 
   if (!CertAddEncodedCertificateToStore(
@@ -548,7 +581,7 @@ static az_result _build_custom_root_store(
   {
     DWORD const err = GetLastError();
     CertCloseStore(store, 0);
-    return _tls_setup_failure(out_error, err);
+    return _tls_setup_failure(transport, err);
   }
 
   *out_store = store;
@@ -560,7 +593,7 @@ static az_result _validate_server_certificate(
     char const* host,
     HCERTSTORE custom_root,
     PCCERT_CONTEXT server_cert,
-    az_mqtt_native_error* out_error)
+    az_mqtt_transport* transport)
 {
   wchar_t host_w[256];
   az_result rc = _host_to_wstr(
@@ -582,7 +615,7 @@ static az_result _validate_server_certificate(
 
     if (!CertCreateCertificateChainEngine(&cfg, &chain_engine))
     {
-      return AZ_MQTT_ERROR_TRANSPORT;
+      return _tls_setup_failure(transport, GetLastError());
     }
   }
 
@@ -603,8 +636,9 @@ static az_result _validate_server_certificate(
 
   if (!chain_ok || chain_ctx == NULL)
   {
-    out_error->source = AZ_MQTT_NATIVE_ERROR_TLS_VERIFY;
-    out_error->code = (int32_t)GetLastError();
+    DWORD const chain_error = GetLastError();
+    _report_error(
+        transport, AZ_MQTT_NATIVE_ERROR_TLS_VERIFY, (int32_t)chain_error, AZ_MQTT_ERROR_TLS_VERIFY);
     if (chain_engine != NULL)
     {
       CertFreeCertificateChainEngine(chain_engine);
@@ -639,8 +673,11 @@ static az_result _validate_server_certificate(
 
   if (!policy_ok || policy_status.dwError != 0)
   {
-    out_error->source = AZ_MQTT_NATIVE_ERROR_TLS_VERIFY;
-    out_error->code = (int32_t)policy_error;
+    _report_error(
+        transport,
+        AZ_MQTT_NATIVE_ERROR_TLS_VERIFY,
+        (int32_t)policy_error,
+        AZ_MQTT_ERROR_TLS_VERIFY);
     return AZ_MQTT_ERROR_TLS_VERIFY;
   }
 
@@ -663,7 +700,7 @@ static az_result _schannel_prepare(
   {
     return rc;
   }
-  rc = _build_custom_root_store(tls_options, &transport->custom_root, &transport->last_error);
+  rc = _build_custom_root_store(tls_options, &transport->custom_root, transport);
   if (az_result_failed(rc))
   {
     return rc;
@@ -687,12 +724,14 @@ static az_result _schannel_prepare(
       &expiry);
   if (sec != SEC_E_OK)
   {
-    return _tls_setup_failure(&transport->last_error, (DWORD)sec);
+    return _tls_setup_failure(transport, (DWORD)sec);
   }
   transport->has_cred = true;
   transport->tls_requested = true;
   return AZ_OK;
 }
+
+static az_result _schannel_handshake_steps(az_mqtt_transport* transport, int64_t deadline_ms);
 
 /**
  * @brief Progress the TLS handshake until done, failed or @p deadline_ms.
@@ -700,7 +739,7 @@ static az_result _schannel_prepare(
  * Resumable: a wait for server data that reaches the deadline returns
  * AZ_MQTT_ERROR_TIMEOUT and the next call continues from there.
  */
-static az_result _schannel_handshake(az_mqtt_transport* transport, int64_t deadline_ms)
+static az_result _schannel_handshake_steps(az_mqtt_transport* transport, int64_t deadline_ms)
 {
   DWORD const req_flags = ISC_REQ_SEQUENCE_DETECT | ISC_REQ_REPLAY_DETECT | ISC_REQ_CONFIDENTIALITY
       | ISC_REQ_EXTENDED_ERROR | ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_STREAM;
@@ -842,8 +881,8 @@ static az_result _schannel_handshake(az_mqtt_transport* transport, int64_t deadl
     }
     if (status != SEC_I_CONTINUE_NEEDED)
     {
-      transport->last_error.source = AZ_MQTT_NATIVE_ERROR_TLS;
-      transport->last_error.code = (int32_t)status;
+      _report_error(
+          transport, AZ_MQTT_NATIVE_ERROR_TLS, (int32_t)status, AZ_MQTT_ERROR_TLS_HANDSHAKE);
       return AZ_MQTT_ERROR_TLS_HANDSHAKE;
     }
     transport->handshake_needs_read = transport->encrypted_in_len == 0;
@@ -855,8 +894,7 @@ static az_result _schannel_handshake(az_mqtt_transport* transport, int64_t deadl
       &transport->stream_sizes);
   if (sec != SEC_E_OK)
   {
-    transport->last_error.source = AZ_MQTT_NATIVE_ERROR_TLS;
-    transport->last_error.code = (int32_t)sec;
+    _report_error(transport, AZ_MQTT_NATIVE_ERROR_TLS, (int32_t)sec, AZ_MQTT_ERROR_TLS_HANDSHAKE);
     return AZ_MQTT_ERROR_TLS_HANDSHAKE;
   }
 
@@ -867,12 +905,11 @@ static az_result _schannel_handshake(az_mqtt_transport* transport, int64_t deadl
       &transport->context_handle, SECPKG_ATTR_REMOTE_CERT_CONTEXT, (PVOID)&server_cert);
   if (sec != SEC_E_OK || server_cert == NULL)
   {
-    transport->last_error.source = AZ_MQTT_NATIVE_ERROR_TLS;
-    transport->last_error.code = (int32_t)sec;
+    _report_error(transport, AZ_MQTT_NATIVE_ERROR_TLS, (int32_t)sec, AZ_MQTT_ERROR_TLS_HANDSHAKE);
     return AZ_MQTT_ERROR_TLS_HANDSHAKE;
   }
   rc = _validate_server_certificate(
-      transport->host, transport->custom_root, server_cert, &transport->last_error);
+      transport->host, transport->custom_root, server_cert, transport);
   CertFreeCertificateContext(server_cert);
   if (az_result_failed(rc))
   {
@@ -883,6 +920,15 @@ static az_result _schannel_handshake(az_mqtt_transport* transport, int64_t deadl
   transport->decrypted_pending_len = 0;
   transport->decrypted_pending_pos = 0;
   return AZ_OK;
+}
+
+/** @brief _schannel_handshake_steps(), with its socket errors reported as part of the handshake. */
+static az_result _schannel_handshake(az_mqtt_transport* transport, int64_t deadline_ms)
+{
+  transport->in_handshake = true;
+  az_result const rc = _schannel_handshake_steps(transport, deadline_ms);
+  transport->in_handshake = false;
+  return rc;
 }
 
 static az_result _schannel_send(az_mqtt_transport* transport, az_span data)
@@ -932,8 +978,7 @@ static az_result _schannel_send(az_mqtt_transport* transport, az_span data)
     SECURITY_STATUS sec = EncryptMessage(&transport->context_handle, 0, &desc, 0);
     if (sec != SEC_E_OK)
     {
-      transport->last_error.source = AZ_MQTT_NATIVE_ERROR_TLS;
-      transport->last_error.code = (int32_t)sec;
+      _report_error(transport, AZ_MQTT_NATIVE_ERROR_TLS, (int32_t)sec, AZ_MQTT_ERROR_TRANSPORT);
       return AZ_MQTT_ERROR_TRANSPORT;
     }
 
@@ -1075,8 +1120,7 @@ static az_result _schannel_receive(
       }
       else
       {
-        transport->last_error.source = AZ_MQTT_NATIVE_ERROR_TLS;
-        transport->last_error.code = (int32_t)sec;
+        _report_error(transport, AZ_MQTT_NATIVE_ERROR_TLS, (int32_t)sec, AZ_MQTT_ERROR_TRANSPORT);
         return AZ_MQTT_ERROR_TRANSPORT;
       }
     }
@@ -1156,8 +1200,7 @@ AZ_NODISCARD az_result az_mqtt_transport_connect_start(
   _az_PRECONDITION_NOT_NULL(transport);
 
   az_mqtt_transport_close(transport);
-  transport->last_error.source = AZ_MQTT_NATIVE_ERROR_NONE;
-  transport->last_error.code = 0;
+  transport->connect_attempt++;
 
 #ifdef AZ_MQTT_TLS_SCHANNEL
   if (tls_options != NULL)
@@ -1325,11 +1368,14 @@ AZ_NODISCARD az_result az_mqtt_transport_receive(
   return AZ_OK;
 }
 
-AZ_NODISCARD az_mqtt_native_error
-az_mqtt_transport_get_last_native_error(az_mqtt_transport const* transport)
+void az_mqtt_transport_set_error_callback(
+    az_mqtt_transport* transport,
+    az_mqtt_transport_error_fn callback,
+    void* context)
 {
   _az_PRECONDITION_NOT_NULL(transport);
-  return transport->last_error;
+  transport->error_callback = callback;
+  transport->error_context = context;
 }
 
 void az_mqtt_transport_close(az_mqtt_transport* transport)

@@ -184,7 +184,7 @@ AZ_NODISCARD az_result az_mqtt_transport_init(az_mqtt_transport* transport);
  * @retval AZ_MQTT_ERROR_INVALID_CONFIG Only one of client_cert_path / client_key_path set.
  * @retval AZ_MQTT_ERROR_NAME_RESOLUTION, AZ_MQTT_ERROR_CONNECTION_REFUSED,
  *         AZ_MQTT_ERROR_TLS_HANDSHAKE, AZ_MQTT_ERROR_TLS_VERIFY, AZ_MQTT_ERROR_TRANSPORT
- *         See az_mqtt_transport_get_last_native_error().
+ *         The native errors behind them go to az_mqtt_transport_set_error_callback().
  */
 AZ_NODISCARD az_result az_mqtt_transport_connect(
     az_mqtt_transport* transport,
@@ -246,15 +246,13 @@ void az_mqtt_transport_close(az_mqtt_transport* transport);
 /** @brief What az_mqtt_native_error.code is. */
 typedef enum
 {
-  /** @brief No native error recorded (e.g. the peer closed the connection cleanly). */
-  AZ_MQTT_NATIVE_ERROR_NONE = 0,
   /** @brief errno (POSIX) or WSAGetLastError() (Windows). */
   AZ_MQTT_NATIVE_ERROR_SOCKET = 1,
   /** @brief getaddrinfo() result: EAI_* (POSIX) or WSA* (Windows). */
   AZ_MQTT_NATIVE_ERROR_NAME_RESOLUTION = 2,
   /**
-   * @brief OpenSSL ERR_peek_last_error(), mbedTLS or PSA error code, or Schannel SECURITY_STATUS
-   * (Win32 error while loading a certificate file).
+   * @brief An OpenSSL error queue entry, an mbedTLS or PSA error code, or a Schannel
+   * SECURITY_STATUS (Win32 error while loading a certificate file).
    */
   AZ_MQTT_NATIVE_ERROR_TLS = 3,
   /**
@@ -264,19 +262,43 @@ typedef enum
   AZ_MQTT_NATIVE_ERROR_TLS_VERIFY = 4,
 } az_mqtt_native_error_source;
 
-/** @brief The platform's own error code behind a transport failure, for diagnostics. */
+/** @brief One platform error behind a transport failure, for diagnostics. */
 typedef struct
 {
   az_mqtt_native_error_source source;
   int32_t code;
+  /**
+   * @brief What the failing call returns (e.g. AZ_MQTT_ERROR_TLS_VERIFY); for an address given up
+   * for the next one, what that address alone would have returned. The first error with the
+   * returned result is its cause.
+   */
+  az_result result;
+  /**
+   * @brief The az_mqtt_transport_connect_start() it belongs to: 1 for the transport's first,
+   * then 2, ... Errors of one connect, and of the session it opened, share it.
+   */
+  uint32_t connect_attempt;
 } az_mqtt_native_error;
 
 /**
- * @brief The native error behind the last failure of @p transport. Kept until the next connect
- * starts; closing does not clear it.
+ * @brief Called for each native error, in the order they occur, before the failing call
+ * returns.
+ *
+ * One failure may report several: each address that could not be connected, a socket error
+ * under a TLS failure, every queued OpenSSL error, the certificate verification result. An
+ * orderly close by the peer reports none. Runs inside the transport call: it must not call into
+ * the transport or the client using it.
  */
-AZ_NODISCARD az_mqtt_native_error
-az_mqtt_transport_get_last_native_error(az_mqtt_transport const* transport);
+typedef void (*az_mqtt_transport_error_fn)(az_mqtt_native_error const* error, void* context);
+
+/**
+ * @brief Set the callback for @p transport's native errors (NULL: none). Clients set it at
+ * initialization; set it only on a transport used without a client.
+ */
+void az_mqtt_transport_set_error_callback(
+    az_mqtt_transport* transport,
+    az_mqtt_transport_error_fn callback,
+    void* context);
 
 /**
  * @brief Monotonic clock in milliseconds, used for keep-alive and timeouts.

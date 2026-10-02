@@ -25,7 +25,7 @@ enum az_mqtt_result
   AZ_MQTT_ERROR_PROTOCOL = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 10),
   AZ_MQTT_ERROR_MALFORMED_PACKET = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 11),
   AZ_MQTT_ERROR_BUFFER_TOO_SMALL = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 12),
-  /** @brief A transport failure with no more specific code; see az_mqtt_transport_get_last_native_error(). */
+  /** @brief A transport failure with no more specific code. */
   AZ_MQTT_ERROR_TRANSPORT = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 13),
   AZ_MQTT_ERROR_TIMEOUT = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 14),
   AZ_MQTT_ERROR_NOT_CONNECTED = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 15),
