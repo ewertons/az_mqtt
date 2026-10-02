@@ -10,6 +10,7 @@ set(CMAKE_C_STANDARD 99)
 
 option(AZ_MQTT_ENABLE_MQTTV3 "Build az_mqttv3 (MQTT 3.1.1 client)" ON)
 option(AZ_MQTT_ENABLE_MQTTV5 "Build az_mqttv5 (MQTT 5.0 client)" ON)
+option(AZ_MQTT_ENABLE_PROXY "HTTP CONNECT proxy support (az_mqtt_transport_set_proxy)" ON)
 option(AZ_MQTT_BUILD_SAMPLES "Build sample applications" ON)
 option(AZ_MQTT_BUILD_TESTS "Build tests" ON)
 option(AZ_MQTT_WARNINGS_AS_ERRORS "Treat warnings in az_mqtt code (libraries, samples, tests) as errors" OFF)
@@ -79,6 +80,9 @@ set(AZ_MQTT_CORE_SOURCES
   src/core/az_mqtt_core.c
   src/core/az_mqtt_codec_common.c
 )
+if(AZ_MQTT_ENABLE_PROXY)
+  list(APPEND AZ_MQTT_CORE_SOURCES src/platform/az_mqtt_http_connect.c)
+endif()
 
 if(WIN32)
   list(APPEND AZ_MQTT_CORE_SOURCES src/platform/transport_win32.c)
@@ -99,6 +103,10 @@ target_include_directories(az_mqtt_core
 target_include_directories(az_mqtt_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
 
 target_link_libraries(az_mqtt_core PUBLIC az::core)
+if(NOT AZ_MQTT_ENABLE_PROXY)
+  # Proxy support compiled out: az_mqtt_transport_set_proxy() refuses any proxy.
+  target_compile_definitions(az_mqtt_core PUBLIC AZ_MQTT_NO_PROXY)
+endif()
 if(NOT LOGGING)
   # azure-sdk-for-c built without az_log (its LOGGING option): compile our logging out too.
   target_compile_definitions(az_mqtt_core PUBLIC AZ_NO_LOGGING)

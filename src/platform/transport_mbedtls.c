@@ -52,6 +52,7 @@ typedef enum
 {
   _TRANSPORT_IDLE = 0,
   _TRANSPORT_TCP,
+  _TRANSPORT_PROXY,
   _TRANSPORT_TLS,
   _TRANSPORT_CONNECTED,
 } _transport_state;
@@ -76,6 +77,11 @@ struct az_mqtt_transport
   bool tls_contexts_ready;
 #endif
   _az_mqtt_error_sink errors;
+  /** @brief Proxy to connect through (az_mqtt_transport_set_proxy()); NULL: none. */
+  az_mqtt_proxy_options const* proxy;
+#ifndef AZ_MQTT_NO_PROXY
+  _az_mqtt_proxy_tunnel tunnel;
+#endif
   bool connected;
 };
 
@@ -571,7 +577,20 @@ AZ_NODISCARD az_result az_mqtt_transport_connect_start(
   }
 #endif
 
-  az_result rc = _az_mqtt_tcp_connect_start(&transport->tcp, host, port, &transport->errors);
+  az_result rc = AZ_OK;
+#ifndef AZ_MQTT_NO_PROXY
+  az_mqtt_proxy_options const* const proxy = transport->proxy;
+  if (proxy != NULL)
+  {
+    rc = _az_mqtt_proxy_tunnel_start(&transport->tunnel, proxy, host, port);
+    host = proxy->host;
+    port = proxy->port;
+  }
+#endif
+  if (az_result_succeeded(rc))
+  {
+    rc = _az_mqtt_tcp_connect_start(&transport->tcp, host, port, &transport->errors);
+  }
   if (az_result_failed(rc))
   {
     az_mqtt_transport_close(transport);
@@ -579,6 +598,19 @@ AZ_NODISCARD az_result az_mqtt_transport_connect_start(
   }
   transport->state = _TRANSPORT_TCP;
   return AZ_OK;
+}
+
+/** @brief The connection (or tunnel) to the server is up: start TLS on it, if asked for. */
+static void _start_tls_or_finish(az_mqtt_transport* transport)
+{
+  transport->state = _TRANSPORT_CONNECTED;
+#ifdef AZ_MQTT_TLS_MBEDTLS
+  if (transport->use_tls)
+  {
+    mbedtls_ssl_set_bio(&transport->ssl, &transport->socket_fd, _tls_send, _tls_recv, NULL);
+    transport->state = _TRANSPORT_TLS;
+  }
+#endif
 }
 
 AZ_NODISCARD az_result
@@ -600,16 +632,35 @@ az_mqtt_transport_connect_poll(az_mqtt_transport* transport, int32_t timeout_ms)
     {
       transport->socket_fd = transport->tcp.fd;
       _az_mqtt_tcp_connect_init(&transport->tcp);
-      transport->state = _TRANSPORT_CONNECTED;
-#ifdef AZ_MQTT_TLS_MBEDTLS
-      if (transport->use_tls)
+      if (transport->proxy != NULL)
       {
-        mbedtls_ssl_set_bio(&transport->ssl, &transport->socket_fd, _tls_send, _tls_recv, NULL);
-        transport->state = _TRANSPORT_TLS;
+        transport->state = _TRANSPORT_PROXY;
       }
-#endif
+      else
+      {
+        _start_tls_or_finish(transport);
+      }
     }
   }
+
+#ifndef AZ_MQTT_NO_PROXY
+  if (az_result_succeeded(rc) && transport->state == _TRANSPORT_PROXY)
+  {
+    rc = _az_mqtt_proxy_tunnel_poll(
+        &transport->tunnel,
+        transport->socket_fd,
+        _az_mqtt_remaining_ms(deadline),
+        &transport->errors);
+    if (rc == AZ_MQTT_ERROR_TIMEOUT)
+    {
+      return rc;
+    }
+    if (az_result_succeeded(rc))
+    {
+      _start_tls_or_finish(transport);
+    }
+  }
+#endif
 
 #ifdef AZ_MQTT_TLS_MBEDTLS
   if (az_result_succeeded(rc) && transport->state == _TRANSPORT_TLS)
@@ -779,6 +830,18 @@ AZ_NODISCARD az_result az_mqtt_transport_receive(
       return failure;
     }
   }
+}
+
+AZ_NODISCARD az_result
+az_mqtt_transport_set_proxy(az_mqtt_transport* transport, az_mqtt_proxy_options const* proxy)
+{
+  _az_PRECONDITION_NOT_NULL(transport);
+  az_result const rc = _az_mqtt_http_connect_check(proxy);
+  if (az_result_succeeded(rc))
+  {
+    transport->proxy = proxy != NULL && az_span_size(proxy->host) > 0 ? proxy : NULL;
+  }
+  return rc;
 }
 
 void az_mqtt_transport_set_error_callback(

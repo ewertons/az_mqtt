@@ -30,6 +30,11 @@ the [Azure SDK for C](https://github.com/Azure/azure-sdk-for-c) span and platfor
   error behind them, in order (errno/WSA, EAI_*, OpenSSL/mbedTLS/Schannel, certificate
   verification), with the result it leads to and its connect attempt: every address that failed,
   every queued OpenSSL error. The first with the returned result is the cause.
+- HTTP CONNECT proxy: `options.proxy_options` (or `az_mqtt_transport_set_proxy()`): host, port,
+  optional Basic credentials. TLS runs inside the tunnel and verifies the server, not the proxy.
+  Never taken from the environment; a proxy that cannot be reached or refuses the tunnel fails the
+  connect (`AZ_MQTT_ERROR_PROXY`, `_PROXY_AUTH` for 407), never falling back to a direct
+  connection. CMake `AZ_MQTT_ENABLE_PROXY=OFF` compiles it out.
 - Logging uses azure-sdk-for-c `az_log` (`az_log_set_message_callback`), classifications
   `AZ_LOG_MQTT_CONNECTION` and `AZ_LOG_MQTT_PACKET`: host, port, packet types and lengths, results
   and native codes; never credentials, keys, certificates, topics or payloads. azure-sdk-for-c
@@ -57,6 +62,7 @@ az_result rc = az_mqtt5_client_init(&client, &options);
 | `AZ_MQTT_ENABLE_MQTTV3` | `ON` | Build `az_mqttv3` |
 | `AZ_MQTT_ENABLE_MQTTV5` | `ON` | Build `az_mqttv5` |
 | `AZ_MQTT_TLS_BACKEND` | `auto` | `auto`, `openssl`, `mbedtls` or `none` |
+| `AZ_MQTT_ENABLE_PROXY` | `ON` | HTTP CONNECT proxy support |
 | `AZ_MQTT_BUILD_SAMPLES` | `ON` | |
 | `AZ_MQTT_BUILD_TESTS` | `ON` | |
 | `AZ_MQTT_WARNINGS_AS_ERRORS` | `OFF` | |

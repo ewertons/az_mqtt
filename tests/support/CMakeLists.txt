@@ -5,7 +5,7 @@
 find_package(OpenSSL 3.0 REQUIRED)
 find_package(Threads REQUIRED)
 
-add_library(az_mqtt_test_server STATIC test_server.c)
+add_library(az_mqtt_test_server STATIC test_server.c test_proxy.c)
 target_include_directories(az_mqtt_test_server PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(az_mqtt_test_server PRIVATE _DEFAULT_SOURCE)
 target_link_libraries(az_mqtt_test_server PUBLIC OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
