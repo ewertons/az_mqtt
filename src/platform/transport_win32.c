@@ -419,8 +419,12 @@ static az_result _socket_send_all(az_mqtt_transport* transport, uint8_t const* d
     if (n <= 0)
     {
       int const err = WSAGetLastError();
-      az_result const rc = _socket_error(transport, err);
-      return err == WSAETIMEDOUT ? AZ_MQTT_ERROR_TIMEOUT : rc; // SO_SNDTIMEO elapsed.
+      if (err == WSAETIMEDOUT && !transport->in_handshake) // SO_SNDTIMEO elapsed.
+      {
+        _report_error(transport, AZ_MQTT_NATIVE_ERROR_SOCKET, err, AZ_MQTT_ERROR_TIMEOUT);
+        return AZ_MQTT_ERROR_TIMEOUT;
+      }
+      return _socket_error(transport, err);
     }
     sent_total += n;
   }
