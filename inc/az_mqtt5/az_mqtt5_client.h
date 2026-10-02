@@ -132,6 +132,12 @@ typedef struct
    */
   az_mqtt_proxy_options const* proxy_options;
 
+  /**
+   * @brief MQTT over WebSockets (NULL: plain MQTT); see az_mqtt_websocket_options. Holds the
+   * client's WebSocket state: it must stay valid for the client's lifetime.
+   */
+  az_mqtt_websocket_options* websocket_options;
+
   /** @brief Broker hostname. */
   az_span hostname;
 
@@ -214,7 +220,8 @@ struct az_mqtt5_client
  * @brief Initialize the client.
  *
  * @retval AZ_MQTT_ERROR_INVALID_CONFIG, AZ_MQTT_ERROR_NOT_SUPPORTED options->proxy_options was
- *         refused (az_mqtt_transport_set_proxy()); the client is not initialized.
+ *         refused (az_mqtt_transport_set_proxy()), or options->websocket_options has an invalid
+ *         path or the build has no WebSocket support; the client is not initialized.
  */
 AZ_NODISCARD az_result az_mqtt5_client_init(az_mqtt5_client* client, az_mqtt5_client_options const* options);
 

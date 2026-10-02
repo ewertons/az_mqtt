@@ -3,7 +3,8 @@
 
 /**
  * @file az_mqtt_http_connect.h
- * @brief Internal: HTTP CONNECT request and reply (RFC 9110 §9.3.6), without I/O.
+ * @brief Internal: HTTP CONNECT request and reply (RFC 9110 §9.3.6), and an HTTP/1.x reply
+ * parser shared with the WebSocket handshake; without I/O.
  */
 #ifndef AZ_MQTT_HTTP_CONNECT_H
 #define AZ_MQTT_HTTP_CONNECT_H
@@ -19,7 +20,7 @@
 #define _AZ_MQTT_HTTP_CONNECT_REQUEST_MAX 1024
 
 /** @brief Longest reply accepted (status line and headers). */
-#define _AZ_MQTT_HTTP_CONNECT_REPLY_MAX 8192
+#define _AZ_MQTT_HTTP_REPLY_MAX 8192
 
 /**
  * @brief Sends up to @p size bytes of @p data without blocking.
@@ -34,7 +35,29 @@ typedef struct
   uint16_t status;
   uint8_t state;
   uint8_t position;
-} _az_mqtt_http_connect_reply;
+} _az_mqtt_http_reply;
+
+/** @brief What a byte fed to _az_mqtt_http_reply_step() was. */
+typedef enum
+{
+  _AZ_MQTT_HTTP_MORE, ///< Part of the status line, or a line end.
+  _AZ_MQTT_HTTP_HEADER_BYTE, ///< A byte of a header line (field name, colon or value).
+  _AZ_MQTT_HTTP_HEADER_END, ///< The end of a header line.
+  _AZ_MQTT_HTTP_END, ///< The end of the headers (the reply's last byte).
+  _AZ_MQTT_HTTP_MALFORMED, ///< Not HTTP/1.x, a control byte, or longer than _AZ_MQTT_HTTP_REPLY_MAX.
+} _az_mqtt_http_event;
+
+void _az_mqtt_http_reply_init(_az_mqtt_http_reply* reply);
+
+#ifndef AZ_MQTT_NO_WEBSOCKETS
+/**
+ * @brief Parse the next byte of a reply's status line and headers; reply->status holds the
+ * status once the status line is read (0 after _AZ_MQTT_HTTP_MALFORMED). Accepts LF as well as
+ * CRLF line ends. Not to be called again after _AZ_MQTT_HTTP_END or _AZ_MQTT_HTTP_MALFORMED
+ * without _az_mqtt_http_reply_init().
+ */
+_az_mqtt_http_event _az_mqtt_http_reply_step(_az_mqtt_http_reply* reply, uint8_t c);
+#endif
 
 #ifndef AZ_MQTT_NO_PROXY
 
@@ -74,10 +97,8 @@ AZ_NODISCARD az_result _az_mqtt_http_connect_send_request(
     _az_mqtt_http_connect_send_fn send,
     void* context);
 
-void _az_mqtt_http_connect_reply_init(_az_mqtt_http_connect_reply* reply);
-
 /**
- * @brief Parse the next bytes of the reply.
+ * @brief Parse the next bytes of the CONNECT reply.
  *
  * Takes the reply in any number of pieces, never consumes past its end, skips 1xx interim
  * replies, and accepts LF as well as CRLF line ends.
@@ -89,7 +110,7 @@ void _az_mqtt_http_connect_reply_init(_az_mqtt_http_connect_reply* reply);
  * @retval AZ_MQTT_ERROR_PROXY Another status (reply->status), or not HTTP or too long (status 0).
  */
 AZ_NODISCARD az_result _az_mqtt_http_connect_reply_parse(
-    _az_mqtt_http_connect_reply* reply,
+    _az_mqtt_http_reply* reply,
     az_span data,
     int32_t* out_consumed);
 

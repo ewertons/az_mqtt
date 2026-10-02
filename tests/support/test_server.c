@@ -46,6 +46,10 @@ struct test_server
   int pubcomps;
   int last_pubcomp_reason;
   bool client_closed;
+  int ws_pongs;
+  int ws_unmasked;
+  int ws_client_close_code;
+  char ws_request[2048];
   int silent_fds[MAX_SILENT];
   int silent_count;
   SSL_CTX* ctx;
@@ -223,18 +227,257 @@ typedef struct
   SSL* ssl;
   /** @brief Fixed header flags of the last packet read. */
   uint8_t flags;
+  test_server* s;
+  /** @brief Upgraded: packets travel in WebSocket frames. */
+  bool ws;
+  /** @brief Payload bytes left in the client's current data frame, its mask, and the offset. */
+  uint64_t ws_left;
+  uint8_t ws_mask[4];
+  uint64_t ws_offset;
 } conn;
 
-static int _read(conn* c, uint8_t* buf, int len)
+static int _raw_read(conn* c, uint8_t* buf, int len)
 {
   return c->ssl != NULL ? SSL_read(c->ssl, buf, len) : (int)recv(c->fd, buf, (size_t)len, 0);
 }
 
-static bool _write(conn* c, uint8_t const* buf, int len)
+static bool _raw_write(conn* c, uint8_t const* buf, int len)
 {
   int n = c->ssl != NULL ? SSL_write(c->ssl, buf, len)
                          : (int)send(c->fd, buf, (size_t)len, MSG_NOSIGNAL);
   return n == len;
+}
+
+static bool _wait_readable(test_server* s, conn* c);
+
+static bool _raw_read_exact(conn* c, uint8_t* buf, int len)
+{
+  for (int got = 0; got < len;)
+  {
+    if (!_wait_readable(c->s, c))
+    {
+      return false;
+    }
+    int n = _raw_read(c, buf + got, len - got);
+    if (n <= 0)
+    {
+      return false;
+    }
+    got += n;
+  }
+  return true;
+}
+
+/** @brief Read a client frame header (and a control frame whole); false on a close or error. */
+static bool _ws_next_data_frame(conn* c)
+{
+  test_server* s = c->s;
+  while (c->ws_left == 0)
+  {
+    uint8_t h[2];
+    if (!_raw_read_exact(c, h, 2))
+    {
+      return false;
+    }
+    uint64_t n = h[1] & 0x7F;
+    int const extra = n == 127 ? 8 : (n == 126 ? 2 : 0);
+    uint8_t e[8];
+    if (!_raw_read_exact(c, e, extra))
+    {
+      return false;
+    }
+    if (extra > 0)
+    {
+      n = 0;
+      for (int i = 0; i < extra; i++)
+      {
+        n = n << 8 | e[i];
+      }
+    }
+    if ((h[1] & 0x80) == 0)
+    {
+      _add(s, &s->ws_unmasked, 1);
+      return false;
+    }
+    if (!_raw_read_exact(c, c->ws_mask, 4))
+    {
+      return false;
+    }
+    uint8_t const opcode = h[0] & 0x0F;
+    if ((opcode & 0x08) == 0)
+    {
+      c->ws_left = n;
+      c->ws_offset = 0;
+      continue; // Empty data frames are skipped.
+    }
+    uint8_t p[125];
+    if (n > sizeof(p) || !_raw_read_exact(c, p, (int)n))
+    {
+      return false;
+    }
+    for (uint64_t i = 0; i < n; i++)
+    {
+      p[i] ^= c->ws_mask[i & 3];
+    }
+    if (opcode == 0x8)
+    {
+      pthread_mutex_lock(&s->lock);
+      s->ws_client_close_code = n >= 2 ? (p[0] << 8 | p[1]) : 1005;
+      pthread_mutex_unlock(&s->lock);
+      return false;
+    }
+    if (opcode == 0xA && n == 2 && p[0] == 'h' && p[1] == 'i')
+    {
+      _add(s, &s->ws_pongs, 1);
+    }
+  }
+  return true;
+}
+
+static int _read(conn* c, uint8_t* buf, int len)
+{
+  if (!c->ws)
+  {
+    return _raw_read(c, buf, len);
+  }
+  if (!_ws_next_data_frame(c))
+  {
+    return 0;
+  }
+  int const take = (uint64_t)len < c->ws_left ? len : (int)c->ws_left;
+  int const got = _raw_read(c, buf, take);
+  for (int i = 0; i < got; i++)
+  {
+    buf[i] ^= c->ws_mask[(c->ws_offset + (uint64_t)i) & 3];
+  }
+  if (got > 0)
+  {
+    c->ws_left -= (uint64_t)got;
+    c->ws_offset += (uint64_t)got;
+  }
+  return got;
+}
+
+/** @brief A server frame (unmasked) with @p b0 and @p len payload bytes. */
+static bool _ws_write_frame(conn* c, uint8_t b0, uint8_t const* buf, int len)
+{
+  uint8_t frame[4096 + 4];
+  int n = 0;
+  frame[n++] = b0;
+  if (len < 126)
+  {
+    frame[n++] = (uint8_t)len;
+  }
+  else
+  {
+    frame[n++] = 126;
+    frame[n++] = (uint8_t)(len >> 8);
+    frame[n++] = (uint8_t)len;
+  }
+  if (len > 4096)
+  {
+    return false;
+  }
+  memcpy(frame + n, buf, (size_t)len);
+  return _raw_write(c, frame, n + len);
+}
+
+static bool _write(conn* c, uint8_t const* buf, int len)
+{
+  if (!c->ws)
+  {
+    return _raw_write(c, buf, len);
+  }
+  if (!c->s->options.ws_fragment)
+  {
+    return _ws_write_frame(c, 0x82, buf, len);
+  }
+  for (int i = 0; i < len; i++)
+  {
+    static uint8_t const ping[] = { 0x89, 0x02, 'h', 'i' };
+    uint8_t const b0 = (uint8_t)((i == 0 ? 0x02 : 0x00) | (i == len - 1 ? 0x80 : 0x00));
+    if (!_raw_write(c, ping, (int)sizeof(ping)) || !_ws_write_frame(c, b0, buf + i, 1))
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** @brief Read the upgrade request and answer it (see test_server_ws_reply). */
+static bool _ws_upgrade(test_server* s, conn* c)
+{
+  char request[sizeof(s->ws_request)];
+  int n = 0;
+  while (n < (int)sizeof(request) - 1
+         && !(n >= 4 && memcmp(request + n - 4, "\r\n\r\n", 4) == 0))
+  {
+    if (!_raw_read_exact(c, (uint8_t*)request + n, 1))
+    {
+      return false;
+    }
+    n++;
+  }
+  request[n] = '\0';
+  pthread_mutex_lock(&s->lock);
+  memcpy(s->ws_request, request, (size_t)n + 1);
+  pthread_mutex_unlock(&s->lock);
+
+  if (s->options.ws_reply == TEST_SERVER_WS_REFUSE)
+  {
+    static char const refused[] = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n";
+    (void)_raw_write(c, (uint8_t const*)refused, (int)sizeof(refused) - 1);
+    return false;
+  }
+  char const* key = strstr(request, "Sec-WebSocket-Key: ");
+  char const* key_end = key != NULL ? strstr(key, "\r\n") : NULL;
+  if (key_end == NULL || key_end - key - 19 != 24)
+  {
+    return false;
+  }
+  char joined[24 + 36 + 1];
+  memcpy(joined, key + 19, 24);
+  memcpy(joined + 24, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11", 36);
+  uint8_t digest[EVP_MAX_MD_SIZE];
+  unsigned int digest_size = 0;
+  char accept[64];
+  if (EVP_Digest(joined, 60, digest, &digest_size, EVP_sha1(), NULL) != 1)
+  {
+    return false;
+  }
+  EVP_EncodeBlock((unsigned char*)accept, digest, (int)digest_size);
+  if (s->options.ws_reply == TEST_SERVER_WS_BAD_ACCEPT)
+  {
+    accept[0] = accept[0] == 'A' ? 'B' : 'A';
+  }
+  static char reply[4096];
+  int len = snprintf(
+      reply,
+      sizeof(reply),
+      "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+      "Sec-WebSocket-Accept: %s\r\nSec-WebSocket-Protocol: mqtt\r\n",
+      accept);
+  bool const slow = s->options.ws_reply == TEST_SERVER_WS_SLOW_LONG_REPLY;
+  for (int i = 0; slow && i < 32; i++)
+  {
+    len += snprintf(reply + len, sizeof(reply) - (size_t)len, "X-Padding-%02d: %060d\r\n", i, i);
+  }
+  len += snprintf(reply + len, sizeof(reply) - (size_t)len, "\r\n%s", slow ? "\x89\x02hi" : "");
+  for (int sent = 0; sent < len;)
+  {
+    int const piece = slow ? (len - sent < 7 ? len - sent : 7) : len;
+    if (!_raw_write(c, (uint8_t const*)reply + sent, piece))
+    {
+      return false;
+    }
+    sent += piece;
+    if (slow)
+    {
+      usleep(500);
+    }
+  }
+  c->ws = s->options.ws_reply != TEST_SERVER_WS_BAD_ACCEPT;
+  return c->ws;
 }
 
 static bool _wait_readable(test_server* s, conn* c)
@@ -363,6 +606,26 @@ static void _serve(test_server* s, conn* c)
   bool ok = v5 ? _write(c, connack_v5, 5 + p) : _write(c, connack_v3, (int)sizeof(connack_v3));
   if (!ok || s->options.connack_code != 0 || s->options.close_after_connack)
   {
+    return;
+  }
+  if (c->ws && s->options.ws_close_code != 0)
+  {
+    uint8_t const close_frame[] = { 0x88, 0x02, (uint8_t)(s->options.ws_close_code >> 8),
+                                    (uint8_t)s->options.ws_close_code };
+    uint8_t b;
+    if (_raw_write(c, close_frame, (int)sizeof(close_frame)))
+    {
+      (void)_read_exact(s, c, &b, 1); // Ends at the client's close frame.
+    }
+    return;
+  }
+  if (c->ws && s->options.ws_masked_frame)
+  {
+    // A masked binary frame. Read as unmasked, the same bytes are a valid stream (a PINGRESP,
+    // an empty binary frame, a pong): only the mask bit tells them apart.
+    static uint8_t const masked[] = { 0x82, 0x82, 0xD0, 0x00, 0x82, 0x00, 0x8A, 0x00 };
+    (void)_raw_write(c, masked, (int)sizeof(masked));
+    usleep(200 * 1000);
     return;
   }
   if (s->options.burst_publishes > 0)
@@ -600,6 +863,22 @@ static void _serve(test_server* s, conn* c)
   }
 }
 
+/** @brief Upgrade first if asked; then serve, and catch the close frame that may follow. */
+static void _serve_maybe_ws(test_server* s, conn* c)
+{
+  if (s->options.websocket && !_ws_upgrade(s, c))
+  {
+    usleep(100 * 1000); // Let the client read the reply before the close.
+    return;
+  }
+  _serve(s, c);
+  struct pollfd p = { c->fd, POLLIN, 0 };
+  if (c->ws && ((c->ssl != NULL && SSL_pending(c->ssl) > 0) || poll(&p, 1, 1000) > 0))
+  {
+    (void)_ws_next_data_frame(c);
+  }
+}
+
 static void* _run(void* arg)
 {
   test_server* s = (test_server*)arg;
@@ -634,7 +913,10 @@ static void* _run(void* arg)
       }
       continue;
     }
-    conn c = { fd, NULL, 0 };
+    conn c;
+    memset(&c, 0, sizeof(c));
+    c.fd = fd;
+    c.s = s;
     if (s->options.tls)
     {
       struct timeval tv = { 5, 0 };
@@ -652,13 +934,13 @@ static void* _run(void* arg)
         s->handshakes++;
         pthread_mutex_unlock(&s->lock);
         X509_free(peer);
-        _serve(s, &c);
+        _serve_maybe_ws(s, &c);
       }
       SSL_free(c.ssl);
     }
     else
     {
-      _serve(s, &c);
+      _serve_maybe_ws(s, &c);
     }
     close(fd);
   }
@@ -676,6 +958,7 @@ test_server* test_server_start(test_server_options const* options)
   }
   s->options = *options;
   s->listen_fd = -1;
+  s->ws_client_close_code = -1;
   pthread_mutex_init(&s->lock, NULL);
   if (s->options.tls && !_setup_tls(s))
   {
@@ -762,6 +1045,16 @@ int test_server_pubrels(test_server* s) { return _get(s, &s->pubrels); }
 int test_server_last_pubrel_reason(test_server* s) { return _get(s, &s->last_pubrel_reason); }
 int test_server_pubcomps(test_server* s) { return _get(s, &s->pubcomps); }
 int test_server_last_pubcomp_reason(test_server* s) { return _get(s, &s->last_pubcomp_reason); }
+int test_server_ws_pongs(test_server* s) { return _get(s, &s->ws_pongs); }
+int test_server_ws_unmasked(test_server* s) { return _get(s, &s->ws_unmasked); }
+int test_server_ws_client_close_code(test_server* s) { return _get(s, &s->ws_client_close_code); }
+bool test_server_ws_request_has(test_server* s, char const* text)
+{
+  pthread_mutex_lock(&s->lock);
+  bool v = strstr(s->ws_request, text) != NULL;
+  pthread_mutex_unlock(&s->lock);
+  return v;
+}
 bool test_server_client_closed(test_server* s)
 {
   pthread_mutex_lock(&s->lock);

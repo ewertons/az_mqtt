@@ -124,8 +124,8 @@ static az_result _parse(
     int32_t* out_consumed,
     uint16_t* out_status)
 {
-  _az_mqtt_http_connect_reply r;
-  _az_mqtt_http_connect_reply_init(&r);
+  _az_mqtt_http_reply r;
+  _az_mqtt_http_reply_init(&r);
   int32_t const size = (int32_t)strlen(reply);
   int32_t offset = 0;
   az_result rc = AZ_MQTT_ERROR_TIMEOUT;
@@ -180,7 +180,7 @@ static void bytes_after_the_reply_are_not_consumed(void** state)
 static void long_headers_are_skipped(void** state)
 {
   (void)state;
-  static char reply[_AZ_MQTT_HTTP_CONNECT_REPLY_MAX];
+  static char reply[_AZ_MQTT_HTTP_REPLY_MAX];
   static char const status_line[] = "HTTP/1.1 200 OK\r\n";
   memcpy(reply, status_line, sizeof(status_line) - 1);
   size_t len = sizeof(status_line) - 1;
@@ -248,8 +248,8 @@ static void control_bytes_in_the_reply_are_refused(void** state)
   {
     for (int32_t piece = 1; piece <= cases[i].size; piece++)
     {
-      _az_mqtt_http_connect_reply r;
-      _az_mqtt_http_connect_reply_init(&r);
+      _az_mqtt_http_reply r;
+      _az_mqtt_http_reply_init(&r);
       az_span const all = az_span_create((uint8_t*)(uintptr_t)cases[i].bytes, cases[i].size);
       az_result rc = AZ_MQTT_ERROR_TIMEOUT;
       for (int32_t offset = 0; rc == AZ_MQTT_ERROR_TIMEOUT && offset < cases[i].size;)
@@ -264,8 +264,8 @@ static void control_bytes_in_the_reply_are_refused(void** state)
   }
   // Tabs and obs-text are allowed.
   char const ok[] = "HTTP/1.1 200 \xc3\xa9t\xc3\xa9\r\nX:\ta\tb\r\n\r\n";
-  _az_mqtt_http_connect_reply r;
-  _az_mqtt_http_connect_reply_init(&r);
+  _az_mqtt_http_reply r;
+  _az_mqtt_http_reply_init(&r);
   int32_t consumed = 0;
   assert_int_equal(
       _az_mqtt_http_connect_reply_parse(
@@ -366,8 +366,8 @@ static void a_failed_send_is_a_proxy_error(void** state)
 static void an_endless_reply_is_cut_off(void** state)
 {
   (void)state;
-  _az_mqtt_http_connect_reply r;
-  _az_mqtt_http_connect_reply_init(&r);
+  _az_mqtt_http_reply r;
+  _az_mqtt_http_reply_init(&r);
   int32_t consumed = 0;
   assert_int_equal(
       _az_mqtt_http_connect_reply_parse(&r, _str("HTTP/1.1 200 OK\r\nX: "), &consumed),

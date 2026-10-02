@@ -11,8 +11,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef E2E_SEND_BUF_SIZE
 #define E2E_SEND_BUF_SIZE 2048
+#endif
+#ifndef E2E_RECV_BUF_SIZE
 #define E2E_RECV_BUF_SIZE 2048
+#endif
 #define E2E_MAX_USER_PROPS 4
 #define E2E_MAX_REASON_CODES 4
 #define E2E_TRANSPORT_BUF_SIZE (256 * 1024)
@@ -52,6 +56,8 @@ typedef struct
   az_mqtt_tls_options const* tls_options;
   /** @brief HTTP proxy to connect through (NULL: none); must outlive the client. */
   az_mqtt_proxy_options const* proxy_options;
+  /** @brief MQTT over WebSockets (NULL: none); must outlive the client. */
+  az_mqtt_websocket_options* websocket_options;
 
   AZ_MQTT_T(on_connack_fn) on_connack;
   AZ_MQTT_T(on_publish_received_fn) on_publish;

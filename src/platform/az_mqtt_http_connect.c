@@ -7,6 +7,7 @@
 
 #include <stdbool.h>
 
+#ifndef AZ_MQTT_NO_PROXY
 /** @brief Whether @p text has a byte that would end or split an HTTP header line. */
 static bool _has_line_break(az_span text)
 {
@@ -147,6 +148,8 @@ az_result _az_mqtt_http_connect_send_request(
   return rc;
 }
 
+#endif // AZ_MQTT_NO_PROXY
+
 /** @brief Where the parser is in the reply. */
 enum
 {
@@ -156,13 +159,14 @@ enum
   _REPLY_LINE_START, ///< A header line, or the empty line ending the headers
   _REPLY_HEADER, ///< Rest of a header line
   _REPLY_END_CR, ///< CR of the empty line seen
-  _REPLY_LINE_CR, ///< CR ending the status line or a header line seen
+  _REPLY_LINE_CR, ///< CR ending the status line seen
+  _REPLY_HEADER_CR, ///< CR ending a header line seen
 };
 
 /** @brief Whether @p c may appear inside a reason phrase or header line (RFC 9110 §5.5). */
 static bool _is_field_byte(uint8_t c) { return c == '\t' || c >= 0x20 ? c != 0x7F : false; }
 
-void _az_mqtt_http_connect_reply_init(_az_mqtt_http_connect_reply* reply)
+void _az_mqtt_http_reply_init(_az_mqtt_http_reply* reply)
 {
   reply->received = 0;
   reply->status = 0;
@@ -170,10 +174,18 @@ void _az_mqtt_http_connect_reply_init(_az_mqtt_http_connect_reply* reply)
   reply->position = 0;
 }
 
-/** @brief Feed one byte; true once the headers have ended, false (and *out_malformed) on error. */
-static bool _reply_step(_az_mqtt_http_connect_reply* r, uint8_t c, bool* out_malformed)
+#ifdef AZ_MQTT_NO_WEBSOCKETS
+static // Only the CONNECT reply parser uses it.
+#endif
+    _az_mqtt_http_event
+    _az_mqtt_http_reply_step(_az_mqtt_http_reply* r, uint8_t c)
 {
   static char const version[] = "HTTP/1.";
+  if (++r->received > _AZ_MQTT_HTTP_REPLY_MAX)
+  {
+    r->status = 0;
+    return _AZ_MQTT_HTTP_MALFORMED;
+  }
   switch (r->state)
   {
     case _REPLY_VERSION:
@@ -187,7 +199,7 @@ static bool _reply_step(_az_mqtt_http_connect_reply* r, uint8_t c, bool* out_mal
           r->state = _REPLY_STATUS;
           r->position = 0;
         }
-        return false;
+        return _AZ_MQTT_HTTP_MORE;
       }
       break;
     case _REPLY_STATUS:
@@ -195,72 +207,91 @@ static bool _reply_step(_az_mqtt_http_connect_reply* r, uint8_t c, bool* out_mal
       {
         r->status = (uint16_t)(r->status * 10 + (c - '0'));
         r->position++;
-        return false;
+        return _AZ_MQTT_HTTP_MORE;
       }
       if (r->position == 3 && (c == ' ' || c == '\r' || c == '\n'))
       {
         r->state = c == '\n' ? _REPLY_LINE_START : (c == '\r' ? _REPLY_LINE_CR : _REPLY_REASON);
-        return false;
+        return _AZ_MQTT_HTTP_MORE;
       }
       break;
     case _REPLY_REASON:
-    case _REPLY_HEADER:
       if (c == '\r' || c == '\n' || _is_field_byte(c))
       {
         r->state = c == '\n' ? _REPLY_LINE_START : (c == '\r' ? _REPLY_LINE_CR : r->state);
-        return false;
+        return _AZ_MQTT_HTTP_MORE;
       }
       break;
-    case _REPLY_LINE_CR:
+    case _REPLY_HEADER:
+      if (c == '\r')
+      {
+        r->state = _REPLY_HEADER_CR;
+        return _AZ_MQTT_HTTP_MORE;
+      }
       if (c == '\n')
       {
         r->state = _REPLY_LINE_START;
-        return false;
+        return _AZ_MQTT_HTTP_HEADER_END;
+      }
+      if (_is_field_byte(c))
+      {
+        return _AZ_MQTT_HTTP_HEADER_BYTE;
+      }
+      break;
+    case _REPLY_LINE_CR:
+    case _REPLY_HEADER_CR:
+      if (c == '\n')
+      {
+        bool const header = r->state == _REPLY_HEADER_CR;
+        r->state = _REPLY_LINE_START;
+        return header ? _AZ_MQTT_HTTP_HEADER_END : _AZ_MQTT_HTTP_MORE;
       }
       break;
     case _REPLY_LINE_START:
       if (c == '\n')
       {
-        return true;
+        return _AZ_MQTT_HTTP_END;
       }
-      if (c == '\r' || _is_field_byte(c))
+      if (c == '\r')
       {
-        r->state = c == '\r' ? _REPLY_END_CR : _REPLY_HEADER;
-        return false;
+        r->state = _REPLY_END_CR;
+        return _AZ_MQTT_HTTP_MORE;
+      }
+      if (_is_field_byte(c))
+      {
+        r->state = _REPLY_HEADER;
+        return _AZ_MQTT_HTTP_HEADER_BYTE;
       }
       break;
     case _REPLY_END_CR:
       if (c == '\n')
       {
-        return true;
+        return _AZ_MQTT_HTTP_END;
       }
       break;
     default:
       break;
   }
-  *out_malformed = true;
-  return false;
+  r->status = 0;
+  return _AZ_MQTT_HTTP_MALFORMED;
 }
 
+#ifndef AZ_MQTT_NO_PROXY
 az_result _az_mqtt_http_connect_reply_parse(
-    _az_mqtt_http_connect_reply* reply,
+    _az_mqtt_http_reply* reply,
     az_span data,
     int32_t* out_consumed)
 {
   uint8_t const* p = az_span_ptr(data);
   for (int32_t i = 0; i < az_span_size(data); i++)
   {
-    bool malformed = false;
-    if (++reply->received > _AZ_MQTT_HTTP_CONNECT_REPLY_MAX)
-    {
-      malformed = true;
-    }
-    else if (_reply_step(reply, p[i], &malformed))
+    _az_mqtt_http_event const event = _az_mqtt_http_reply_step(reply, p[i]);
+    if (event == _AZ_MQTT_HTTP_END)
     {
       if (reply->status >= 100 && reply->status < 200)
       {
         uint32_t const received = reply->received; // Interim: the real reply follows.
-        _az_mqtt_http_connect_reply_init(reply);
+        _az_mqtt_http_reply_init(reply);
         reply->received = received;
         continue;
       }
@@ -271,9 +302,8 @@ az_result _az_mqtt_http_connect_reply_parse(
       }
       return reply->status == 407 ? AZ_MQTT_ERROR_PROXY_AUTH : AZ_MQTT_ERROR_PROXY;
     }
-    if (malformed)
+    if (event == _AZ_MQTT_HTTP_MALFORMED)
     {
-      reply->status = 0;
       *out_consumed = i + 1;
       return AZ_MQTT_ERROR_PROXY;
     }
@@ -281,3 +311,4 @@ az_result _az_mqtt_http_connect_reply_parse(
   *out_consumed = az_span_size(data);
   return AZ_MQTT_ERROR_TIMEOUT;
 }
+#endif // AZ_MQTT_NO_PROXY

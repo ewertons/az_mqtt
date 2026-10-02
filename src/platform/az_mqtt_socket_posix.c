@@ -26,6 +26,14 @@
 #include <time.h>
 #include <unistd.h>
 
+#if defined(__linux__) || defined(ESP_PLATFORM)
+#include <sys/random.h>
+#define _AZ_MQTT_GETRANDOM
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+#include <stdlib.h>
+#define _AZ_MQTT_ARC4RANDOM
+#endif
+
 #ifndef MSG_NOSIGNAL
 #ifdef SO_NOSIGPIPE
 // No MSG_NOSIGNAL (e.g. macOS): SO_NOSIGPIPE is set on the socket instead.
@@ -43,6 +51,51 @@ int64_t _az_mqtt_now_ms(void)
 }
 
 AZ_NODISCARD int64_t az_mqtt_transport_clock_ms(void) { return _az_mqtt_now_ms(); }
+
+AZ_NODISCARD az_result az_mqtt_transport_random(az_span buffer)
+{
+  uint8_t* p = az_span_ptr(buffer);
+  size_t left = (size_t)az_span_size(buffer);
+#if defined(_AZ_MQTT_ARC4RANDOM)
+  arc4random_buf(p, left);
+#elif defined(_AZ_MQTT_GETRANDOM)
+  while (left > 0)
+  {
+    ssize_t const n = getrandom(p, left, 0);
+    if (n < 0 && errno != EINTR)
+    {
+      return AZ_MQTT_ERROR_TRANSPORT;
+    }
+    if (n > 0)
+    {
+      p += n;
+      left -= (size_t)n;
+    }
+  }
+#else
+  int const fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+  if (fd < 0)
+  {
+    return AZ_MQTT_ERROR_TRANSPORT;
+  }
+  while (left > 0)
+  {
+    ssize_t const n = read(fd, p, left);
+    if (n <= 0 && !(n < 0 && errno == EINTR))
+    {
+      (void)close(fd);
+      return AZ_MQTT_ERROR_TRANSPORT;
+    }
+    if (n > 0)
+    {
+      p += n;
+      left -= (size_t)n;
+    }
+  }
+  (void)close(fd);
+#endif
+  return AZ_OK;
+}
 
 int64_t _az_mqtt_deadline(int32_t timeout_ms)
 {
@@ -361,7 +414,7 @@ az_result _az_mqtt_proxy_tunnel_start(
   t->host = host;
   t->port = port;
   t->sent = 0;
-  _az_mqtt_http_connect_reply_init(&t->reply);
+  _az_mqtt_http_reply_init(&t->reply);
   uint8_t request[_AZ_MQTT_HTTP_CONNECT_REQUEST_MAX];
   az_result const rc = _az_mqtt_http_connect_request(
       proxy, host, port, AZ_SPAN_FROM_BUFFER(request), &t->request_size);

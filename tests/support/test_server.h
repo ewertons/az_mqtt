@@ -32,9 +32,31 @@ typedef enum
   TEST_SERVER_DISCONNECT_AFTER_CONNACK,
 } test_server_behavior;
 
+/** @brief How a WebSocket server answers the upgrade request. */
+typedef enum
+{
+  /** @brief 101 with every header right. */
+  TEST_SERVER_WS_ACCEPT = 0,
+  /** @brief 403, then close. */
+  TEST_SERVER_WS_REFUSE,
+  /** @brief 101 with a wrong Sec-WebSocket-Accept. */
+  TEST_SERVER_WS_BAD_ACCEPT,
+  /** @brief 101 with 2 KB of extra headers, written a few bytes at a time, then a ping. */
+  TEST_SERVER_WS_SLOW_LONG_REPLY,
+} test_server_ws_reply;
+
 typedef struct
 {
   bool tls;
+  /** @brief MQTT over WebSockets: an upgrade first, then every packet in binary frames. */
+  bool websocket;
+  test_server_ws_reply ws_reply;
+  /** @brief Send each packet one byte per frame (fragmented), each frame after a ping "hi". */
+  bool ws_fragment;
+  /** @brief After CONNACK: send a close frame with this code (0: none) and await the echo. */
+  uint16_t ws_close_code;
+  /** @brief After CONNACK: send a masked frame (servers must not). */
+  bool ws_masked_frame;
   /** @brief subjectAltName of the server certificate, e.g. "DNS:localhost,IP:127.0.0.1". */
   char const* san;
   /** @brief Sign the server certificate with a CA the client is not given. */
@@ -135,6 +157,14 @@ int test_server_last_pubrel_reason(test_server* server);
 int test_server_pubcomps(test_server* server);
 int test_server_last_pubcomp_reason(test_server* server);
 
+/** @brief Pongs "hi" received (answers to ws_fragment pings). */
+int test_server_ws_pongs(test_server* server);
+/** @brief Client frames without a mask (clients must mask every frame). */
+int test_server_ws_unmasked(test_server* server);
+/** @brief Status code of the last close frame from the client: 1005 if none in it, -1 if none. */
+int test_server_ws_client_close_code(test_server* server);
+/** @brief Whether the last upgrade request contains @p text. */
+bool test_server_ws_request_has(test_server* server, char const* text);
 /** @brief Whether the client closed the last connection (orderly or not). */
 bool test_server_client_closed(test_server* server);
 

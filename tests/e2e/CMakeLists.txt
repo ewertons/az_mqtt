@@ -60,6 +60,31 @@ endif()
 
 # ── TLS ──────────────────────────────────────────────────────
 
+if(AZ_MQTT_ENABLE_WEBSOCKETS)
+  set(_ws_defs)
+  if(WIN32 OR NOT AZ_MQTT_TLS_BACKEND_RESOLVED STREQUAL "none")
+    set(_ws_defs E2E_TLS=1 E2E_CA_CERT_PATH="${E2E_CA_CERT_PATH}")
+  endif()
+  if(AZ_MQTT_ENABLE_PROXY)
+    list(APPEND _ws_defs E2E_PROXY=1)
+  endif()
+  # Room for a payload whose frames need a 64-bit length.
+  list(APPEND _ws_defs E2E_SEND_BUF_SIZE=73728 E2E_RECV_BUF_SIZE=73728)
+  add_az_mqtt_e2e_test(websocket test_websocket.c ${_ws_defs})
+  if(AZ_MQTT_ENABLE_PROXY)
+    find_package(Threads REQUIRED)
+    foreach(version 3 5)
+      if(TARGET az_mqtt${version}_test_websocket)
+        target_sources(az_mqtt${version}_test_websocket PRIVATE e2e_proxy.c)
+        target_link_libraries(az_mqtt${version}_test_websocket PRIVATE Threads::Threads)
+        if(WIN32)
+          target_link_libraries(az_mqtt${version}_test_websocket PRIVATE ws2_32)
+        endif()
+      endif()
+    endforeach()
+  endif()
+endif()
+
 if(WIN32)
   add_az_mqtt_e2e_test(ssl_win32 test_ssl_win32.c
     E2E_WIN32_TLS_BACKEND_AVAILABLE=1 E2E_CA_CERT_PATH="${E2E_CA_CERT_PATH}")

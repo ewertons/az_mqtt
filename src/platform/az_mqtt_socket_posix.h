@@ -151,7 +151,7 @@ typedef struct
   /** @brief Request bytes sent, of request_size. */
   int32_t sent;
   int32_t request_size;
-  _az_mqtt_http_connect_reply reply;
+  _az_mqtt_http_reply reply;
 } _az_mqtt_proxy_tunnel;
 
 #ifndef AZ_MQTT_NO_PROXY

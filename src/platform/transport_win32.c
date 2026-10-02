@@ -25,6 +25,7 @@
 #include <schannel.h>
 #include <security.h>
 #include <wincrypt.h>
+#include <bcrypt.h>
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -65,7 +66,7 @@ struct az_mqtt_transport
   uint16_t proxy_target_port;
   int32_t proxy_request_sent;
   bool proxy_request_done;
-  _az_mqtt_http_connect_reply proxy_reply;
+  _az_mqtt_http_reply proxy_reply;
 
   /** @brief _WIN_TCP: resolved addresses, the next one to try, and when the current one started. */
   struct addrinfo* addresses;
@@ -1212,6 +1213,18 @@ static void _schannel_shutdown(az_mqtt_transport* transport)
 
 AZ_NODISCARD int64_t az_mqtt_transport_clock_ms(void) { return _now_ms(); }
 
+AZ_NODISCARD az_result az_mqtt_transport_random(az_span buffer)
+{
+  return BCryptGenRandom(
+             NULL,
+             az_span_ptr(buffer),
+             (ULONG)az_span_size(buffer),
+             BCRYPT_USE_SYSTEM_PREFERRED_RNG)
+          == 0
+      ? AZ_OK
+      : AZ_MQTT_ERROR_TRANSPORT;
+}
+
 AZ_NODISCARD az_result az_mqtt_transport_connect_start(
     az_mqtt_transport* transport,
     az_span host,
@@ -1268,7 +1281,7 @@ AZ_NODISCARD az_result az_mqtt_transport_connect_start(
     transport->proxy_target_port = port;
     transport->proxy_request_sent = 0;
     transport->proxy_request_done = false;
-    _az_mqtt_http_connect_reply_init(&transport->proxy_reply);
+    _az_mqtt_http_reply_init(&transport->proxy_reply);
     host = transport->attempt_proxy->host;
     port = transport->attempt_proxy->port;
   }

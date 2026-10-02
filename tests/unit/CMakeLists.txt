@@ -8,3 +8,12 @@ target_include_directories(az_mqtt_test_http_connect PRIVATE
 target_link_libraries(az_mqtt_test_http_connect PRIVATE az_mqtt::core cmocka)
 az_mqtt_apply_warnings(az_mqtt_test_http_connect)
 add_test(NAME az_mqtt_test_http_connect COMMAND az_mqtt_test_http_connect)
+
+if(AZ_MQTT_ENABLE_WEBSOCKETS)
+  add_executable(az_mqtt_test_websocket test_websocket.c)
+  target_include_directories(az_mqtt_test_websocket PRIVATE
+    ${cmocka_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/core ${PROJECT_SOURCE_DIR}/src/platform)
+  target_link_libraries(az_mqtt_test_websocket PRIVATE az_mqtt::core cmocka)
+  az_mqtt_apply_warnings(az_mqtt_test_websocket)
+  add_test(NAME az_mqtt_test_websocket COMMAND az_mqtt_test_websocket)
+endif()

@@ -35,6 +35,13 @@ the [Azure SDK for C](https://github.com/Azure/azure-sdk-for-c) span and platfor
   Never taken from the environment; a proxy that cannot be reached or refuses the tunnel fails the
   connect (`AZ_MQTT_ERROR_PROXY`, `_PROXY_AUTH` for 407), never falling back to a direct
   connection. CMake `AZ_MQTT_ENABLE_PROXY=OFF` compiles it out.
+- MQTT over WebSockets (RFC 6455, subprotocol `mqtt`): `options.websocket_options`
+  (`az_mqtt_websocket_options`, caller storage, path default `/mqtt`; Azure IoT Hub:
+  `AZ_MQTT_WEBSOCKET_PATH_IOT_HUB`). Runs over TCP or TLS and through a proxy; set `port` to the
+  WebSocket listener (typically 443 or 80). A refused or invalid upgrade, or a frame RFC 6455
+  forbids, fails with `AZ_MQTT_ERROR_WEBSOCKET`; `on_transport_error` gets the HTTP status or
+  close code (`AZ_MQTT_NATIVE_ERROR_WEBSOCKET`). The platform port adds
+  `az_mqtt_transport_random()`. CMake `AZ_MQTT_ENABLE_WEBSOCKETS=OFF` compiles it out.
 - Logging uses azure-sdk-for-c `az_log` (`az_log_set_message_callback`), classifications
   `AZ_LOG_MQTT_CONNECTION` and `AZ_LOG_MQTT_PACKET`: host, port, packet types and lengths, results
   and native codes; never credentials, keys, certificates, topics or payloads. azure-sdk-for-c
@@ -63,6 +70,7 @@ az_result rc = az_mqtt5_client_init(&client, &options);
 | `AZ_MQTT_ENABLE_MQTTV5` | `ON` | Build `az_mqttv5` |
 | `AZ_MQTT_TLS_BACKEND` | `auto` | `auto`, `openssl`, `mbedtls` or `none` |
 | `AZ_MQTT_ENABLE_PROXY` | `ON` | HTTP CONNECT proxy support |
+| `AZ_MQTT_ENABLE_WEBSOCKETS` | `ON` | MQTT over WebSockets |
 | `AZ_MQTT_BUILD_SAMPLES` | `ON` | |
 | `AZ_MQTT_BUILD_TESTS` | `ON` | |
 | `AZ_MQTT_WARNINGS_AS_ERRORS` | `OFF` | |

@@ -293,6 +293,12 @@ typedef enum
   AZ_MQTT_NATIVE_ERROR_TLS_VERIFY = 4,
   /** @brief The HTTP proxy's reply status (e.g. 407); 0 if the reply was not valid HTTP. */
   AZ_MQTT_NATIVE_ERROR_PROXY = 5,
+  /**
+   * @brief WebSocket (reported by the client, not the transport): the HTTP status of a refused or
+   * invalid upgrade reply (0: not HTTP), the status code of a close frame from the server other
+   * than 1000 (1005: none), or 1002 for a frame the client refused.
+   */
+  AZ_MQTT_NATIVE_ERROR_WEBSOCKET = 6,
 } az_mqtt_native_error_source;
 
 /** @brief One platform error behind a transport failure, for diagnostics. */
@@ -349,6 +355,16 @@ void az_mqtt_transport_set_error_callback(
     az_mqtt_transport* transport,
     az_mqtt_transport_error_fn callback,
     void* context);
+
+/**
+ * @brief Fill @p buffer with bytes from a cryptographically secure random source.
+ *
+ * Part of the platform port, like az_mqtt_transport_clock_ms(); used for WebSocket keys and
+ * frame masks.
+ *
+ * @retval AZ_MQTT_ERROR_TRANSPORT No random source.
+ */
+AZ_NODISCARD az_result az_mqtt_transport_random(az_span buffer);
 
 /**
  * @brief Monotonic clock in milliseconds, used for keep-alive and timeouts.

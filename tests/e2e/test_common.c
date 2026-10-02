@@ -49,6 +49,7 @@ az_result az_mqtt_e2e_init_client(
   opts.port = params->port;
   opts.tls_options = params->tls_options;
   opts.proxy_options = params->proxy_options;
+  opts.websocket_options = params->websocket_options;
 
   opts.on_connack = params->on_connack;
   opts.on_publish = params->on_publish;
