@@ -25,12 +25,20 @@ struct test_proxy
   uint16_t port;
   pthread_t thread;
   pthread_mutex_t lock;
-  volatile int stop;
+  bool stop; ///< Under lock: read with _stopping().
   int requests;
   int tunnels;
   int auth_failures;
   char last_request_line[512];
 };
+
+static bool _stopping(test_proxy* p)
+{
+  pthread_mutex_lock(&p->lock);
+  bool const stop = p->stop;
+  pthread_mutex_unlock(&p->lock);
+  return stop;
+}
 
 static void _sleep_ms(int ms)
 {
@@ -61,7 +69,7 @@ static bool _read_request(test_proxy* p, int fd, char* head, size_t size)
   {
     struct pollfd pfd = { fd, POLLIN, 0 };
     int r = poll(&pfd, 1, 50);
-    if (p->stop)
+    if (_stopping(p))
     {
       return false;
     }
@@ -125,7 +133,7 @@ static bool _credentials_ok(test_proxy const* p, char const* head)
       && strcmp(got + 6, (char const*)expected) == 0;
 }
 
-static void _reply(test_proxy const* p, int fd, int status, char const* reason)
+static void _reply(test_proxy* p, int fd, int status, char const* reason)
 {
   char reply[16384];
   int len = snprintf(reply, sizeof(reply), "HTTP/1.1 %d %s\r\n", status, reason);
@@ -143,7 +151,7 @@ static void _reply(test_proxy const* p, int fd, int status, char const* reason)
     (void)_send_all(fd, reply, (size_t)len);
     return;
   }
-  for (int i = 0; i < len && !p->stop; i++)
+  for (int i = 0; i < len && !_stopping(p); i++)
   {
     (void)_send_all(fd, reply + i, 1);
     _sleep_ms(1);
@@ -198,7 +206,7 @@ static int _connect_target(char const* authority)
 static void _pump(test_proxy* p, int a, int b)
 {
   char buf[4096];
-  while (!p->stop)
+  while (!_stopping(p))
   {
     struct pollfd pfd[2] = { { a, POLLIN, 0 }, { b, POLLIN, 0 } };
     int r = poll(pfd, 2, 50);
@@ -281,7 +289,7 @@ static void _serve(test_proxy* p, int fd)
 static void* _run(void* arg)
 {
   test_proxy* p = (test_proxy*)arg;
-  while (!p->stop)
+  while (!_stopping(p))
   {
     struct pollfd pfd = { p->listener, POLLIN, 0 };
     if (poll(&pfd, 1, 50) <= 0)
@@ -337,7 +345,9 @@ void test_proxy_stop(test_proxy* p)
   {
     return;
   }
-  p->stop = 1;
+  pthread_mutex_lock(&p->lock);
+  p->stop = true;
+  pthread_mutex_unlock(&p->lock);
   pthread_join(p->thread, NULL);
   close(p->listener);
   pthread_mutex_destroy(&p->lock);

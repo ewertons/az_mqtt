@@ -268,6 +268,32 @@ static void an_unreachable_proxy_is_never_bypassed(void** state)
   _teardown(&f);
 }
 
+static void a_started_connect_keeps_its_proxy(void** state)
+{
+  (void)state;
+  test_proxy_options po = { 0 };
+  fixture f;
+  _setup(&f, false, &po);
+  az_span const host = _str("127.0.0.1");
+  assert_int_equal(
+      az_mqtt_transport_connect_start(f.transport, host, test_server_port(f.server), NULL), AZ_OK);
+  assert_int_equal(az_mqtt_transport_set_proxy(f.transport, NULL), AZ_OK); // For the next one.
+  az_result rc = AZ_MQTT_ERROR_TIMEOUT;
+  for (int i = 0; i < 300 && rc == AZ_MQTT_ERROR_TIMEOUT; i++)
+  {
+    rc = az_mqtt_transport_connect_poll(f.transport, 10);
+  }
+  assert_int_equal(rc, AZ_OK);
+  _mqtt_handshake(f.transport); // Through the tunnel, not to the proxy itself.
+  assert_int_equal(test_proxy_tunnels(f.proxy), 1);
+  az_mqtt_transport_close(f.transport);
+
+  assert_int_equal(_connect(&f, "127.0.0.1", NULL), AZ_OK); // Now directly.
+  _mqtt_handshake(f.transport);
+  assert_int_equal(test_proxy_requests(f.proxy), 1);
+  _teardown(&f);
+}
+
 static void the_proxy_can_be_set_invalid_or_cleared(void** state)
 {
   (void)state;
@@ -309,6 +335,7 @@ int main(void)
     cmocka_unit_test(no_reply_or_a_non_http_reply_is_a_proxy_error),
     cmocka_unit_test(a_slow_fragmented_reply_with_long_headers_is_awaited),
     cmocka_unit_test(an_unreachable_proxy_is_never_bypassed),
+    cmocka_unit_test(a_started_connect_keeps_its_proxy),
     cmocka_unit_test(the_proxy_can_be_set_invalid_or_cleared),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);

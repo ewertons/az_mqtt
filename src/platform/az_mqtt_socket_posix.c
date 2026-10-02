@@ -379,25 +379,10 @@ static az_result _tunnel_socket_failure(int err, _az_mqtt_error_sink const* sink
   return AZ_MQTT_ERROR_PROXY;
 }
 
-/** @brief Send what is left of the request; 1 all sent, 0 would block, -1 failed. */
-static int _tunnel_send(_az_mqtt_proxy_tunnel* t, int fd)
+/** @brief _az_mqtt_http_connect_send_fn over a socket; @p context is the int descriptor. */
+static int32_t _tunnel_send(void* context, uint8_t const* data, int32_t size)
 {
-  uint8_t request[_AZ_MQTT_HTTP_CONNECT_REQUEST_MAX];
-  int32_t size = 0;
-  int result = -1;
-  if (az_result_succeeded(_az_mqtt_http_connect_request(
-          t->proxy, t->host, t->port, AZ_SPAN_FROM_BUFFER(request), &size)))
-  {
-    result = 1;
-    while (t->sent < size && result == 1)
-    {
-      int32_t const n = _az_mqtt_send_nosignal(fd, request + t->sent, size - t->sent);
-      result = n > 0 ? 1 : (n == 0 ? 0 : -1);
-      t->sent += n > 0 ? n : 0;
-    }
-  }
-  az_span_fill(AZ_SPAN_FROM_BUFFER(request), 0); // It holds the credentials.
-  return result;
+  return _az_mqtt_send_nosignal(*(int const*)context, data, size);
 }
 
 az_result _az_mqtt_proxy_tunnel_poll(
@@ -412,14 +397,19 @@ az_result _az_mqtt_proxy_tunnel_poll(
     bool const sending = t->sent < t->request_size;
     if (sending)
     {
-      int const sent = _tunnel_send(t, fd);
-      if (sent < 0)
+      az_result const sent = _az_mqtt_http_connect_send_request(
+          t->proxy, t->host, t->port, &t->sent, _tunnel_send, &fd);
+      if (sent == AZ_MQTT_ERROR_PROXY)
       {
         return _tunnel_socket_failure(errno, sink);
       }
-      if (sent > 0)
+      if (az_result_succeeded(sent))
       {
         continue;
+      }
+      if (sent != AZ_MQTT_ERROR_TIMEOUT)
+      {
+        return sent;
       }
     }
     int const w = _az_mqtt_wait_fd(

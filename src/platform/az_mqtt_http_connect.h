@@ -21,6 +21,12 @@
 /** @brief Longest reply accepted (status line and headers). */
 #define _AZ_MQTT_HTTP_CONNECT_REPLY_MAX 8192
 
+/**
+ * @brief Sends up to @p size bytes of @p data without blocking.
+ * @return Bytes sent (> 0), 0 if none can be sent now, -1 on error.
+ */
+typedef int32_t (*_az_mqtt_http_connect_send_fn)(void* context, uint8_t const* data, int32_t size);
+
 /** @brief Reply parsing state. */
 typedef struct
 {
@@ -49,6 +55,24 @@ AZ_NODISCARD az_result _az_mqtt_http_connect_request(
     az_span buffer,
     int32_t* out_size);
 
+
+/**
+ * @brief Send the rest of the CONNECT request (see _az_mqtt_http_connect_request()) with
+ * @p send; *@p in_out_sent counts what was sent and is kept across calls. The request is
+ * rebuilt for each call and cleared afterwards, so the credentials are not kept.
+ *
+ * @retval AZ_OK All sent.
+ * @retval AZ_MQTT_ERROR_TIMEOUT @p send could send no more now: call again when it can.
+ * @retval AZ_MQTT_ERROR_PROXY @p send failed.
+ * @retval AZ_MQTT_ERROR_INVALID_CONFIG @p host cannot be put in a request.
+ */
+AZ_NODISCARD az_result _az_mqtt_http_connect_send_request(
+    az_mqtt_proxy_options const* proxy,
+    az_span host,
+    uint16_t port,
+    int32_t* in_out_sent,
+    _az_mqtt_http_connect_send_fn send,
+    void* context);
 
 void _az_mqtt_http_connect_reply_init(_az_mqtt_http_connect_reply* reply);
 

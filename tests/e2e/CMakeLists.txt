@@ -38,6 +38,26 @@ if(AZ_MQTT_ENABLE_MQTTV3 AND AZ_MQTT_ENABLE_MQTTV5)
   add_test(NAME az_mqtt_test_both_versions COMMAND az_mqtt_test_both_versions)
 endif()
 
+# ── Through an HTTP CONNECT proxy (in-process, every platform) ─
+
+if(AZ_MQTT_ENABLE_PROXY)
+  find_package(Threads REQUIRED)
+  set(_proxy_defs)
+  if(WIN32 OR NOT AZ_MQTT_TLS_BACKEND_RESOLVED STREQUAL "none")
+    set(_proxy_defs E2E_TLS=1 E2E_CA_CERT_PATH="${E2E_CA_CERT_PATH}")
+  endif()
+  add_az_mqtt_e2e_test(proxy test_proxy.c ${_proxy_defs})
+  foreach(version 3 5)
+    if(TARGET az_mqtt${version}_test_proxy)
+      target_sources(az_mqtt${version}_test_proxy PRIVATE e2e_proxy.c)
+      target_link_libraries(az_mqtt${version}_test_proxy PRIVATE Threads::Threads)
+      if(WIN32)
+        target_link_libraries(az_mqtt${version}_test_proxy PRIVATE ws2_32)
+      endif()
+    endif()
+  endforeach()
+endif()
+
 # ── TLS ──────────────────────────────────────────────────────
 
 if(WIN32)
