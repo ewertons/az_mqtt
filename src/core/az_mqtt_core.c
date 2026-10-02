@@ -97,7 +97,7 @@ static void _log_connect(az_mqtt_core* core)
   {
     return;
   }
-  uint8_t buffer[128];
+  uint8_t buffer[240];
   az_span out = AZ_SPAN_FROM_BUFFER(buffer);
   _log_append(&out, AZ_SPAN_FROM_STR("connect "));
   int32_t const host_size = az_span_size(_S(core).hostname);
@@ -107,6 +107,15 @@ static void _log_connect(az_mqtt_core* core)
   if (_S(core).tls_options != NULL)
   {
     _log_append(&out, AZ_SPAN_FROM_STR(" tls"));
+  }
+  az_mqtt_proxy_options const* const proxy = _S(core).proxy;
+  if (proxy != NULL && az_span_size(proxy->host) > 0) // Never its credentials.
+  {
+    int32_t const proxy_size = az_span_size(proxy->host);
+    _log_append(&out, AZ_SPAN_FROM_STR(" via "));
+    _log_append(&out, az_span_slice(proxy->host, 0, proxy_size > 96 ? 96 : proxy_size));
+    _log_append(&out, AZ_SPAN_FROM_STR(":"));
+    _log_append_i32(&out, proxy->port);
   }
   _log_write(AZ_LOG_MQTT_CONNECTION, AZ_SPAN_FROM_BUFFER(buffer), out);
 }

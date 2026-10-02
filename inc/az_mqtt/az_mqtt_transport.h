@@ -29,6 +29,35 @@
  */
 typedef struct az_mqtt_transport az_mqtt_transport;
 
+// ──────────────────────── Proxy options ──────────────────────
+
+/** @brief Longest proxy host name. */
+#define AZ_MQTT_PROXY_HOST_MAX 255
+
+/** @brief Longest proxy user name and password, together. */
+#define AZ_MQTT_PROXY_CREDENTIALS_MAX 255
+
+/**
+ * @brief HTTP proxy to tunnel the connection through (HTTP CONNECT).
+ *
+ * TLS, when used, runs inside the tunnel, end to end with the server: the proxy sees no
+ * plaintext, and the server is verified against the host passed to connect, not the proxy.
+ * Nothing is taken from the environment (e.g. https_proxy).
+ */
+typedef struct
+{
+  /** @brief Proxy host name or IP address (without brackets); empty: no proxy. */
+  az_span host;
+  /** @brief Proxy port; must not be 0. */
+  uint16_t port;
+  /**
+   * @brief Sent with @p password as HTTP Basic authentication; empty: no authentication.
+   * Basic credentials are readable by anyone on the path to the proxy.
+   */
+  az_span username;
+  az_span password;
+} az_mqtt_proxy_options;
+
 // ──────────────────────── TLS options ────────────────────────
 
 /**
@@ -184,7 +213,9 @@ AZ_NODISCARD az_result az_mqtt_transport_init(az_mqtt_transport* transport);
  * @retval AZ_MQTT_ERROR_INVALID_CONFIG Only one of client_cert_path / client_key_path set.
  * @retval AZ_MQTT_ERROR_NAME_RESOLUTION, AZ_MQTT_ERROR_CONNECTION_REFUSED,
  *         AZ_MQTT_ERROR_TLS_HANDSHAKE, AZ_MQTT_ERROR_TLS_VERIFY, AZ_MQTT_ERROR_TRANSPORT
- *         The native errors behind them go to az_mqtt_transport_set_error_callback().
+ *         The native errors behind them go to az_mqtt_transport_set_error_callback(). With a
+ *         proxy, name resolution and the TCP connect concern the proxy.
+ * @retval AZ_MQTT_ERROR_PROXY, AZ_MQTT_ERROR_PROXY_AUTH The proxy did not open the tunnel.
  */
 AZ_NODISCARD az_result az_mqtt_transport_connect(
     az_mqtt_transport* transport,
@@ -260,6 +291,8 @@ typedef enum
    * Schannel certificate chain policy error (CERT_E_*).
    */
   AZ_MQTT_NATIVE_ERROR_TLS_VERIFY = 4,
+  /** @brief The HTTP proxy's reply status (e.g. 407); 0 if the reply was not valid HTTP. */
+  AZ_MQTT_NATIVE_ERROR_PROXY = 5,
 } az_mqtt_native_error_source;
 
 /** @brief One platform error behind a transport failure, for diagnostics. */
@@ -290,6 +323,20 @@ typedef struct
  * the transport or the client using it.
  */
 typedef void (*az_mqtt_transport_error_fn)(az_mqtt_native_error const* error, void* context);
+
+/**
+ * @brief Connect through @p proxy from the next connect on (NULL, or an empty host: directly).
+ *
+ * @p proxy and the spans in it are used, not copied: they must stay valid while set. With a
+ * proxy, the host passed to az_mqtt_transport_connect_start() must stay valid until the connect
+ * completes. A connect through a proxy never falls back to connecting directly.
+ *
+ * @retval AZ_MQTT_ERROR_INVALID_CONFIG Port 0; host or credentials too long, or containing CR,
+ *         LF or NUL; user name containing ':'; or a password without a user name.
+ * @retval AZ_MQTT_ERROR_NOT_SUPPORTED This transport has no proxy support.
+ */
+AZ_NODISCARD az_result
+az_mqtt_transport_set_proxy(az_mqtt_transport* transport, az_mqtt_proxy_options const* proxy);
 
 /**
  * @brief Set the callback for @p transport's native errors (NULL: none). Clients set it at

@@ -7,22 +7,28 @@ GCC 12.2, `-O3 -DNDEBUG`, x86-64, Debian 12, no TLS. An application links `az_mq
 
 | Module | Library | .text | .rodata | .data | .bss |
 |---|---|---:|---:|---:|---:|
-| az_mqtt_core.c | core | 5,804 B | 269 B | 0 | 0 |
+| az_mqtt_core.c | core | 6,167 B | 275 B | 0 | 0 |
 | az_mqtt_codec_common.c | core | 1,399 B | 0 | 0 | 0 |
-| transport_posix.c | core | 1,457 B | 0 | 0 | 0 |
-| az_mqtt_socket_posix.c | core | 4,759 B | 7 B | 0 | 0 |
-| az_mqtt3_client.c | mqttv3 | 2,480 B | 56 B | 0 | 0 |
+| transport_posix.c | core | 1,905 B | 0 | 0 | 0 |
+| az_mqtt_socket_posix.c | core | 6,513 B | 7 B | 0 | 0 |
+| az_mqtt_http_connect.c | core | 2,074 B | 100 B | 0 | 0 |
+| az_mqtt3_client.c | mqttv3 | 2,512 B | 56 B | 0 | 0 |
 | az_mqtt3_codec.c | mqttv3 | 2,651 B | 37 B | 0 | 0 |
-| az_mqtt5_client.c | mqttv5 | 3,486 B | 64 B | 0 | 0 |
+| az_mqtt5_client.c | mqttv5 | 3,518 B | 64 B | 0 | 0 |
 | az_mqtt5_codec.c | mqttv5 | 9,993 B | 299 B | 0 | 0 |
-| **mqttv3 application** | core + mqttv3 | **18,550 B** | **369 B** | **0** | **0** |
-| **mqttv5 application** | core + mqttv5 | **26,898 B** | **639 B** | **0** | **0** |
-| **Both versions** | core + mqttv3 + mqttv5 | **32,029 B** | **732 B** | **0** | **0** |
+| **mqttv3 application** | core + mqttv3 | **23,221 B** | **475 B** | **0** | **0** |
+| **mqttv5 application** | core + mqttv5 | **31,569 B** | **745 B** | **0** | **0** |
+| **Both versions** | core + mqttv3 + mqttv5 | **36,732 B** | **838 B** | **0** | **0** |
+
+Proxy support (`AZ_MQTT_ENABLE_PROXY`, default `ON`) also links azure-sdk-for-c `az_base64.c`
+(4,633 B .text, 65 B .rodata). With it `OFF`, `az_mqtt_http_connect.c` and the tunnel code are
+compiled out: each application is then 4,180 B .text and 100 B .rodata smaller, plus
+`az_base64.c` (at `-Os`: 2,471 B, plus 1,596 B for `az_base64.c`).
 
 azure-sdk-for-c `LOGGING=OFF` (`AZ_NO_LOGGING`) compiles az_mqtt logging out: az_mqtt_core.c is then
-3,932 B (.text) and 0 (.rodata): each application 1,872 B and 269 B smaller.
+4,023 B (.text) and 0 (.rodata): each application 2,144 B and 275 B smaller.
 
-RAM per client: `az_mqtt3_client` 280 B, `az_mqtt5_client` 472 B (x86-64), plus 4 B per `inflight_control_buffer` entry
+RAM per client: `az_mqtt3_client` 288 B, `az_mqtt5_client` 480 B (x86-64), plus 4 B per `inflight_control_buffer` entry
 (caller storage).
 
 ## Before the shared core (az_mqtt5 library)

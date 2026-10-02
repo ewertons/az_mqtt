@@ -10,6 +10,7 @@
 #include <stddef.h>
 #include <setjmp.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
@@ -21,6 +22,7 @@
 #include "az_mqtt_test_api.h"
 
 #include "test_native_errors.h"
+#include "test_proxy.h"
 #include "test_server.h"
 
 /** @brief Deliberately discard a result (gcc ignores a (void) cast on warn_unused_result). */
@@ -180,6 +182,9 @@ static int s_inflight_slots = 4;
 static bool s_with_secrets;
 static AZ_MQTT_T(will_options) s_will;
 
+/** @brief Proxy the next _setup() connects through (then reset); NULL: none. */
+static az_mqtt_proxy_options const* s_proxy;
+
 static void _setup(fixture* f, test_server_options const* so, uint16_t keep_alive_s)
 {
   memset(f, 0, sizeof(*f));
@@ -228,6 +233,8 @@ static void _setup(fixture* f, test_server_options const* so, uint16_t keep_aliv
       s_inflight_slots * (int32_t)sizeof(az_mqtt_inflight_entry));
   s_inflight_slots = 4; // Reset here: a failed test skips _teardown().
   o.on_connection_closed = _on_closed;
+  o.proxy_options = s_proxy;
+  s_proxy = NULL;
   o.on_transport_error = _on_transport_error;
 #if AZ_MQTT_TEST_VERSION == 5
   o.on_disconnect = _on_disconnect;
@@ -843,6 +850,30 @@ static void native_errors_reach_the_client_before_the_session_closes(void** stat
   _teardown(&f);
 }
 
+static void invalid_proxy_options_fail_initialization(void** state)
+{
+  (void)state;
+  az_mqtt_proxy_options bad;
+  memset(&bad, 0, sizeof(bad));
+  bad.host = AZ_SPAN_FROM_STR("127.0.0.1");
+  bad.port = 0;
+  fixture f;
+  memset(&f, 0, sizeof(f));
+  f.transport = (az_mqtt_transport*)calloc(1, (size_t)az_mqtt_transport_sizeof());
+  assert_non_null(f.transport);
+  assert_int_equal(az_mqtt_transport_init(f.transport), AZ_OK);
+  AZ_MQTT_T(client_options) o;
+  memset(&o, 0, sizeof(o));
+  o.transport = f.transport;
+  o.proxy_options = &bad;
+#ifndef AZ_MQTT_NO_PROXY
+  assert_int_equal(AZ_MQTT_T(client_init)(&f.client, &o), AZ_MQTT_ERROR_INVALID_CONFIG);
+#else
+  assert_int_equal(AZ_MQTT_T(client_init)(&f.client, &o), AZ_MQTT_ERROR_NOT_SUPPORTED);
+#endif
+  free(f.transport);
+}
+
 static void a_peer_close_is_reported_as_connection_closed(void** state)
 {
   (void)state;
@@ -897,9 +928,26 @@ static void logs_never_contain_credentials_topics_or_payloads(void** state)
 #endif
   so.ack_publishes = true;
   s_with_secrets = true;
+#ifndef AZ_MQTT_NO_PROXY
+  test_proxy_options po = { 0 };
+  po.username = "SECRET-PROXY-USER";
+  po.password = "SECRET-PROXY-PASSWORD";
+  test_proxy* proxy = test_proxy_start(&po);
+  assert_non_null(proxy);
+  az_mqtt_proxy_options proxy_options;
+  memset(&proxy_options, 0, sizeof(proxy_options));
+  proxy_options.host = AZ_SPAN_FROM_STR("127.0.0.1");
+  proxy_options.port = test_proxy_port(proxy);
+  proxy_options.username = AZ_SPAN_FROM_STR("SECRET-PROXY-USER");
+  proxy_options.password = AZ_SPAN_FROM_STR("SECRET-PROXY-PASSWORD");
+  s_proxy = &proxy_options;
+#endif
   fixture f;
   _setup(&f, &so, 30);
   assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+#ifndef AZ_MQTT_NO_PROXY
+  assert_int_equal(test_proxy_tunnels(proxy), 1);
+#endif
   AZ_MQTT_T(subscription) sub;
   memset(&sub, 0, sizeof(sub));
   sub.topic_filter = AZ_SPAN_FROM_STR("SECRET-FILTER");
@@ -917,10 +965,15 @@ static void logs_never_contain_credentials_topics_or_payloads(void** state)
   assert_int_equal(AZ_MQTT_TEST_DISCONNECT(&f.client), AZ_OK);
   az_log_set_message_callback(NULL);
   _teardown(&f);
-
   assert_non_null(strstr(s_log, "connect 127.0.0.1:"));
+#ifndef AZ_MQTT_NO_PROXY
+  char via[48];
+  snprintf(via, sizeof(via), " via 127.0.0.1:%u\n", test_proxy_port(proxy));
+  test_proxy_stop(proxy);
+  assert_non_null(strstr(s_log, via)); // The proxy, never its credentials.
 #if !defined(AZ_MQTT_TEST_BACKEND_NONE)
-  assert_non_null(strstr(s_log, " tls\n"));
+  assert_non_null(strstr(s_log, " tls via "));
+#endif
 #endif
   assert_non_null(strstr(s_log, "sent CONNECT "));
   assert_non_null(strstr(s_log, "received CONNACK "));
@@ -1137,6 +1190,7 @@ int main(void)
     cmocka_unit_test(a_failed_pubrec_ends_the_exchange),
 #endif
     cmocka_unit_test(native_errors_reach_the_client_before_the_session_closes),
+    cmocka_unit_test(invalid_proxy_options_fail_initialization),
     cmocka_unit_test(a_peer_close_is_reported_as_connection_closed),
 #ifndef AZ_NO_LOGGING
     cmocka_unit_test(logs_never_contain_credentials_topics_or_payloads),

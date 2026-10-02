@@ -54,6 +54,8 @@ struct az_mqtt_core
     az_span receive_buffer;
     az_span hostname;
     az_mqtt_tls_options const* tls_options;
+    /** @brief For logging; the transport uses it (az_mqtt_transport_set_proxy()). */
+    az_mqtt_proxy_options const* proxy;
     _az_mqtt_core_on_closed_fn on_closed;
     _az_mqtt_core_on_transport_error_fn on_transport_error;
     /** @brief In-flight requests: az_mqtt_inflight_entry[] (caller storage), at most UINT16_MAX. */

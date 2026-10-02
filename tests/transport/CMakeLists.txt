@@ -14,3 +14,6 @@ elseif(MBEDTLS_INCLUDE_DIR)
   target_link_libraries(az_mqtt_test_transport_credentials PRIVATE
     ${MBEDTLS_SSL_LIB} ${MBEDTLS_X509_LIB} ${MBEDTLS_CRYPTO_LIB})
 endif()
+if(AZ_MQTT_ENABLE_PROXY)
+  add_az_mqtt_local_test(az_mqtt_test_transport_proxy test_transport_proxy.c)
+endif()

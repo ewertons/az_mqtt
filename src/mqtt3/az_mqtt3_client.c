@@ -211,6 +211,7 @@ az_mqtt3_client_init(az_mqtt3_client* client, az_mqtt3_client_options const* opt
   _az_PRECONDITION_NOT_NULL(options);
   _az_PRECONDITION_NOT_NULL(options->transport);
 
+  _az_RETURN_IF_FAILED(az_mqtt_transport_set_proxy(options->transport, options->proxy_options));
   memset(client, 0, sizeof(*client));
   _CORE(client).transport = options->transport;
   _CORE(client).send_buffer = options->send_buffer;
@@ -218,6 +219,7 @@ az_mqtt3_client_init(az_mqtt3_client* client, az_mqtt3_client_options const* opt
   _CORE(client).hostname = options->hostname;
   _CORE(client).port = options->port;
   _CORE(client).tls_options = options->tls_options;
+  _CORE(client).proxy = options->proxy_options;
   _CORE(client).on_closed = _on_closed;
   _CORE(client).on_transport_error = _on_transport_error;
   _az_mqtt_core_register_transport_errors(&client->_internal.core);

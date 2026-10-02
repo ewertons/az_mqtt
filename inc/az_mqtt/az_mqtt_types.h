@@ -61,6 +61,10 @@ enum az_mqtt_result
   AZ_MQTT_ERROR_TLS_VERIFY = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 26),
   /** @brief The peer closed or reset an established connection. */
   AZ_MQTT_ERROR_CONNECTION_CLOSED = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 27),
+  /** @brief The HTTP proxy did not open the tunnel: a non-2xx reply, a malformed one, or none. */
+  AZ_MQTT_ERROR_PROXY = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 28),
+  /** @brief The HTTP proxy requires other credentials (407 Proxy Authentication Required). */
+  AZ_MQTT_ERROR_PROXY_AUTH = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 29),
 };
 
 // ──────────────────────── Log classifications ────────────────

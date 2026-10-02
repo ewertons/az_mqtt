@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
+#include "az_mqtt_http_connect.h"
+
 #include <az_mqtt/az_mqtt_transport.h>
 #include <az_mqtt/az_mqtt_types.h>
 
@@ -33,6 +35,7 @@ typedef enum
 {
   _WIN_IDLE = 0,
   _WIN_TCP,
+  _WIN_PROXY,
   _WIN_TLS,
   _WIN_CONNECTED,
 } _win_state;
@@ -50,6 +53,14 @@ struct az_mqtt_transport
   int last_socket_error;
   /** @brief The handshake is running: its native errors belong to AZ_MQTT_ERROR_TLS_HANDSHAKE. */
   bool in_handshake;
+
+  /** @brief Proxy to connect through (az_mqtt_transport_set_proxy()); NULL: none. */
+  az_mqtt_proxy_options const* proxy;
+  /** @brief _WIN_PROXY: the server to reach through it, and the reply so far. */
+  az_span proxy_target_host;
+  uint16_t proxy_target_port;
+  bool proxy_request_sent;
+  _az_mqtt_http_connect_reply proxy_reply;
 
   /** @brief _WIN_TCP: resolved addresses, the next one to try, and when the current one started. */
   struct addrinfo* addresses;
@@ -1238,7 +1249,27 @@ AZ_NODISCARD az_result az_mqtt_transport_connect_start(
   }
 #endif
 
-  az_result rc = _tcp_connect_start(transport, host, port);
+  az_result rc = AZ_OK;
+#ifndef AZ_MQTT_NO_PROXY
+  if (transport->proxy != NULL)
+  {
+    uint8_t request[_AZ_MQTT_HTTP_CONNECT_REQUEST_MAX];
+    int32_t size = 0;
+    rc = _az_mqtt_http_connect_request( // Only to validate host now.
+        transport->proxy, host, port, AZ_SPAN_FROM_BUFFER(request), &size);
+    az_span_fill(AZ_SPAN_FROM_BUFFER(request), 0);
+    transport->proxy_target_host = host;
+    transport->proxy_target_port = port;
+    transport->proxy_request_sent = false;
+    _az_mqtt_http_connect_reply_init(&transport->proxy_reply);
+    host = transport->proxy->host;
+    port = transport->proxy->port;
+  }
+#endif
+  if (az_result_succeeded(rc))
+  {
+    rc = _tcp_connect_start(transport, host, port);
+  }
   if (az_result_failed(rc))
   {
     az_mqtt_transport_close(transport);
@@ -1247,6 +1278,104 @@ AZ_NODISCARD az_result az_mqtt_transport_connect_start(
   transport->state = _WIN_TCP;
   return AZ_OK;
 }
+
+/** @brief The state once the connection (or tunnel) to the server is up. */
+static _win_state _after_tcp_state(az_mqtt_transport const* transport)
+{
+#ifdef AZ_MQTT_TLS_SCHANNEL
+  if (transport->tls_requested)
+  {
+    return _WIN_TLS;
+  }
+#else
+  (void)transport;
+#endif
+  return _WIN_CONNECTED;
+}
+
+#ifndef AZ_MQTT_NO_PROXY
+/** @brief Report a failure of the tunnel's connection (WSA error @p err; 0: closed) as PROXY. */
+static az_result _proxy_socket_failure(az_mqtt_transport* transport, int err)
+{
+  if (err != 0)
+  {
+    _report_error(transport, AZ_MQTT_NATIVE_ERROR_SOCKET, err, AZ_MQTT_ERROR_PROXY);
+  }
+  return AZ_MQTT_ERROR_PROXY;
+}
+
+/**
+ * @brief Open the HTTP CONNECT tunnel on the (blocking) socket by @p deadline_ms; resumable.
+ * Reads nothing past the reply.
+ */
+static az_result _proxy_tunnel_poll(az_mqtt_transport* transport, int64_t deadline_ms)
+{
+  if (!transport->proxy_request_sent)
+  {
+    uint8_t request[_AZ_MQTT_HTTP_CONNECT_REQUEST_MAX];
+    int32_t size = 0;
+    az_result rc = _az_mqtt_http_connect_request(
+        transport->proxy,
+        transport->proxy_target_host,
+        transport->proxy_target_port,
+        AZ_SPAN_FROM_BUFFER(request),
+        &size);
+    int err = 0;
+    for (int32_t sent = 0; az_result_succeeded(rc) && sent < size;)
+    {
+      int const n = send(transport->socket_fd, (char const*)request + sent, size - sent, 0);
+      if (n <= 0) // SO_SNDTIMEO bounds a blocked send.
+      {
+        err = WSAGetLastError();
+        rc = AZ_MQTT_ERROR_PROXY;
+      }
+      sent += n > 0 ? n : 0;
+    }
+    az_span_fill(AZ_SPAN_FROM_BUFFER(request), 0); // It holds the credentials.
+    if (az_result_failed(rc))
+    {
+      return rc == AZ_MQTT_ERROR_PROXY ? _proxy_socket_failure(transport, err) : rc;
+    }
+    transport->proxy_request_sent = true;
+  }
+  for (;;)
+  {
+    bool ready = false;
+    az_result rc = _socket_wait_readable(transport, _remaining(deadline_ms), &ready);
+    if (az_result_failed(rc))
+    {
+      return rc;
+    }
+    if (!ready)
+    {
+      return AZ_MQTT_ERROR_TIMEOUT;
+    }
+    // Peek, then take exactly the reply's bytes: what follows is the tunnelled stream's.
+    char buffer[512];
+    int const peeked = recv(transport->socket_fd, buffer, (int)sizeof(buffer), MSG_PEEK);
+    if (peeked <= 0)
+    {
+      return _proxy_socket_failure(transport, peeked == 0 ? 0 : WSAGetLastError());
+    }
+    int32_t consumed = 0;
+    rc = _az_mqtt_http_connect_reply_parse(
+        &transport->proxy_reply, az_span_create((uint8_t*)buffer, peeked), &consumed);
+    if (recv(transport->socket_fd, buffer, consumed, 0) != consumed)
+    {
+      return _proxy_socket_failure(transport, WSAGetLastError());
+    }
+    if (rc != AZ_MQTT_ERROR_TIMEOUT)
+    {
+      if (az_result_failed(rc))
+      {
+        _report_error(transport, AZ_MQTT_NATIVE_ERROR_PROXY, transport->proxy_reply.status, rc);
+      }
+      return rc;
+    }
+  }
+}
+
+#endif // AZ_MQTT_NO_PROXY
 
 AZ_NODISCARD az_result
 az_mqtt_transport_connect_poll(az_mqtt_transport* transport, int32_t timeout_ms)
@@ -1264,15 +1393,24 @@ az_mqtt_transport_connect_poll(az_mqtt_transport* transport, int32_t timeout_ms)
     }
     if (az_result_succeeded(rc))
     {
-      transport->state = _WIN_CONNECTED;
-#ifdef AZ_MQTT_TLS_SCHANNEL
-      if (transport->tls_requested)
-      {
-        transport->state = _WIN_TLS;
-      }
-#endif
+      transport->state = transport->proxy != NULL ? _WIN_PROXY : _after_tcp_state(transport);
     }
   }
+
+#ifndef AZ_MQTT_NO_PROXY
+  if (az_result_succeeded(rc) && transport->state == _WIN_PROXY)
+  {
+    rc = _proxy_tunnel_poll(transport, deadline);
+    if (rc == AZ_MQTT_ERROR_TIMEOUT)
+    {
+      return rc;
+    }
+    if (az_result_succeeded(rc))
+    {
+      transport->state = _after_tcp_state(transport);
+    }
+  }
+#endif
 
 #ifdef AZ_MQTT_TLS_SCHANNEL
   if (az_result_succeeded(rc) && transport->state == _WIN_TLS)
@@ -1371,6 +1509,18 @@ AZ_NODISCARD az_result az_mqtt_transport_receive(
 
   *out_received = az_span_slice(buffer, 0, n);
   return AZ_OK;
+}
+
+AZ_NODISCARD az_result
+az_mqtt_transport_set_proxy(az_mqtt_transport* transport, az_mqtt_proxy_options const* proxy)
+{
+  _az_PRECONDITION_NOT_NULL(transport);
+  az_result const rc = _az_mqtt_http_connect_check(proxy);
+  if (az_result_succeeded(rc))
+  {
+    transport->proxy = proxy != NULL && az_span_size(proxy->host) > 0 ? proxy : NULL;
+  }
+  return rc;
 }
 
 void az_mqtt_transport_set_error_callback(

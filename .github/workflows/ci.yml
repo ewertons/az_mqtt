@@ -67,12 +67,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The mqttv3 job also builds without proxy support (AZ_MQTT_ENABLE_PROXY=OFF).
           - only: 3
             disable: MQTTV5
+            extra: -DAZ_MQTT_ENABLE_PROXY=OFF
           - only: 5
             disable: MQTTV3
     env:
-      CMAKE_ARGS: -DAZ_MQTT_ENABLE_${{ matrix.disable }}=OFF
+      CMAKE_ARGS: -DAZ_MQTT_ENABLE_${{ matrix.disable }}=OFF ${{ matrix.extra }}
     steps:
       - uses: actions/checkout@v7
         with:
