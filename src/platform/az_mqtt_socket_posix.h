@@ -3,15 +3,13 @@
 
 /**
  * @file az_mqtt_socket_posix.h
- * @brief Internal: non-blocking POSIX TCP helpers shared by the POSIX transports.
+ * @brief Internal: non-blocking POSIX TCP helpers of the socket transport.
  *
  * Sockets are non-blocking from creation, never raise SIGPIPE, and every wait is
  * bounded by the caller's timeout.
  */
 #ifndef AZ_MQTT_SOCKET_POSIX_H
 #define AZ_MQTT_SOCKET_POSIX_H
-
-#include "az_mqtt_http_connect.h"
 
 #include <az_mqtt/az_mqtt_transport.h>
 
@@ -141,47 +139,5 @@ az_result _az_mqtt_socket_error(int err, _az_mqtt_error_sink const* sink);
 
 /** @brief Whether the last socket call failed only because it would block. */
 bool _az_mqtt_would_block(void);
-
-/** @brief HTTP CONNECT tunnel being opened on a connected socket. */
-typedef struct
-{
-  az_mqtt_proxy_options const* proxy;
-  az_span host;
-  uint16_t port;
-  /** @brief Request bytes sent, of request_size. */
-  int32_t sent;
-  int32_t request_size;
-  _az_mqtt_http_reply reply;
-} _az_mqtt_proxy_tunnel;
-
-#ifndef AZ_MQTT_NO_PROXY
-
-/**
- * @brief Prepare a tunnel to @p host:@p port through @p proxy (both used, not copied).
- * @retval AZ_MQTT_ERROR_INVALID_CONFIG @p host cannot be put in a request.
- */
-AZ_NODISCARD az_result _az_mqtt_proxy_tunnel_start(
-    _az_mqtt_proxy_tunnel* t,
-    az_mqtt_proxy_options const* proxy,
-    az_span host,
-    uint16_t port);
-
-/**
- * @brief Send the request and read the reply on @p fd for up to @p timeout_ms; resumable.
- *
- * Reads nothing past the reply: what follows belongs to the tunnelled connection.
- *
- * @retval AZ_OK The tunnel is open.
- * @retval AZ_MQTT_ERROR_TIMEOUT Not yet; call again.
- * @retval AZ_MQTT_ERROR_PROXY, AZ_MQTT_ERROR_PROXY_AUTH Refused, a malformed reply, or the
- *         connection failed or closed first. Reported to @p sink (HTTP status or socket error).
- */
-AZ_NODISCARD az_result _az_mqtt_proxy_tunnel_poll(
-    _az_mqtt_proxy_tunnel* t,
-    int fd,
-    int32_t timeout_ms,
-    _az_mqtt_error_sink const* sink);
-
-#endif // AZ_MQTT_NO_PROXY
 
 #endif // AZ_MQTT_SOCKET_POSIX_H

@@ -14,8 +14,8 @@ them isolates the TLS wrapper cost.
 
 | Client | Language | Version | TLS backend | Notes |
 |---|---|---|---|---|
-| `az_mqtt5` (openssl) | C99 | 1.6.0-beta.1 (azure-sdk-for-c submodule) | OpenSSL (`libssl3`, dynamic) | `src/platform/transport_posix.c`. |
-| `az_mqtt5` (mbedtls) | C99 | 1.6.0-beta.1 (azure-sdk-for-c submodule) | mbedTLS (dynamic) | `src/platform/transport_mbedtls.c`. Same MQTT core. |
+| `az_mqtt5` (openssl) | C99 | 1.6.0-beta.1 (azure-sdk-for-c submodule) | OpenSSL (`libssl3`, dynamic) | `src/platform/tls_openssl.c`. |
+| `az_mqtt5` (mbedtls) | C99 | 1.6.0-beta.1 (azure-sdk-for-c submodule) | mbedTLS (dynamic) | `src/platform/tls_mbedtls.c`. Same MQTT core. |
 | `paho_mqtt_c` | C | v1.3.14 (Eclipse Paho MQTT C, fetched via CMake FetchContent) | OpenSSL | Async API (MQTTAsync), internal threads, heap-allocated internals. |
 | `azure_mqtt` | Rust | azure_mqtt v0.1.0 (local path dep in perf_azure_mqtt/azure_mqtt_src/) | OpenSSL (vendored, static) | Tokio async runtime. |
 
@@ -70,7 +70,7 @@ Each client, in its own container:
 
 The two `az_mqtt5` variants differ only by `-DAZ_MQTT_TLS_BACKEND=openssl` vs
 `-DAZ_MQTT_TLS_BACKEND=mbedtls` passed at CMake configure time, which selects
-`src/platform/transport_posix.c` vs `src/platform/transport_mbedtls.c` and
+`src/platform/tls_openssl.c` vs `src/platform/tls_mbedtls.c` and
 links the matching TLS libraries.
 
 ### Rust client
@@ -136,8 +136,8 @@ Sizes of the stripped, size-optimized Release ELF binaries, measured with
 
 - `.text` is executable code. Both `az_mqtt5` variants dynamically link
   their TLS library, so the TLS code itself does **not** appear here; the
-  small delta between them reflects only the wrapper (`transport_posix.c` vs
-  `transport_mbedtls.c`).
+  small delta between them reflects only the wrapper (`tls_openssl.c` vs
+  `tls_mbedtls.c`).
 - `.data` is pre-initialized writable globals.
 - `.bss` is zero-initialized writable globals — dominated by the caller's
   static send / receive / payload / transport buffers.

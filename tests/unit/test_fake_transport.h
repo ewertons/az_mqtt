@@ -33,7 +33,12 @@ typedef struct
   int connect_polls_pending;
   /** @brief Returned by receive once the input is exhausted; AZ_OK: no bytes. */
   az_result end_of_input;
+  /** @brief Non-zero: a failing send or receive first reports this socket error (as a socket does). */
+  int32_t failure_errno;
   int connects;
+  /** @brief Of the last connect_start(). */
+  az_span host;
+  uint16_t port;
   int shutdowns;
   int closes;
   bool connected;

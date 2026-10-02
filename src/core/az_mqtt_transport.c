@@ -99,3 +99,55 @@ void az_mqtt_transport_set_error_callback(
     transport->vtable->set_error_callback(transport, callback, context);
   }
 }
+
+// ──────────────────────── Layers ─────────────────────────────
+
+#include "az_mqtt_layers_internal.h"
+
+static void _on_lower_error(az_mqtt_native_error const* error, void* context)
+{
+  _az_mqtt_layer_errors const* const errors = (_az_mqtt_layer_errors const*)context;
+  if (errors->callback != NULL)
+  {
+    az_mqtt_native_error stamped = *error;
+    stamped.connect_attempt = errors->connect_attempt;
+    if (az_result_failed(errors->phase_result))
+    {
+      stamped.result = errors->phase_result;
+    }
+    errors->callback(&stamped, errors->context);
+  }
+}
+
+void _az_mqtt_layer_errors_attach(_az_mqtt_layer_errors* errors, az_mqtt_transport* lower)
+{
+  az_mqtt_transport_set_error_callback(lower, _on_lower_error, errors);
+}
+
+void _az_mqtt_layer_report(
+    _az_mqtt_layer_errors const* errors,
+    az_mqtt_native_error_source source,
+    int32_t code,
+    az_result result)
+{
+  if (errors->callback != NULL)
+  {
+    az_mqtt_native_error const error = { source, code, result, errors->connect_attempt };
+    errors->callback(&error, errors->context);
+  }
+}
+
+int64_t _az_mqtt_layer_deadline(int32_t timeout_ms)
+{
+  return timeout_ms < 0 ? -1 : az_mqtt_transport_clock_ms() + timeout_ms;
+}
+
+int32_t _az_mqtt_layer_remaining(int64_t deadline_ms)
+{
+  if (deadline_ms < 0)
+  {
+    return -1;
+  }
+  int64_t const left = deadline_ms - az_mqtt_transport_clock_ms();
+  return left <= 0 ? 0 : (left > INT32_MAX ? INT32_MAX : (int32_t)left);
+}
