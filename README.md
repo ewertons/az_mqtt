@@ -24,6 +24,16 @@ the [Azure SDK for C](https://github.com/Azure/azure-sdk-for-c) span and platfor
   request fails with `AZ_MQTT_ERROR_FLOW_CONTROL`. Nothing is resent after a reconnect.
 - mqttv5 enforces the CONNACK Receive Maximum, Maximum QoS, Retain Available, Topic Alias Maximum
   and Maximum Packet Size.
+- Transport failures have distinct results: `AZ_MQTT_ERROR_NAME_RESOLUTION`,
+  `_CONNECTION_REFUSED`, `_TLS_HANDSHAKE`, `_TLS_VERIFY`, `_CONNECTION_CLOSED`, `_TIMEOUT`
+  (`_TRANSPORT` for anything else). The client option `on_transport_error` receives each platform
+  error behind them, in order (errno/WSA, EAI_*, OpenSSL/mbedTLS/Schannel, certificate
+  verification), with the result it leads to and its connect attempt: every address that failed,
+  every queued OpenSSL error. The first with the returned result is the cause.
+- Logging uses azure-sdk-for-c `az_log` (`az_log_set_message_callback`), classifications
+  `AZ_LOG_MQTT_CONNECTION` and `AZ_LOG_MQTT_PACKET`: host, port, packet types and lengths, results
+  and native codes; never credentials, keys, certificates, topics or payloads. azure-sdk-for-c
+  `LOGGING=OFF` compiles it out.
 
 ```c
 #include <az_mqtt5/az_mqtt5_client.h>   /* or az_mqtt3/az_mqtt3_client.h */
@@ -66,6 +76,8 @@ az_result rc = az_mqtt5_client_init(&client, &options);
   - `az_mqtt3_client_disconnect(client)` takes no reason code;
   - removed: `buffers`, `on_disconnect`, properties, AUTH.
 - mqttv3: `az_mqtt3_codec_decode_ack` rejects bytes after the packet identifier. An AUTH packet (reserved in 3.1.1) is a protocol error.
+- Transport failures that were `AZ_MQTT_ERROR_TRANSPORT` may now be one of the specific results
+  above.
 - `options.inflight_control_buffer` is required for QoS 1/2 publish, subscribe and unsubscribe;
   without it they fail with `AZ_MQTT_ERROR_FLOW_CONTROL`. `on_puback`, `on_pubcomp`, `on_suback` and `on_unsuback`
   fire only for identifiers in flight.

@@ -20,6 +20,7 @@
 #include <az_mqtt/az_mqtt_transport.h>
 #include <az_mqtt/az_mqtt_types.h>
 
+#include "test_native_errors.h"
 #include "test_server.h"
 
 #if defined(AZ_MQTT_TEST_BACKEND_OPENSSL)
@@ -124,6 +125,28 @@ static void ca_from_memory_is_trusted(void** state)
   t.ca_cert_pem = az_span_create((uint8_t*)f.ca, (int32_t)strlen(f.ca) + 1);
   assert_int_equal(_connect(&f, &t), AZ_OK);
   assert_true(_exchange(&f));
+  _teardown(&f);
+}
+
+static void a_malformed_ca_from_memory_reports_the_tls_library_error(void** state)
+{
+  (void)state;
+  test_server_options o = test_server_options_default();
+  fixture f;
+  _setup(&f, &o);
+  char* body = strstr(f.ca, "\n") + 1; // Corrupt the base64 body.
+  body[0] = body[0] == '!' ? '?' : '!';
+  az_mqtt_tls_options t = az_mqtt_tls_options_default();
+  t.ca_cert_pem = _pem(f.ca);
+  test_native_errors n;
+  test_native_errors_clear(&n);
+  az_mqtt_transport_set_error_callback(f.transport, test_native_errors_record, &n);
+  assert_int_equal(_connect(&f, &t), AZ_MQTT_ERROR_TRANSPORT);
+  assert_true(n.count >= 1); // Before any connect: no address errors.
+  assert_int_equal(test_native_errors_with_source(&n, AZ_MQTT_NATIVE_ERROR_TLS), n.count);
+  assert_int_not_equal(n.errors[0].code, 0);
+  assert_true(test_native_errors_all_belong_to(&n, AZ_MQTT_ERROR_TRANSPORT, 1));
+  assert_int_equal(test_server_accepted(f.server), 0);
   _teardown(&f);
 }
 
@@ -386,6 +409,7 @@ int main(void)
 {
   const struct CMUnitTest tests[] = {
     cmocka_unit_test(ca_from_memory_is_trusted),
+    cmocka_unit_test(a_malformed_ca_from_memory_reports_the_tls_library_error),
     cmocka_unit_test(untrusted_server_is_rejected_with_ca_from_memory),
     cmocka_unit_test(client_identity_from_memory_is_presented),
     cmocka_unit_test(conflicting_sources_are_refused_before_connecting),

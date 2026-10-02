@@ -84,6 +84,14 @@ typedef void (*az_mqtt5_on_disconnect_fn)(az_mqtt5_client* client, az_mqtt5_disc
  */
 typedef void (*az_mqtt5_on_connection_closed_fn)(az_mqtt5_client* client, az_result reason);
 
+/**
+ * @brief Called for each native transport error (see az_mqtt_transport_error_fn), before the
+ * failing call returns. It must not call into the client or its transport.
+ */
+typedef void (*az_mqtt5_on_transport_error_fn)(
+    az_mqtt5_client* client,
+    az_mqtt_native_error const* error);
+
 // ──────────────────────── Client options ─────────────────────
 
 typedef struct
@@ -161,6 +169,8 @@ typedef struct
   az_mqtt5_client_buffers buffers;
   /** @brief Optional. See az_mqtt5_on_connection_closed_fn. */
   az_mqtt5_on_connection_closed_fn on_connection_closed;
+  /** @brief Optional. See az_mqtt5_on_transport_error_fn. */
+  az_mqtt5_on_transport_error_fn on_transport_error;
 } az_mqtt5_client_options;
 
 // ──────────────────────── Client ─────────────────────────────
@@ -182,6 +192,7 @@ struct az_mqtt5_client
     az_mqtt5_on_pubcomp_fn on_pubcomp;
     az_mqtt5_on_disconnect_fn on_disconnect;
     az_mqtt5_on_connection_closed_fn on_connection_closed;
+    az_mqtt5_on_transport_error_fn on_transport_error;
     void* user_context;
     /** @brief From the accepted CONNACK (MQTT 5.0 defaults when absent); see also the core. */
     uint16_t server_receive_maximum;

@@ -39,6 +39,11 @@ typedef struct
 /** @brief Internal: called by the core when a session ends; see on_connection_closed. */
 typedef void (*_az_mqtt_core_on_closed_fn)(az_mqtt_core* core, az_result reason);
 
+/** @brief Internal: called by the core for each native transport error; see on_transport_error. */
+typedef void (*_az_mqtt_core_on_transport_error_fn)(
+    az_mqtt_core* core,
+    az_mqtt_native_error const* error);
+
 /** @brief Connection, framing, keep-alive and session state of one client. Internal. */
 struct az_mqtt_core
 {
@@ -50,6 +55,7 @@ struct az_mqtt_core
     az_span hostname;
     az_mqtt_tls_options const* tls_options;
     _az_mqtt_core_on_closed_fn on_closed;
+    _az_mqtt_core_on_transport_error_fn on_transport_error;
     /** @brief In-flight requests: az_mqtt_inflight_entry[] (caller storage), at most UINT16_MAX. */
     az_span inflight_control_buffer;
     int64_t last_send_time_ms;

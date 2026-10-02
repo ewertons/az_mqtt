@@ -182,6 +182,9 @@ AZ_NODISCARD az_result az_mqtt_transport_init(az_mqtt_transport* transport);
  * @retval AZ_MQTT_ERROR_NOT_SUPPORTED TLS requested from a build without a TLS
  *         backend, or an option the backend cannot honour. Never downgrades.
  * @retval AZ_MQTT_ERROR_INVALID_CONFIG Only one of client_cert_path / client_key_path set.
+ * @retval AZ_MQTT_ERROR_NAME_RESOLUTION, AZ_MQTT_ERROR_CONNECTION_REFUSED,
+ *         AZ_MQTT_ERROR_TLS_HANDSHAKE, AZ_MQTT_ERROR_TLS_VERIFY, AZ_MQTT_ERROR_TRANSPORT
+ *         The native errors behind them go to az_mqtt_transport_set_error_callback().
  */
 AZ_NODISCARD az_result az_mqtt_transport_connect(
     az_mqtt_transport* transport,
@@ -215,7 +218,7 @@ az_mqtt_transport_connect_poll(az_mqtt_transport* transport, int32_t timeout_ms)
 
 /**
  * @brief Send bytes over the transport.
- * @return AZ_OK on success, or an error.
+ * @retval AZ_MQTT_ERROR_CONNECTION_CLOSED The peer closed or reset the connection.
  */
 AZ_NODISCARD az_result az_mqtt_transport_send(az_mqtt_transport* transport, az_span data);
 
@@ -227,6 +230,7 @@ AZ_NODISCARD az_result az_mqtt_transport_send(az_mqtt_transport* transport, az_s
  * @param timeout_ms   Timeout in milliseconds. 0 = non-blocking, -1 = block forever.
  * @param out_received Output: the sub-span of buffer that was filled.
  * @return AZ_OK on success (out_received size can be 0 on timeout), or an error.
+ * @retval AZ_MQTT_ERROR_CONNECTION_CLOSED The peer closed or reset the connection.
  */
 AZ_NODISCARD az_result az_mqtt_transport_receive(
     az_mqtt_transport* transport,
@@ -238,6 +242,63 @@ AZ_NODISCARD az_result az_mqtt_transport_receive(
  * @brief Close the transport connection and release resources.
  */
 void az_mqtt_transport_close(az_mqtt_transport* transport);
+
+/** @brief What az_mqtt_native_error.code is. */
+typedef enum
+{
+  /** @brief errno (POSIX) or WSAGetLastError() (Windows). */
+  AZ_MQTT_NATIVE_ERROR_SOCKET = 1,
+  /** @brief getaddrinfo() result: EAI_* (POSIX) or WSA* (Windows). */
+  AZ_MQTT_NATIVE_ERROR_NAME_RESOLUTION = 2,
+  /**
+   * @brief An OpenSSL error queue entry, an mbedTLS or PSA error code, or a Schannel
+   * SECURITY_STATUS (Win32 error while loading a certificate file).
+   */
+  AZ_MQTT_NATIVE_ERROR_TLS = 3,
+  /**
+   * @brief OpenSSL X509_V_ERR_*, mbedTLS verification flags (MBEDTLS_X509_BADCERT_*), or
+   * Schannel certificate chain policy error (CERT_E_*).
+   */
+  AZ_MQTT_NATIVE_ERROR_TLS_VERIFY = 4,
+} az_mqtt_native_error_source;
+
+/** @brief One platform error behind a transport failure, for diagnostics. */
+typedef struct
+{
+  az_mqtt_native_error_source source;
+  int32_t code;
+  /**
+   * @brief What the failing call returns (e.g. AZ_MQTT_ERROR_TLS_VERIFY); for an address given up
+   * for the next one, what that address alone would have returned. The first error with the
+   * returned result is its cause.
+   */
+  az_result result;
+  /**
+   * @brief The az_mqtt_transport_connect_start() it belongs to: 1 for the transport's first,
+   * then 2, ... Errors of one connect, and of the session it opened, share it.
+   */
+  uint32_t connect_attempt;
+} az_mqtt_native_error;
+
+/**
+ * @brief Called for each native error, in the order they occur, before the failing call
+ * returns.
+ *
+ * One failure may report several: each address that could not be connected, a socket error
+ * under a TLS failure, every queued OpenSSL error, the certificate verification result. An
+ * orderly close by the peer reports none. Runs inside the transport call: it must not call into
+ * the transport or the client using it.
+ */
+typedef void (*az_mqtt_transport_error_fn)(az_mqtt_native_error const* error, void* context);
+
+/**
+ * @brief Set the callback for @p transport's native errors (NULL: none). Clients set it at
+ * initialization; set it only on a transport used without a client.
+ */
+void az_mqtt_transport_set_error_callback(
+    az_mqtt_transport* transport,
+    az_mqtt_transport_error_fn callback,
+    void* context);
 
 /**
  * @brief Monotonic clock in milliseconds, used for keep-alive and timeouts.

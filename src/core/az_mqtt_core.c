@@ -10,6 +10,7 @@
 #include "az_mqtt_codec_internal.h"
 #include "az_mqtt_core_internal.h"
 
+#include <azure/core/internal/az_log_internal.h>
 #include <azure/core/internal/az_precondition_internal.h>
 #include <azure/core/az_result.h>
 #include <azure/core/az_span.h>
@@ -49,6 +50,143 @@ static az_mqtt_inflight_entry* _get_inflight_entries(az_mqtt_core* core, int32_t
   return (az_mqtt_inflight_entry*)az_span_ptr(_S(core).inflight_control_buffer);
 }
 
+// ──────────────────────── Logging ────────────────────────────
+// Only host, port, packet types and lengths, results and native error codes:
+// never credentials, keys, certificates, topics or payloads.
+
+#ifndef AZ_NO_LOGGING
+/** @brief Append @p text to @p *out, truncated to what fits. */
+static void _log_append(az_span* out, az_span text)
+{
+  int32_t const room = az_span_size(*out);
+  int32_t const size = az_span_size(text) < room ? az_span_size(text) : room;
+  *out = az_span_copy(*out, az_span_slice(text, 0, size));
+}
+
+/** @brief Append @p value in decimal to @p *out. */
+static void _log_append_i32(az_span* out, int32_t value)
+{
+  az_span rest;
+  if (az_result_succeeded(az_span_i32toa(*out, value, &rest)))
+  {
+    *out = rest;
+  }
+}
+
+/** @brief Append @p value as 0x and 8 hex digits to @p *out. */
+static void _log_append_hex(az_span* out, uint32_t value)
+{
+  uint8_t digits[10] = { '0', 'x' };
+  for (int i = 9; i >= 2; i--, value >>= 4)
+  {
+    digits[i] = (uint8_t)"0123456789abcdef"[value & 0xFU];
+  }
+  _log_append(out, AZ_SPAN_FROM_BUFFER(digits));
+}
+
+/** @brief Write what @p buffer holds up to @p rest. */
+static void _log_write(az_log_classification classification, az_span buffer, az_span rest)
+{
+  _az_LOG_WRITE(classification, az_span_slice(buffer, 0, az_span_size(buffer) - az_span_size(rest)));
+}
+
+/** @brief "connect <host>:<port>[ tls]". */
+static void _log_connect(az_mqtt_core* core)
+{
+  if (!_az_LOG_SHOULD_WRITE(AZ_LOG_MQTT_CONNECTION))
+  {
+    return;
+  }
+  uint8_t buffer[128];
+  az_span out = AZ_SPAN_FROM_BUFFER(buffer);
+  _log_append(&out, AZ_SPAN_FROM_STR("connect "));
+  int32_t const host_size = az_span_size(_S(core).hostname);
+  _log_append(&out, az_span_slice(_S(core).hostname, 0, host_size > 96 ? 96 : host_size));
+  _log_append(&out, AZ_SPAN_FROM_STR(":"));
+  _log_append_i32(&out, _S(core).port);
+  if (_S(core).tls_options != NULL)
+  {
+    _log_append(&out, AZ_SPAN_FROM_STR(" tls"));
+  }
+  _log_write(AZ_LOG_MQTT_CONNECTION, AZ_SPAN_FROM_BUFFER(buffer), out);
+}
+
+/** @brief "closed <result> native <source>:<code>". */
+static void _log_close(az_mqtt_core* core, az_result reason)
+{
+  if (!_az_LOG_SHOULD_WRITE(AZ_LOG_MQTT_CONNECTION))
+  {
+    return;
+  }
+  (void)core;
+  uint8_t buffer[24];
+  az_span out = AZ_SPAN_FROM_BUFFER(buffer);
+  _log_append(&out, AZ_SPAN_FROM_STR("closed "));
+  _log_append_hex(&out, (uint32_t)reason);
+  _log_write(AZ_LOG_MQTT_CONNECTION, AZ_SPAN_FROM_BUFFER(buffer), out);
+}
+
+/** @brief "native <source>:<code> <result> attempt <n>". */
+static void _log_native_error(az_mqtt_native_error const* error)
+{
+  if (!_az_LOG_SHOULD_WRITE(AZ_LOG_MQTT_CONNECTION))
+  {
+    return;
+  }
+  uint8_t buffer[64];
+  az_span out = AZ_SPAN_FROM_BUFFER(buffer);
+  _log_append(&out, AZ_SPAN_FROM_STR("native "));
+  _log_append_i32(&out, (int32_t)error->source);
+  _log_append(&out, AZ_SPAN_FROM_STR(":"));
+  _log_append_i32(&out, error->code);
+  _log_append(&out, AZ_SPAN_FROM_STR(" "));
+  _log_append_hex(&out, (uint32_t)error->result);
+  _log_append(&out, AZ_SPAN_FROM_STR(" attempt "));
+  _log_append_i32(&out, (int32_t)error->connect_attempt);
+  _log_write(AZ_LOG_MQTT_CONNECTION, AZ_SPAN_FROM_BUFFER(buffer), out);
+}
+
+/** @brief "<sent|received> <TYPE> <length>"; @p first_byte is the fixed header's. */
+static void _log_packet(az_span direction, uint8_t first_byte, int32_t length)
+{
+  if (!_az_LOG_SHOULD_WRITE(AZ_LOG_MQTT_PACKET))
+  {
+    return;
+  }
+  static char const names[16][12]
+      = { "RESERVED", "CONNECT", "CONNACK",     "PUBLISH",  "PUBACK",  "PUBREC",
+          "PUBREL",   "PUBCOMP", "SUBSCRIBE",   "SUBACK",   "UNSUBSCRIBE", "UNSUBACK",
+          "PINGREQ",  "PINGRESP", "DISCONNECT", "AUTH" };
+  uint8_t buffer[40];
+  az_span out = AZ_SPAN_FROM_BUFFER(buffer);
+  _log_append(&out, direction);
+  _log_append(&out, az_span_create_from_str((char*)(uintptr_t)names[first_byte >> 4]));
+  _log_append(&out, AZ_SPAN_FROM_STR(" "));
+  _log_append_i32(&out, length);
+  _log_write(AZ_LOG_MQTT_PACKET, AZ_SPAN_FROM_BUFFER(buffer), out);
+}
+#else
+#define _log_connect(core)
+#define _log_close(core, reason)
+#define _log_native_error(error)
+#define _log_packet(direction, first_byte, length)
+#endif // AZ_NO_LOGGING
+
+static void _on_native_error(az_mqtt_native_error const* error, void* context)
+{
+  az_mqtt_core* const core = (az_mqtt_core*)context;
+  _log_native_error(error);
+  if (_S(core).on_transport_error != NULL)
+  {
+    _S(core).on_transport_error(core, error);
+  }
+}
+
+void _az_mqtt_core_register_transport_errors(az_mqtt_core* core)
+{
+  az_mqtt_transport_set_error_callback(_S(core).transport, _on_native_error, core);
+}
+
 /** @brief Free every in-flight entry. */
 static void _clear_inflight_entries(az_mqtt_core* core)
 {
@@ -64,6 +202,10 @@ void _az_mqtt_core_close(
 {
   bool const was_open = _S(core).state != AZ_MQTT_CLIENT_STATE_DISCONNECTED;
   az_mqtt_transport_close(_S(core).transport);
+  if (was_open)
+  {
+    _log_close(core, reason);
+  }
   _S(core).state = AZ_MQTT_CLIENT_STATE_DISCONNECTED;
   _S(core).recv_buf_pos = 0;
   _S(core).ping_outstanding = false;
@@ -98,6 +240,7 @@ az_result _az_mqtt_core_send(
   if (az_result_succeeded(rc))
   {
     _S(core).last_send_time_ms = _get_clock_ms();
+    _log_packet(AZ_SPAN_FROM_STR("sent "), az_span_ptr(_S(core).send_buffer)[0], written);
   }
   return rc;
 }
@@ -378,6 +521,7 @@ az_result _az_mqtt_core_connect_start(az_mqtt_core* core, int32_t timeout_ms)
   _S(core).connect_sent = false;
   _S(core).timer_ms = _deadline(timeout_ms);
   _S(core).state = AZ_MQTT_CLIENT_STATE_CONNECTING;
+  _log_connect(core);
 
   az_result rc = az_mqtt_transport_connect_start(
       _S(core).transport, _S(core).hostname, _S(core).port, _S(core).tls_options);
@@ -557,6 +701,7 @@ az_result _az_mqtt_core_process_loop(
     }
     if (az_result_succeeded(rc))
     {
+      _log_packet(AZ_SPAN_FROM_STR("received "), (uint8_t)(type << 4), packet_size);
       // While connecting, only a CONNACK is valid.
       rc = connecting && type != AZ_MQTT_PACKET_TYPE_CONNACK ? AZ_MQTT_ERROR_PROTOCOL
                                                              : dispatch(core, type, flags, body);

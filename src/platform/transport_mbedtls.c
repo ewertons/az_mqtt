@@ -18,6 +18,7 @@
 #include <azure/core/az_span.h>
 #include <azure/core/internal/az_precondition_internal.h>
 
+#include <errno.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -74,6 +75,7 @@ struct az_mqtt_transport
   /** @brief Contexts are initialized (and own resources, e.g. mutexes) until freed. */
   bool tls_contexts_ready;
 #endif
+  _az_mqtt_error_sink errors;
   bool connected;
 };
 
@@ -165,6 +167,10 @@ static int _tls_recv(void* ctx, unsigned char* buffer, size_t size)
   ssize_t n = recv(*(int*)ctx, buffer, size, 0);
   if (n >= 0)
   {
+    if (n == 0)
+    {
+      errno = 0;
+    }
     return (int)n; // 0 is an orderly close.
   }
   return _az_mqtt_would_block() ? MBEDTLS_ERR_SSL_WANT_READ : MBEDTLS_ERR_NET_RECV_FAILED;
@@ -251,39 +257,48 @@ static int _parse_key(void* transport_ptr, unsigned char const* buf, size_t len)
 /**
  * @brief Build the TLS configuration and session for @p host; the socket is attached later.
  */
+/** @brief Report @p ret (an mbedTLS or PSA error); AZ_MQTT_ERROR_TRANSPORT. */
+static az_result _tls_setup_failure(az_mqtt_transport* transport, int ret)
+{
+  _az_mqtt_report_error(&transport->errors, AZ_MQTT_NATIVE_ERROR_TLS, ret, AZ_MQTT_ERROR_TRANSPORT);
+  return AZ_MQTT_ERROR_TRANSPORT;
+}
+
 static az_result _tls_prepare(
     az_mqtt_transport* transport,
     az_span host,
     az_mqtt_tls_options const* tls_options)
 {
+  int ret = 0;
 #if defined(MBEDTLS_PSA_CRYPTO_C) || MBEDTLS_VERSION_MAJOR >= 4
   // Required by mbedTLS 4 and by 3.x TLS 1.3; idempotent.
-  if (psa_crypto_init() != PSA_SUCCESS)
+  psa_status_t const status = psa_crypto_init();
+  if (status != PSA_SUCCESS)
   {
-    return AZ_MQTT_ERROR_TRANSPORT;
+    return _tls_setup_failure(transport, (int)status);
   }
 #endif
 #if _AZ_MQTT_MBEDTLS_LEGACY_RNG
   static const char pers[] = "az_mqtt_mbedtls";
-  if (mbedtls_ctr_drbg_seed(
-          &transport->ctr_drbg,
-          mbedtls_entropy_func,
-          &transport->entropy,
-          (const unsigned char*)pers,
-          sizeof(pers) - 1)
-      != 0)
+  ret = mbedtls_ctr_drbg_seed(
+      &transport->ctr_drbg,
+      mbedtls_entropy_func,
+      &transport->entropy,
+      (const unsigned char*)pers,
+      sizeof(pers) - 1);
+  if (ret != 0)
   {
-    return AZ_MQTT_ERROR_TRANSPORT;
+    return _tls_setup_failure(transport, ret);
   }
 #endif
-  if (mbedtls_ssl_config_defaults(
-          &transport->conf,
-          MBEDTLS_SSL_IS_CLIENT,
-          MBEDTLS_SSL_TRANSPORT_STREAM,
-          MBEDTLS_SSL_PRESET_DEFAULT)
-      != 0)
+  ret = mbedtls_ssl_config_defaults(
+      &transport->conf,
+      MBEDTLS_SSL_IS_CLIENT,
+      MBEDTLS_SSL_TRANSPORT_STREAM,
+      MBEDTLS_SSL_PRESET_DEFAULT);
+  if (ret != 0)
   {
-    return AZ_MQTT_ERROR_TRANSPORT;
+    return _tls_setup_failure(transport, ret);
   }
 #if _AZ_MQTT_MBEDTLS_LEGACY_RNG
   mbedtls_ssl_conf_rng(&transport->conf, mbedtls_ctr_drbg_random, &transport->ctr_drbg);
@@ -291,7 +306,6 @@ static az_result _tls_prepare(
 
   char path[256];
   az_result rc = AZ_OK;
-  int ret = 0;
   if (az_span_size(tls_options->ca_cert_path) > 0)
   {
     rc = _span_to_cstr(tls_options->ca_cert_path, path, (int32_t)sizeof(path));
@@ -303,7 +317,7 @@ static az_result _tls_prepare(
   }
   if (az_result_failed(rc) || ret != 0)
   {
-    return az_result_failed(rc) ? rc : AZ_MQTT_ERROR_TRANSPORT;
+    return az_result_failed(rc) ? rc : _tls_setup_failure(transport, ret);
   }
   if (az_span_size(tls_options->ca_cert_path) > 0 || az_span_size(tls_options->ca_cert_pem) > 0)
   {
@@ -363,7 +377,7 @@ static az_result _tls_prepare(
   }
   if (az_result_failed(rc) || ret != 0)
   {
-    return az_result_failed(rc) ? rc : AZ_MQTT_ERROR_TRANSPORT;
+    return az_result_failed(rc) ? rc : _tls_setup_failure(transport, ret);
   }
 
   if (tls_options->configure != NULL)
@@ -377,9 +391,10 @@ static az_result _tls_prepare(
     mbedtls_ssl_conf_authmode(&transport->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
   }
 
-  if (mbedtls_ssl_setup(&transport->ssl, &transport->conf) != 0)
+  ret = mbedtls_ssl_setup(&transport->ssl, &transport->conf);
+  if (ret != 0)
   {
-    return AZ_MQTT_ERROR_TRANSPORT;
+    return _tls_setup_failure(transport, ret);
   }
 
   // Sets both SNI and the name the certificate is verified against.
@@ -389,19 +404,70 @@ static az_result _tls_prepare(
   {
     return rc;
   }
-  if (mbedtls_ssl_set_hostname(&transport->ssl, host_str) != 0)
+  ret = mbedtls_ssl_set_hostname(&transport->ssl, host_str);
+  if (ret != 0)
   {
-    return AZ_MQTT_ERROR_TRANSPORT;
+    return _tls_setup_failure(transport, ret);
   }
   transport->use_tls = true;
   return AZ_OK;
 }
 
 /**
- * @brief Wait for what an mbedTLS call asked for: 1 retry, 0 timed out, -1 failed.
+ * @brief Classify a failed mbedTLS call (@p ret; @p saved_errno right after it) and record its
+ * native error.
  */
-static int _tls_wait(az_mqtt_transport* transport, int ret, int64_t deadline)
+static az_result _tls_failure(
+    az_mqtt_transport* transport,
+    int ret,
+    int saved_errno,
+    bool handshake)
 {
+  _az_mqtt_error_sink const* const sink = &transport->errors;
+  if (handshake && ret == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED)
+  {
+    _az_mqtt_report_error(
+        sink,
+        AZ_MQTT_NATIVE_ERROR_TLS_VERIFY,
+        (int32_t)mbedtls_ssl_get_verify_result(&transport->ssl),
+        AZ_MQTT_ERROR_TLS_VERIFY);
+    _az_mqtt_report_error(sink, AZ_MQTT_NATIVE_ERROR_TLS, ret, AZ_MQTT_ERROR_TLS_VERIFY);
+    return AZ_MQTT_ERROR_TLS_VERIFY;
+  }
+  if (!handshake
+      && (ret == 0 || ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || ret == MBEDTLS_ERR_SSL_CONN_EOF))
+  {
+    return AZ_MQTT_ERROR_CONNECTION_CLOSED; // Orderly: no native error.
+  }
+  az_result rc = handshake ? AZ_MQTT_ERROR_TLS_HANDSHAKE : AZ_MQTT_ERROR_TRANSPORT;
+  if (ret == MBEDTLS_ERR_NET_SEND_FAILED || ret == MBEDTLS_ERR_NET_RECV_FAILED)
+  {
+    rc = handshake ? rc : _az_mqtt_errno_result(saved_errno);
+    if (saved_errno != 0)
+    {
+      _az_mqtt_report_error(sink, AZ_MQTT_NATIVE_ERROR_SOCKET, saved_errno, rc);
+    }
+  }
+  else if (!handshake && ret == MBEDTLS_ERR_NET_CONN_RESET)
+  {
+    rc = AZ_MQTT_ERROR_CONNECTION_CLOSED;
+  }
+  _az_mqtt_report_error(sink, AZ_MQTT_NATIVE_ERROR_TLS, ret, rc);
+  return rc;
+}
+
+/**
+ * @brief Wait for what an mbedTLS call asked for: 1 retry, 0 timed out, -1 failed
+ * (@p out_failure: why).
+ */
+static int _tls_wait(
+    az_mqtt_transport* transport,
+    int ret,
+    int64_t deadline,
+    bool handshake,
+    az_result* out_failure)
+{
+  int const saved_errno = errno;
 #ifdef MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET
   if (ret == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET)
   {
@@ -410,12 +476,18 @@ static int _tls_wait(az_mqtt_transport* transport, int ret, int64_t deadline)
 #endif
   if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE)
   {
+    *out_failure = _tls_failure(transport, ret, saved_errno, handshake);
     return -1;
   }
-  return _az_mqtt_wait_fd(
+  int const w = _az_mqtt_wait_fd(
       transport->socket_fd,
       ret == MBEDTLS_ERR_SSL_WANT_READ ? _AZ_MQTT_WAIT_READ : _AZ_MQTT_WAIT_WRITE,
       _az_mqtt_remaining_ms(deadline));
+  if (w < 0)
+  {
+    *out_failure = _az_mqtt_socket_error(errno, &transport->errors);
+  }
+  return w;
 }
 
 /** @brief Drive the handshake until done, failed or @p deadline. */
@@ -427,17 +499,27 @@ static az_result _tls_handshake(az_mqtt_transport* transport, int64_t deadline)
     if (ret == 0)
     {
       // VERIFY_REQUIRED already fails the handshake; checked again so it stays so.
-      return mbedtls_ssl_get_verify_result(&transport->ssl) == 0 ? AZ_OK
-                                                                 : AZ_MQTT_ERROR_TRANSPORT;
+      uint32_t const flags = mbedtls_ssl_get_verify_result(&transport->ssl);
+      if (flags == 0)
+      {
+        return AZ_OK;
+      }
+      _az_mqtt_report_error(
+          &transport->errors,
+          AZ_MQTT_NATIVE_ERROR_TLS_VERIFY,
+          (int32_t)flags,
+          AZ_MQTT_ERROR_TLS_VERIFY);
+      return AZ_MQTT_ERROR_TLS_VERIFY;
     }
-    int w = _tls_wait(transport, ret, deadline);
+    az_result failure = AZ_MQTT_ERROR_TLS_HANDSHAKE;
+    int w = _tls_wait(transport, ret, deadline, true, &failure);
     if (w == 0)
     {
       return AZ_MQTT_ERROR_TIMEOUT;
     }
     if (w < 0)
     {
-      return AZ_MQTT_ERROR_TRANSPORT;
+      return failure;
     }
   }
 }
@@ -454,6 +536,7 @@ AZ_NODISCARD az_result az_mqtt_transport_connect_start(
   _az_PRECONDITION_NOT_NULL(transport);
 
   az_mqtt_transport_close(transport);
+  transport->errors.connect_attempt++;
 
 #ifdef AZ_MQTT_TLS_MBEDTLS
   if (tls_options != NULL)
@@ -478,7 +561,7 @@ AZ_NODISCARD az_result az_mqtt_transport_connect_start(
   }
 #endif
 
-  az_result rc = _az_mqtt_tcp_connect_start(&transport->tcp, host, port);
+  az_result rc = _az_mqtt_tcp_connect_start(&transport->tcp, host, port, &transport->errors);
   if (az_result_failed(rc))
   {
     az_mqtt_transport_close(transport);
@@ -497,7 +580,8 @@ az_mqtt_transport_connect_poll(az_mqtt_transport* transport, int32_t timeout_ms)
 
   if (transport->state == _TRANSPORT_TCP)
   {
-    rc = _az_mqtt_tcp_connect_poll(&transport->tcp, _az_mqtt_remaining_ms(deadline));
+    rc = _az_mqtt_tcp_connect_poll(
+        &transport->tcp, _az_mqtt_remaining_ms(deadline), &transport->errors);
     if (rc == AZ_MQTT_ERROR_TIMEOUT)
     {
       return rc;
@@ -580,6 +664,7 @@ AZ_NODISCARD az_result az_mqtt_transport_send(az_mqtt_transport* transport, az_s
   while (remaining > 0)
   {
     int w;
+    az_result failure = AZ_MQTT_ERROR_TRANSPORT;
 #ifdef AZ_MQTT_TLS_MBEDTLS
     if (transport->use_tls)
     {
@@ -590,7 +675,7 @@ AZ_NODISCARD az_result az_mqtt_transport_send(az_mqtt_transport* transport, az_s
         remaining -= n;
         continue;
       }
-      w = _tls_wait(transport, n, deadline);
+      w = _tls_wait(transport, n, deadline, false, &failure);
     }
     else
 #endif
@@ -605,12 +690,16 @@ AZ_NODISCARD az_result az_mqtt_transport_send(az_mqtt_transport* transport, az_s
       w = n < 0 ? -1
                 : _az_mqtt_wait_fd(
                     transport->socket_fd, _AZ_MQTT_WAIT_WRITE, _az_mqtt_remaining_ms(deadline));
+      if (w < 0)
+      {
+        failure = _az_mqtt_socket_error(errno, &transport->errors);
+      }
     }
     if (w <= 0)
     {
       // A partial packet may be on the wire: the connection is unusable.
       transport->connected = false;
-      return w == 0 ? AZ_MQTT_ERROR_TIMEOUT : AZ_MQTT_ERROR_TRANSPORT;
+      return w == 0 ? AZ_MQTT_ERROR_TIMEOUT : failure;
     }
   }
   return AZ_OK;
@@ -635,6 +724,7 @@ AZ_NODISCARD az_result az_mqtt_transport_receive(
   for (;;)
   {
     int w;
+    az_result failure = AZ_MQTT_ERROR_TRANSPORT;
 #ifdef AZ_MQTT_TLS_MBEDTLS
     if (transport->use_tls)
     {
@@ -646,7 +736,7 @@ AZ_NODISCARD az_result az_mqtt_transport_receive(
         return AZ_OK;
       }
       // A partial TLS record returns WANT_READ; wait for the rest within the deadline.
-      w = _tls_wait(transport, n, deadline);
+      w = _tls_wait(transport, n, deadline, false, &failure);
     }
     else
 #endif
@@ -664,6 +754,10 @@ AZ_NODISCARD az_result az_mqtt_transport_receive(
         }
         w = n < 0 ? -1 : 1;
       }
+      if (w < 0)
+      {
+        failure = _az_mqtt_socket_error(errno, &transport->errors);
+      }
     }
     if (w == 0)
     {
@@ -672,9 +766,19 @@ AZ_NODISCARD az_result az_mqtt_transport_receive(
     if (w < 0)
     {
       transport->connected = false;
-      return AZ_MQTT_ERROR_TRANSPORT;
+      return failure;
     }
   }
+}
+
+void az_mqtt_transport_set_error_callback(
+    az_mqtt_transport* transport,
+    az_mqtt_transport_error_fn callback,
+    void* context)
+{
+  _az_PRECONDITION_NOT_NULL(transport);
+  transport->errors.callback = callback;
+  transport->errors.context = context;
 }
 
 void az_mqtt_transport_close(az_mqtt_transport* transport)

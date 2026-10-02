@@ -59,6 +59,46 @@ int32_t _az_mqtt_remaining_ms(int64_t deadline_ms)
   return left <= 0 ? 0 : (left > INT32_MAX ? INT32_MAX : (int32_t)left);
 }
 
+void _az_mqtt_report_error(
+    _az_mqtt_error_sink const* sink,
+    az_mqtt_native_error_source source,
+    int32_t code,
+    az_result result)
+{
+  if (sink->callback != NULL)
+  {
+    az_mqtt_native_error const error = { source, code, result, sink->connect_attempt };
+    sink->callback(&error, sink->context);
+  }
+}
+
+az_result _az_mqtt_socket_error(int err, _az_mqtt_error_sink const* sink)
+{
+  az_result const rc = _az_mqtt_errno_result(err);
+  if (err != 0)
+  {
+    _az_mqtt_report_error(sink, AZ_MQTT_NATIVE_ERROR_SOCKET, err, rc);
+  }
+  return rc;
+}
+
+az_result _az_mqtt_errno_result(int err)
+{
+  switch (err)
+  {
+    case 0:
+    case ECONNRESET:
+    case ECONNABORTED:
+    case EPIPE:
+    case ENOTCONN:
+      return AZ_MQTT_ERROR_CONNECTION_CLOSED;
+    case ECONNREFUSED:
+      return AZ_MQTT_ERROR_CONNECTION_REFUSED;
+    default:
+      return AZ_MQTT_ERROR_TRANSPORT;
+  }
+}
+
 bool _az_mqtt_would_block(void)
 {
   return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
@@ -108,6 +148,10 @@ int32_t _az_mqtt_recv_nonblocking(int fd, uint8_t* buffer, int32_t size)
   {
     return 0;
   }
+  if (n == 0)
+  {
+    errno = 0; // Orderly close.
+  }
   return -1;
 }
 
@@ -118,6 +162,7 @@ void _az_mqtt_tcp_connect_init(_az_mqtt_tcp_connect* c)
   c->next = NULL;
   c->owns_addresses = false;
   c->attempt_start_ms = 0;
+  c->last_errno = 0;
 }
 
 static void _release_addresses(_az_mqtt_tcp_connect* c)
@@ -132,7 +177,14 @@ static void _release_addresses(_az_mqtt_tcp_connect* c)
 }
 
 /** @brief Start a non-blocking connect to the next address that accepts one. */
-static az_result _connect_next(_az_mqtt_tcp_connect* c)
+/** @brief Record and report the failure of the current address. */
+static void _fail_address(_az_mqtt_tcp_connect* c, int err, _az_mqtt_error_sink const* sink)
+{
+  c->last_errno = err;
+  _az_mqtt_socket_error(err, sink);
+}
+
+static az_result _connect_next(_az_mqtt_tcp_connect* c, _az_mqtt_error_sink const* sink)
 {
   while (c->next != NULL)
   {
@@ -142,11 +194,13 @@ static az_result _connect_next(_az_mqtt_tcp_connect* c)
     int fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
     if (fd < 0)
     {
+      _fail_address(c, errno, sink);
       continue;
     }
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0)
     {
+      _fail_address(c, errno, sink);
       close(fd);
       continue;
     }
@@ -155,6 +209,7 @@ static az_result _connect_next(_az_mqtt_tcp_connect* c)
     int one = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one)) != 0)
     {
+      _fail_address(c, errno, sink);
       close(fd); // It could raise SIGPIPE.
       continue;
     }
@@ -165,12 +220,17 @@ static az_result _connect_next(_az_mqtt_tcp_connect* c)
       c->attempt_start_ms = _az_mqtt_now_ms();
       return AZ_OK;
     }
+    _fail_address(c, errno, sink);
     close(fd);
   }
   return AZ_MQTT_ERROR_TRANSPORT;
 }
 
-az_result _az_mqtt_tcp_connect_start(_az_mqtt_tcp_connect* c, az_span host, uint16_t port)
+az_result _az_mqtt_tcp_connect_start(
+    _az_mqtt_tcp_connect* c,
+    az_span host,
+    uint16_t port,
+    _az_mqtt_error_sink const* sink)
 {
   _az_mqtt_tcp_connect_cancel(c);
 
@@ -190,11 +250,14 @@ az_result _az_mqtt_tcp_connect_start(_az_mqtt_tcp_connect* c, az_span host, uint
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   struct addrinfo* addresses = NULL;
-  if (getaddrinfo(host_str, port_str, &hints, &addresses) != 0 || addresses == NULL)
+  int const resolved = getaddrinfo(host_str, port_str, &hints, &addresses);
+  if (resolved != 0 || addresses == NULL)
   {
-    return AZ_MQTT_ERROR_TRANSPORT;
+    _az_mqtt_report_error(
+        sink, AZ_MQTT_NATIVE_ERROR_NAME_RESOLUTION, resolved, AZ_MQTT_ERROR_NAME_RESOLUTION);
+    return AZ_MQTT_ERROR_NAME_RESOLUTION;
   }
-  az_result rc = _az_mqtt_tcp_connect_start_addresses(c, addresses);
+  az_result rc = _az_mqtt_tcp_connect_start_addresses(c, addresses, sink);
   if (az_result_succeeded(rc))
   {
     c->owns_addresses = true;
@@ -206,20 +269,27 @@ az_result _az_mqtt_tcp_connect_start(_az_mqtt_tcp_connect* c, az_span host, uint
   return rc;
 }
 
-az_result _az_mqtt_tcp_connect_start_addresses(_az_mqtt_tcp_connect* c, struct addrinfo* addresses)
+az_result _az_mqtt_tcp_connect_start_addresses(
+    _az_mqtt_tcp_connect* c,
+    struct addrinfo* addresses,
+    _az_mqtt_error_sink const* sink)
 {
   _az_mqtt_tcp_connect_cancel(c);
   c->addresses = addresses;
   c->next = addresses;
-  az_result rc = _connect_next(c);
+  az_result rc = _connect_next(c, sink);
   if (az_result_failed(rc))
   {
+    rc = _az_mqtt_errno_result(c->last_errno);
     _az_mqtt_tcp_connect_init(c);
   }
   return rc;
 }
 
-az_result _az_mqtt_tcp_connect_poll(_az_mqtt_tcp_connect* c, int32_t timeout_ms)
+az_result _az_mqtt_tcp_connect_poll(
+    _az_mqtt_tcp_connect* c,
+    int32_t timeout_ms,
+    _az_mqtt_error_sink const* sink)
 {
   int64_t const deadline = _az_mqtt_deadline(timeout_ms);
   while (c->fd >= 0)
@@ -253,15 +323,17 @@ az_result _az_mqtt_tcp_connect_poll(_az_mqtt_tcp_connect* c, int32_t timeout_ms)
       return AZ_OK;
     }
     // Failed, or its attempt budget ran out: move on to the next address.
+    _fail_address(c, r < 0 ? errno : (r == 0 ? ETIMEDOUT : (err != 0 ? err : errno)), sink);
     close(c->fd);
     c->fd = -1;
-    if (az_result_failed(_connect_next(c)))
+    if (az_result_failed(_connect_next(c, sink)))
     {
       break;
     }
   }
+  az_result const rc = _az_mqtt_errno_result(c->last_errno);
   _az_mqtt_tcp_connect_cancel(c);
-  return AZ_MQTT_ERROR_TRANSPORT;
+  return rc;
 }
 
 void _az_mqtt_tcp_connect_cancel(_az_mqtt_tcp_connect* c)

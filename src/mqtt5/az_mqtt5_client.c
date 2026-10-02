@@ -56,6 +56,15 @@ static void _on_closed(az_mqtt_core* core, az_result reason)
   }
 }
 
+static void _on_transport_error(az_mqtt_core* core, az_mqtt_native_error const* error)
+{
+  az_mqtt5_client* client = (az_mqtt5_client*)core;
+  if (client->_internal.on_transport_error != NULL)
+  {
+    client->_internal.on_transport_error(client, error);
+  }
+}
+
 // ============================================================================
 // Packet dispatch
 // ============================================================================
@@ -345,6 +354,8 @@ az_mqtt5_client_init(az_mqtt5_client* client, az_mqtt5_client_options const* opt
   _CORE(client).port = options->port;
   _CORE(client).tls_options = options->tls_options;
   _CORE(client).on_closed = _on_closed;
+  _CORE(client).on_transport_error = _on_transport_error;
+  _az_mqtt_core_register_transport_errors(&client->_internal.core);
   client->_internal.connect_options = options->connect_options;
   client->_internal.buffers = options->buffers;
   client->_internal.on_connack = options->on_connack;
@@ -355,6 +366,7 @@ az_mqtt5_client_init(az_mqtt5_client* client, az_mqtt5_client_options const* opt
   client->_internal.on_pubcomp = options->on_pubcomp;
   client->_internal.on_disconnect = options->on_disconnect;
   client->_internal.on_connection_closed = options->on_connection_closed;
+  client->_internal.on_transport_error = options->on_transport_error;
   client->_internal.user_context = options->user_context;
   _az_mqtt_core_inflight_init(&client->_internal.core, options->inflight_control_buffer);
   return AZ_OK;

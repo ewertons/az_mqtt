@@ -9,6 +9,7 @@
 #ifndef AZ_MQTT_TYPES_H
 #define AZ_MQTT_TYPES_H
 
+#include <azure/core/az_log.h>
 #include <azure/core/az_result.h>
 #include <azure/core/az_span.h>
 
@@ -24,6 +25,7 @@ enum az_mqtt_result
   AZ_MQTT_ERROR_PROTOCOL = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 10),
   AZ_MQTT_ERROR_MALFORMED_PACKET = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 11),
   AZ_MQTT_ERROR_BUFFER_TOO_SMALL = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 12),
+  /** @brief A transport failure with no more specific code. */
   AZ_MQTT_ERROR_TRANSPORT = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 13),
   AZ_MQTT_ERROR_TIMEOUT = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 14),
   AZ_MQTT_ERROR_NOT_CONNECTED = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 15),
@@ -49,6 +51,30 @@ enum az_mqtt_result
    * an acknowledgement, the session is closed with this reason.
    */
   AZ_MQTT_ERROR_PACKET_TOO_LARGE = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 22),
+  /** @brief The host name could not be resolved. */
+  AZ_MQTT_ERROR_NAME_RESOLUTION = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 23),
+  /** @brief The server refused the TCP connection (the last address tried did). */
+  AZ_MQTT_ERROR_CONNECTION_REFUSED = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 24),
+  /** @brief The TLS handshake failed for a reason other than certificate verification. */
+  AZ_MQTT_ERROR_TLS_HANDSHAKE = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 25),
+  /** @brief The server certificate chain or host name did not verify. */
+  AZ_MQTT_ERROR_TLS_VERIFY = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 26),
+  /** @brief The peer closed or reset an established connection. */
+  AZ_MQTT_ERROR_CONNECTION_CLOSED = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 27),
+};
+
+// ──────────────────────── Log classifications ────────────────
+
+/**
+ * @brief az_log classifications (azure/core/az_log.h). Messages never contain credentials,
+ * keys, certificates, topics or payloads.
+ */
+enum az_mqtt_log_classification
+{
+  /** @brief Connect started (host and port), session closed (result and native error). */
+  AZ_LOG_MQTT_CONNECTION = _az_LOG_MAKE_CLASSIFICATION(_az_FACILITY_IOT_MQTT, 16),
+  /** @brief Packet sent or received: type and length. */
+  AZ_LOG_MQTT_PACKET = _az_LOG_MAKE_CLASSIFICATION(_az_FACILITY_IOT_MQTT, 17),
 };
 
 // ──────────────────────── Packet Types ───────────────────────
