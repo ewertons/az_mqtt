@@ -27,6 +27,11 @@ az_result az_mqtt_e2e_init_client(
 
   az_mqtt_transport* transport = (az_mqtt_transport*)fixture->transport_buf.bytes;
   az_result rc = az_mqtt_transport_init(transport);
+  if (az_result_succeeded(rc) && params->websocket_options != NULL)
+  {
+    rc = az_mqtt_websocket_init(&fixture->websocket, transport, params->websocket_options);
+    transport = az_mqtt_websocket_get_transport(&fixture->websocket);
+  }
   if (az_result_failed(rc))
   {
     return rc;
@@ -49,7 +54,6 @@ az_result az_mqtt_e2e_init_client(
   opts.port = params->port;
   opts.tls_options = params->tls_options;
   opts.proxy_options = params->proxy_options;
-  opts.websocket_options = params->websocket_options;
 
   opts.on_connack = params->on_connack;
   opts.on_publish = params->on_publish;

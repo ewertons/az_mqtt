@@ -12,13 +12,15 @@
 #include "../platform/az_mqtt_http_connect.h"
 
 #include <azure/core/az_base64.h>
+#include <azure/core/internal/az_precondition_internal.h>
+#include <azure/core/internal/az_result_internal.h>
 
 #include <string.h>
 
 /** @brief Shorthand for the WebSocket state. */
 #define _W(ws) ((ws)->_internal)
 
-/** @brief options->_internal.flags. */
+/** @brief _internal.flags. */
 enum
 {
   _FLAG_UPGRADE = 0x01, ///< "Upgrade: websocket" seen.
@@ -31,8 +33,7 @@ enum
 
 // The HTTP parser state lives in the caller's options, as plain words.
 typedef char _http_state_fits
-    [sizeof(_az_mqtt_http_reply) <= sizeof(((az_mqtt_websocket_options*)0)->_internal.http) ? 1
-                                                                                           : -1];
+    [sizeof(_az_mqtt_http_reply) <= sizeof(((az_mqtt_websocket*)0)->_internal.http) ? 1 : -1];
 
 // ──────────────────────── SHA-1 ──────────────────────────────
 
@@ -124,6 +125,21 @@ void _az_mqtt_sha1(uint8_t const* data, size_t size, uint8_t out[20])
 
 // ──────────────────────── Handshake ──────────────────────────
 
+/** @brief Clear the per-connection state (stage IDLE). */
+static void _reset(az_mqtt_websocket* ws)
+{
+  _W(ws).frame_left = 0;
+  memset(_W(ws).http, 0, sizeof(_W(ws).http));
+  _W(ws).stash_start = 0;
+  _W(ws).stash_end = 0;
+  _W(ws).line_size = 0;
+  _W(ws).header_size = 0;
+  _W(ws).control_size = 0;
+  _W(ws).opcode = 0;
+  _W(ws).stage = _AZ_MQTT_WEBSOCKET_IDLE;
+  _W(ws).flags = 0;
+}
+
 /** @brief Whether every byte of @p path is printable ASCII other than space. */
 static bool _is_valid_path(az_span path)
 {
@@ -143,10 +159,7 @@ static bool _is_valid_path(az_span path)
   return true;
 }
 
-az_result _az_mqtt_websocket_check(az_mqtt_websocket_options const* options)
-{
-  return options == NULL || _is_valid_path(options->path) ? AZ_OK : AZ_MQTT_ERROR_INVALID_CONFIG;
-}
+bool _az_mqtt_websocket_path_is_valid(az_span path) { return _is_valid_path(path); }
 
 /** @brief Whether @p host can go in a Host header: non-empty, bounded, no break or space. */
 static bool _is_valid_host(az_span host)
@@ -193,7 +206,7 @@ static az_result _accept_for(az_span key, uint8_t out[28])
 }
 
 az_result _az_mqtt_websocket_request(
-    az_mqtt_websocket_options* ws,
+    az_mqtt_websocket* ws,
     az_span host,
     uint16_t port,
     bool tls,
@@ -201,13 +214,14 @@ az_result _az_mqtt_websocket_request(
     az_span buffer,
     int32_t* out_size)
 {
-  if (!_is_valid_host(host) || !_is_valid_path(ws->path))
+  az_span const path = _W(ws).options.path;
+  if (!_is_valid_host(host) || !_is_valid_path(path))
   {
     return AZ_MQTT_ERROR_INVALID_CONFIG;
   }
   uint8_t key[24];
   int32_t written = 0;
-  memset(&_W(ws), 0, sizeof(_W(ws)));
+  _reset(ws);
   az_result rc = az_base64_encode(
       AZ_SPAN_FROM_BUFFER(key), az_span_create((uint8_t*)(uintptr_t)nonce, 16), &written);
   rc = az_result_succeeded(rc) ? _accept_for(AZ_SPAN_FROM_BUFFER(key), _W(ws).accept) : rc;
@@ -224,7 +238,7 @@ az_result _az_mqtt_websocket_request(
   bool const default_port = port == (tls ? 443 : 80);
   az_span rest = buffer;
   bool ok = _append(&rest, AZ_SPAN_FROM_STR("GET "))
-      && _append(&rest, az_span_size(ws->path) > 0 ? ws->path : AZ_SPAN_FROM_STR("/mqtt"))
+      && _append(&rest, az_span_size(path) > 0 ? path : AZ_SPAN_FROM_STR("/mqtt"))
       && _append(&rest, AZ_SPAN_FROM_STR(" HTTP/1.1\r\nHost: "))
       && (!ipv6 || _append(&rest, AZ_SPAN_FROM_STR("["))) && _append(&rest, host)
       && (!ipv6 || _append(&rest, AZ_SPAN_FROM_STR("]")));
@@ -304,7 +318,7 @@ static bool _has_token(az_span list, az_span token)
 }
 
 /** @brief Check the header line in _internal.line against the handshake. */
-static void _on_header(az_mqtt_websocket_options* ws)
+static void _on_header(az_mqtt_websocket* ws)
 {
   az_span const line = az_span_create(_W(ws).line, _W(ws).line_size);
   int32_t const colon = az_span_find(line, AZ_SPAN_FROM_STR(":"));
@@ -320,7 +334,7 @@ static void _on_header(az_mqtt_websocket_options* ws)
   if (_equals_ignore_case(name, AZ_SPAN_FROM_STR("Upgrade")))
   {
     flag = _FLAG_UPGRADE;
-    valid = _equals_ignore_case(value, AZ_SPAN_FROM_STR("websocket"));
+    valid = _has_token(value, AZ_SPAN_FROM_STR("websocket"));
   }
   else if (_equals_ignore_case(name, AZ_SPAN_FROM_STR("Connection")))
   {
@@ -348,7 +362,7 @@ static void _on_header(az_mqtt_websocket_options* ws)
 }
 
 az_result _az_mqtt_websocket_reply_parse(
-    az_mqtt_websocket_options* ws,
+    az_mqtt_websocket* ws,
     az_span data,
     int32_t* out_consumed,
     uint16_t* out_status)
@@ -447,7 +461,7 @@ void _az_mqtt_websocket_mask(uint8_t* data, int32_t size, uint8_t const mask[4],
  * @brief Validate a frame header from its first two bytes, @p b0 and @p b1.
  * @return Its full size (2, 4 or 10), or 0 if the frame is not allowed.
  */
-static int32_t _header_size(az_mqtt_websocket_options const* ws, uint8_t b0, uint8_t b1)
+static int32_t _header_size(az_mqtt_websocket const* ws, uint8_t b0, uint8_t b1)
 {
   uint8_t const opcode = b0 & 0x0F;
   bool const fin = (b0 & 0x80) != 0;
@@ -479,23 +493,93 @@ static int32_t _header_size(az_mqtt_websocket_options const* ws, uint8_t b0, uin
   return length == 127 ? 10 : (length == 126 ? 4 : 2);
 }
 
+/** @brief Whether @p p[0..size) is valid UTF-8 (RFC 3629: no overlong forms or surrogates). */
+static bool _is_utf8(uint8_t const* p, int32_t size)
+{
+  int32_t i = 0;
+  while (i < size)
+  {
+    uint8_t const c = p[i++];
+    int32_t more;
+    uint8_t low = 0x80; // Bounds of the byte after the lead byte.
+    uint8_t high = 0xBF;
+    if (c < 0x80)
+    {
+      continue;
+    }
+    if (c >= 0xC2 && c <= 0xDF)
+    {
+      more = 1;
+    }
+    else if (c >= 0xE0 && c <= 0xEF)
+    {
+      more = 2;
+      low = c == 0xE0 ? 0xA0 : 0x80;
+      high = c == 0xED ? 0x9F : 0xBF;
+    }
+    else if (c >= 0xF0 && c <= 0xF4)
+    {
+      more = 3;
+      low = c == 0xF0 ? 0x90 : 0x80;
+      high = c == 0xF4 ? 0x8F : 0xBF;
+    }
+    else
+    {
+      return false;
+    }
+    if (size - i < more || p[i] < low || p[i] > high)
+    {
+      return false;
+    }
+    for (int32_t k = 1; k < more; k++)
+    {
+      if ((p[i + k] & 0xC0) != 0x80)
+      {
+        return false;
+      }
+    }
+    i += more;
+  }
+  return true;
+}
+
+/**
+ * @brief Whether a close frame body is valid (RFC 6455 §5.5.1, §7.4): empty, or a status code
+ * that may be sent then a UTF-8 reason.
+ */
+static bool _is_valid_close(uint8_t const* body, uint8_t size)
+{
+  if (size == 0)
+  {
+    return true;
+  }
+  if (size == 1)
+  {
+    return false;
+  }
+  uint16_t const code = (uint16_t)(body[0] << 8 | body[1]);
+  bool const sendable = (code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1014)
+      || (code >= 3000 && code <= 4999);
+  return sendable && _is_utf8(body + 2, size - 2);
+}
+
 /** @brief A frame ended: what it means to the caller. */
-static _az_mqtt_websocket_event _frame_done(az_mqtt_websocket_options* ws)
+static _az_mqtt_websocket_event _frame_done(az_mqtt_websocket* ws)
 {
   switch (_W(ws).opcode & 0x0F)
   {
     case _AZ_MQTT_WEBSOCKET_PING:
       return _AZ_MQTT_WEBSOCKET_EVENT_PING;
     case _AZ_MQTT_WEBSOCKET_CLOSE:
-      return _W(ws).control_size == 1 ? _AZ_MQTT_WEBSOCKET_EVENT_ERROR
-                                       : _AZ_MQTT_WEBSOCKET_EVENT_CLOSE;
+      return _is_valid_close(_W(ws).control, _W(ws).control_size) ? _AZ_MQTT_WEBSOCKET_EVENT_CLOSE
+                                                                   : _AZ_MQTT_WEBSOCKET_EVENT_ERROR;
     default: // Pong, data.
       return _AZ_MQTT_WEBSOCKET_EVENT_DATA;
   }
 }
 
 _az_mqtt_websocket_event _az_mqtt_websocket_deframe(
-    az_mqtt_websocket_options* ws,
+    az_mqtt_websocket* ws,
     uint8_t const* in,
     int32_t in_size,
     uint8_t* out,
@@ -535,7 +619,8 @@ _az_mqtt_websocket_event _az_mqtt_websocket_deframe(
           length = length << 8 | _W(ws).header[k];
         }
       }
-      if (length >> 63 != 0)
+      // RFC 6455 §5.2: the minimal length encoding, and the top bit of 64 clear.
+      if (length >> 63 != 0 || (size == 4 && length < 126) || (size == 10 && length <= UINT16_MAX))
       {
         event = _AZ_MQTT_WEBSOCKET_EVENT_ERROR;
         break;
@@ -588,14 +673,289 @@ _az_mqtt_websocket_event _az_mqtt_websocket_deframe(
   return event;
 }
 
-az_span _az_mqtt_websocket_control(az_mqtt_websocket_options* ws)
+az_span _az_mqtt_websocket_control(az_mqtt_websocket* ws)
 {
   return az_span_create(_W(ws).control, _W(ws).control_size);
 }
 
-uint16_t _az_mqtt_websocket_close_code(az_mqtt_websocket_options const* ws)
+uint16_t _az_mqtt_websocket_close_code(az_mqtt_websocket const* ws)
 {
   return _W(ws).control_size >= 2
       ? (uint16_t)(_W(ws).control[0] << 8 | _W(ws).control[1])
       : _AZ_MQTT_WEBSOCKET_CLOSE_NO_STATUS;
+}
+
+// ──────────────────────── Transport layer ────────────────────
+
+typedef char _send_chunk_fits[AZ_MQTT_WEBSOCKET_SEND_CHUNK > _AZ_MQTT_WEBSOCKET_HEADER_MAX ? 1 : -1];
+
+/** @brief The az_mqtt_websocket whose base is @p t (its first member). */
+#define _WS(t) ((az_mqtt_websocket*)(t))
+
+/** @brief Report a native error (see AZ_MQTT_NATIVE_ERROR_WEBSOCKET). */
+static void _report(az_mqtt_websocket* ws, int32_t code, az_result result)
+{
+  if (_W(ws).error_callback != NULL)
+  {
+    az_mqtt_native_error const error
+        = { AZ_MQTT_NATIVE_ERROR_WEBSOCKET, code, result, _W(ws).connect_attempts };
+    _W(ws).error_callback(&error, _W(ws).error_context);
+  }
+}
+
+/** @brief Send @p payload as one masked frame of @p opcode, through a stack buffer. */
+static az_result _send_frame(az_mqtt_websocket* ws, uint8_t opcode, az_span payload)
+{
+  uint8_t chunk[AZ_MQTT_WEBSOCKET_SEND_CHUNK];
+  uint8_t mask[4];
+  _az_RETURN_IF_FAILED(az_mqtt_transport_random(AZ_SPAN_FROM_BUFFER(mask)));
+  int32_t const size = az_span_size(payload);
+  int32_t used = _az_mqtt_websocket_frame_header(chunk, opcode, (uint64_t)size, mask);
+  int32_t offset = 0;
+  do
+  {
+    int32_t const room = (int32_t)sizeof(chunk) - used;
+    int32_t const take = size - offset < room ? size - offset : room;
+    if (take > 0)
+    {
+      memcpy(chunk + used, az_span_ptr(payload) + offset, (size_t)take);
+      _az_mqtt_websocket_mask(chunk + used, take, mask, (uint64_t)offset);
+    }
+    _az_RETURN_IF_FAILED(az_mqtt_transport_send(_W(ws).lower, az_span_create(chunk, used + take)));
+    offset += take;
+    used = 0;
+  } while (offset < size);
+  return AZ_OK;
+}
+
+/**
+ * @brief Deframe @p size received bytes at @p in into @p out (at or before @p in), answering
+ * pings; *@p out_produced payload bytes.
+ */
+static az_result
+_deframe(az_mqtt_websocket* ws, uint8_t const* in, int32_t size, uint8_t* out, int32_t* out_produced)
+{
+  int32_t done = 0;
+  int32_t produced = 0;
+  az_result rc = AZ_OK;
+  while (az_result_succeeded(rc) && done < size)
+  {
+    int32_t consumed;
+    int32_t n;
+    _az_mqtt_websocket_event const event
+        = _az_mqtt_websocket_deframe(ws, in + done, size - done, out + produced, &consumed, &n);
+    done += consumed;
+    produced += n;
+    if (event == _AZ_MQTT_WEBSOCKET_EVENT_PING)
+    {
+      rc = _send_frame(ws, _AZ_MQTT_WEBSOCKET_PONG, _az_mqtt_websocket_control(ws));
+    }
+    else if (event == _AZ_MQTT_WEBSOCKET_EVENT_CLOSE)
+    {
+      // Echo its status code; the caller then closes.
+      uint16_t const code = _az_mqtt_websocket_close_code(ws);
+      az_span const body = _az_mqtt_websocket_control(ws);
+      (void)_send_frame(
+          ws,
+          _AZ_MQTT_WEBSOCKET_CLOSE,
+          az_span_slice(body, 0, az_span_size(body) < 2 ? az_span_size(body) : 2));
+      _W(ws).stage = _AZ_MQTT_WEBSOCKET_CLOSED;
+      rc = AZ_MQTT_ERROR_CONNECTION_CLOSED;
+      if (code != _AZ_MQTT_WEBSOCKET_CLOSE_NORMAL)
+      {
+        _report(ws, code, rc);
+      }
+    }
+    else if (event == _AZ_MQTT_WEBSOCKET_EVENT_ERROR)
+    {
+      _W(ws).stage = _AZ_MQTT_WEBSOCKET_CLOSED;
+      rc = AZ_MQTT_ERROR_WEBSOCKET;
+      _report(ws, _AZ_MQTT_WEBSOCKET_CLOSE_PROTOCOL_ERROR, rc);
+    }
+  }
+  *out_produced = produced;
+  return rc;
+}
+
+static az_result _ws_connect_start(
+    az_mqtt_transport* t,
+    az_span host,
+    uint16_t port,
+    az_mqtt_tls_options const* tls_options)
+{
+  az_mqtt_websocket* const ws = _WS(t);
+  _reset(ws);
+  _W(ws).host = host;
+  _W(ws).port = port;
+  _W(ws).tls = tls_options != NULL;
+  _W(ws).connect_attempts++;
+  return az_mqtt_transport_connect_start(_W(ws).lower, host, port, tls_options);
+}
+
+/** @brief Send the upgrade request (stage UPGRADING). */
+static az_result _send_upgrade(az_mqtt_websocket* ws)
+{
+  uint8_t nonce[16];
+  uint8_t request[_AZ_MQTT_WEBSOCKET_REQUEST_MAX];
+  int32_t size = 0;
+  _az_RETURN_IF_FAILED(az_mqtt_transport_random(AZ_SPAN_FROM_BUFFER(nonce)));
+  _az_RETURN_IF_FAILED(_az_mqtt_websocket_request(
+      ws, _W(ws).host, _W(ws).port, _W(ws).tls, nonce, AZ_SPAN_FROM_BUFFER(request), &size));
+  return az_mqtt_transport_send(_W(ws).lower, az_span_create(request, size));
+}
+
+/** @brief Read the upgrade reply until @p deadline_ms (-1: none); bytes after it stay stashed. */
+static az_result _read_upgrade_reply(az_mqtt_websocket* ws, int64_t deadline_ms)
+{
+  while (_W(ws).stage == _AZ_MQTT_WEBSOCKET_UPGRADING)
+  {
+    int64_t const left = deadline_ms < 0 ? -1 : deadline_ms - az_mqtt_transport_clock_ms();
+    int32_t const wait_ms = deadline_ms < 0 ? -1 : (left <= 0 ? 0 : (left > INT32_MAX ? INT32_MAX : (int32_t)left));
+    az_span received;
+    _az_RETURN_IF_FAILED(az_mqtt_transport_receive(
+        _W(ws).lower, AZ_SPAN_FROM_BUFFER(_W(ws).stash), wait_ms, &received));
+    int32_t const size = az_span_size(received);
+    if (size == 0)
+    {
+      if (wait_ms == 0)
+      {
+        return AZ_MQTT_ERROR_TIMEOUT;
+      }
+      continue;
+    }
+    int32_t consumed;
+    uint16_t status;
+    az_result const rc = _az_mqtt_websocket_reply_parse(ws, received, &consumed, &status);
+    if (rc == AZ_MQTT_ERROR_WEBSOCKET)
+    {
+      _report(ws, status, rc);
+      return rc;
+    }
+    int32_t const start = (int32_t)(az_span_ptr(received) - _W(ws).stash);
+    _W(ws).stash_start = (uint8_t)(start + consumed);
+    _W(ws).stash_end = (uint8_t)(start + size);
+  }
+  return AZ_OK;
+}
+
+static az_result _ws_connect_poll(az_mqtt_transport* t, int32_t timeout_ms)
+{
+  az_mqtt_websocket* const ws = _WS(t);
+  int64_t const deadline = timeout_ms < 0 ? -1 : az_mqtt_transport_clock_ms() + timeout_ms;
+  az_result rc = AZ_OK;
+  if (_W(ws).stage == _AZ_MQTT_WEBSOCKET_IDLE)
+  {
+    rc = az_mqtt_transport_connect_poll(_W(ws).lower, timeout_ms);
+    if (az_result_failed(rc))
+    {
+      return rc; // Timeout, or failed and closed.
+    }
+    rc = _send_upgrade(ws);
+  }
+  rc = az_result_succeeded(rc) ? _read_upgrade_reply(ws, deadline) : rc;
+  if (az_result_failed(rc) && rc != AZ_MQTT_ERROR_TIMEOUT)
+  {
+    _W(ws).stage = _AZ_MQTT_WEBSOCKET_IDLE;
+    az_mqtt_transport_close(_W(ws).lower);
+  }
+  return rc;
+}
+
+static az_result _ws_send(az_mqtt_transport* t, az_span data)
+{
+  az_mqtt_websocket* const ws = _WS(t);
+  return _W(ws).stage == _AZ_MQTT_WEBSOCKET_OPEN
+      ? _send_frame(ws, _AZ_MQTT_WEBSOCKET_BINARY, data)
+      : AZ_MQTT_ERROR_NOT_CONNECTED;
+}
+
+static az_result
+_ws_receive(az_mqtt_transport* t, az_span buffer, int32_t timeout_ms, az_span* out_received)
+{
+  az_mqtt_websocket* const ws = _WS(t);
+  *out_received = az_span_slice(buffer, 0, 0);
+  if (_W(ws).stage != _AZ_MQTT_WEBSOCKET_OPEN)
+  {
+    return AZ_MQTT_ERROR_NOT_CONNECTED;
+  }
+  uint8_t* const out = az_span_ptr(buffer);
+  uint8_t const* in = out;
+  int32_t size;
+  if (_W(ws).stash_start < _W(ws).stash_end) // Bytes that came with the upgrade reply.
+  {
+    int32_t const stashed = _W(ws).stash_end - _W(ws).stash_start;
+    size = stashed < az_span_size(buffer) ? stashed : az_span_size(buffer);
+    memcpy(out, _W(ws).stash + _W(ws).stash_start, (size_t)size);
+    _W(ws).stash_start = (uint8_t)(_W(ws).stash_start + size);
+  }
+  else
+  {
+    az_span received;
+    _az_RETURN_IF_FAILED(az_mqtt_transport_receive(_W(ws).lower, buffer, timeout_ms, &received));
+    in = az_span_ptr(received);
+    size = az_span_size(received);
+  }
+  int32_t produced = 0;
+  az_result const rc = _deframe(ws, in, size, out, &produced);
+  *out_received = az_span_slice(buffer, 0, produced);
+  return rc;
+}
+
+static void _ws_shutdown(az_mqtt_transport* t)
+{
+  az_mqtt_websocket* const ws = _WS(t);
+  if (_W(ws).stage == _AZ_MQTT_WEBSOCKET_OPEN)
+  {
+    static uint8_t const normal[2]
+        = { _AZ_MQTT_WEBSOCKET_CLOSE_NORMAL >> 8, _AZ_MQTT_WEBSOCKET_CLOSE_NORMAL & 0xFF };
+    (void)_send_frame(ws, _AZ_MQTT_WEBSOCKET_CLOSE, az_span_create((uint8_t*)(uintptr_t)normal, 2));
+    _W(ws).stage = _AZ_MQTT_WEBSOCKET_CLOSED;
+  }
+  az_mqtt_transport_shutdown(_W(ws).lower);
+}
+
+static void _ws_close(az_mqtt_transport* t)
+{
+  az_mqtt_websocket* const ws = _WS(t);
+  _W(ws).stage = _AZ_MQTT_WEBSOCKET_IDLE;
+  az_mqtt_transport_close(_W(ws).lower);
+}
+
+static az_result _ws_set_proxy(az_mqtt_transport* t, az_mqtt_proxy_options const* proxy)
+{
+  return az_mqtt_transport_set_proxy(_W(_WS(t)).lower, proxy);
+}
+
+static void
+_ws_set_error_callback(az_mqtt_transport* t, az_mqtt_transport_error_fn callback, void* context)
+{
+  az_mqtt_websocket* const ws = _WS(t);
+  _W(ws).error_callback = callback;
+  _W(ws).error_context = context;
+  az_mqtt_transport_set_error_callback(_W(ws).lower, callback, context);
+}
+
+static az_mqtt_transport_vtable const _ws_vtable = {
+  _ws_connect_start, _ws_connect_poll, _ws_send,      _ws_receive,
+  _ws_shutdown,      _ws_close,        _ws_set_proxy, _ws_set_error_callback,
+};
+
+az_result az_mqtt_websocket_init(
+    az_mqtt_websocket* websocket,
+    az_mqtt_transport* transport,
+    az_mqtt_websocket_options const* options)
+{
+  _az_PRECONDITION_NOT_NULL(websocket);
+  _az_PRECONDITION_NOT_NULL(transport);
+  az_mqtt_websocket_options const config
+      = options != NULL ? *options : az_mqtt_websocket_options_default();
+  if (!_is_valid_path(config.path))
+  {
+    return AZ_MQTT_ERROR_INVALID_CONFIG;
+  }
+  memset(websocket, 0, sizeof(*websocket));
+  _W(websocket).base.vtable = &_ws_vtable;
+  _W(websocket).lower = transport;
+  _W(websocket).options = config;
+  return AZ_OK;
 }

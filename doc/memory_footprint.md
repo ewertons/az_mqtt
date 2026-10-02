@@ -9,35 +9,39 @@ GCC 12.2, `-O3 -DNDEBUG`, x86-64, Debian 12, no TLS. An application links `az_mq
 |---|---|---:|---:|---:|---:|
 | az_mqtt_core.c | core | 6,167 B | 275 B | 0 | 0 |
 | az_mqtt_codec_common.c | core | 1,399 B | 0 | 0 | 0 |
-| az_mqtt_core.c | core | 7,831 B | 289 B | 0 | 0 |
-| az_mqtt_websocket.c | core | 6,746 B | 298 B | 0 | 0 |
-| az_mqtt_http_connect.c | core | 3,235 B | 140 B | 0 | 0 |
-| transport_posix.c | core | 1,905 B | 0 | 0 | 0 |
+| az_mqtt_transport.c | core | 757 B | 0 | 0 | 0 |
+| transport_posix.c | core | 1,572 B | 0 | 64 B | 0 |
 | az_mqtt_socket_posix.c | core | 6,503 B | 7 B | 0 | 0 |
-| az_mqtt3_client.c | mqttv3 | 2,544 B | 56 B | 0 | 0 |
+| az_mqtt_http_connect.c | core | 3,235 B | 140 B | 0 | 0 |
+| az_mqtt_websocket.c | core | 9,694 B | 326 B | 64 B | 0 |
+| az_mqtt3_client.c | mqttv3 | 2,512 B | 56 B | 0 | 0 |
 | az_mqtt3_codec.c | mqttv3 | 2,651 B | 37 B | 0 | 0 |
-| az_mqtt5_client.c | mqttv5 | 3,550 B | 64 B | 0 | 0 |
+| az_mqtt5_client.c | mqttv5 | 3,518 B | 64 B | 0 | 0 |
 | az_mqtt5_codec.c | mqttv5 | 9,993 B | 299 B | 0 | 0 |
-| **mqttv3 application** | core + mqttv3 | **32,814 B** | **827 B** | **0** | **0** |
-| **mqttv5 application** | core + mqttv5 | **41,162 B** | **1,097 B** | **0** | **0** |
-| **Both versions** | core + mqttv3 + mqttv5 | **46,357 B** | **1,190 B** | **0** | **0** |
+| **mqttv3 application** | core + mqttv3 | **24,796 B** | **515 B** | **64 B** | **0** |
+| **mqttv5 application** | core + mqttv5 | **33,144 B** | **785 B** | **64 B** | **0** |
+| **Both versions** | core + mqttv3 + mqttv5 | **38,307 B** | **878 B** | **64 B** | **0** |
+
+The applications above do not use WebSockets: a static link leaves `az_mqtt_websocket.c` out.
+Using it adds 9,694 B .text, 326 B .rodata and 64 B .data (5,581 B .text at `-Os`). The `.data`
+entries are transport vtables (read-only after relocation).
 
 Proxy and WebSocket support (`AZ_MQTT_ENABLE_PROXY`, `AZ_MQTT_ENABLE_WEBSOCKETS`, both default
 `ON`) also link azure-sdk-for-c `az_base64.c` (4,633 B .text, 65 B .rodata). Compiled out, each
 application is smaller by:
 
-| Off | .text | .rodata | At `-Os` (.text) |
-|---|---:|---:|---:|
-| `AZ_MQTT_ENABLE_WEBSOCKETS` | 9,034 B | 344 B | 4,884 B |
-| `AZ_MQTT_ENABLE_PROXY` | 4,521 B | 98 B | |
-| Both | 13,565 B + `az_base64.c` | 452 B + 65 B | |
+| Off | .text | .rodata |
+|---|---:|---:|
+| `AZ_MQTT_ENABLE_WEBSOCKETS` | 672 B | 32 B |
+| `AZ_MQTT_ENABLE_PROXY` | 4,393 B | 98 B |
+| Both | 5,075 B + `az_base64.c` | 140 B + 65 B |
 
 azure-sdk-for-c `LOGGING=OFF` (`AZ_NO_LOGGING`) compiles az_mqtt logging out: az_mqtt_core.c is then
-5,623 B (.text) and 10 B (.rodata): each application 2,208 B and 279 B smaller.
+4,103 B (.text) and 0 (.rodata): each application 2,064 B and 275 B smaller.
 
-RAM per client: `az_mqtt3_client` 304 B, `az_mqtt5_client` 496 B (x86-64), plus 4 B per `inflight_control_buffer` entry
-(caller storage), plus 288 B for `az_mqtt_websocket_options` with WebSockets (caller storage). A
-WebSocket send uses a 512 B stack buffer (`AZ_MQTT_WEBSOCKET_SEND_CHUNK`); the upgrade, a 768 B one.
+RAM per client: `az_mqtt3_client` 288 B, `az_mqtt5_client` 480 B (x86-64), plus 4 B per `inflight_control_buffer` entry
+(caller storage). An `az_mqtt_websocket` is 408 B (caller storage); its sends use a 512 B stack
+buffer (`AZ_MQTT_WEBSOCKET_SEND_CHUNK`), its upgrade a 768 B one.
 
 ## Before the shared core (az_mqtt5 library)
 

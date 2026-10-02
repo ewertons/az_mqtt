@@ -21,6 +21,14 @@
 
 static az_span _str(char const* s) { return az_span_create((uint8_t*)(uintptr_t)s, (int32_t)strlen(s)); }
 
+/** @brief A WebSocket state with no lower transport (the functions under test do no I/O). */
+static az_mqtt_websocket _ws(void)
+{
+  az_mqtt_websocket ws;
+  memset(&ws, 0, sizeof(ws));
+  return ws;
+}
+
 static void _hex(uint8_t const digest[20], char out[41])
 {
   for (int i = 0; i < 20; i++)
@@ -71,7 +79,7 @@ static uint8_t const k_nonce[16] = { 't', 'h', 'e', ' ', 's', 'a', 'm', 'p',
 
 /** @brief Build a request on @p ws; returns it NUL-terminated in @p out. */
 static az_result _request(
-    az_mqtt_websocket_options* ws,
+    az_mqtt_websocket* ws,
     char const* host,
     uint16_t port,
     bool tls,
@@ -88,7 +96,7 @@ static az_result _request(
 static void the_request_follows_rfc_6455(void** state)
 {
   (void)state;
-  az_mqtt_websocket_options ws = az_mqtt_websocket_options_default();
+  az_mqtt_websocket ws = _ws();
   char request[_AZ_MQTT_WEBSOCKET_REQUEST_MAX];
   assert_int_equal(_request(&ws, "hub.example", 443, true, request, sizeof(request)), AZ_OK);
   assert_string_equal(
@@ -98,7 +106,7 @@ static void the_request_follows_rfc_6455(void** state)
       "Sec-WebSocket-Protocol: mqtt\r\n\r\n");
 
   // Port in Host unless the scheme's default; IPv6 literals bracketed; the given path.
-  ws.path = AZ_SPAN_FROM_STR(AZ_MQTT_WEBSOCKET_PATH_IOT_HUB);
+  ws._internal.options.path = AZ_SPAN_FROM_STR(AZ_MQTT_WEBSOCKET_PATH_IOT_HUB);
   assert_int_equal(_request(&ws, "::1", 8080, false, request, sizeof(request)), AZ_OK);
   assert_non_null(strstr(request, "GET /$iothub/websocket HTTP/1.1\r\nHost: [::1]:8080\r\n"));
   assert_int_equal(_request(&ws, "h", 80, false, request, sizeof(request)), AZ_OK);
@@ -117,8 +125,8 @@ static void the_longest_request_fits(void** state)
   memset(path, 'p', AZ_MQTT_WEBSOCKET_PATH_MAX);
   path[0] = '/';
   memset(host, ':', 255); // An "IPv6 literal": bracketed.
-  az_mqtt_websocket_options ws = az_mqtt_websocket_options_default();
-  ws.path = _str(path);
+  az_mqtt_websocket ws = _ws();
+  ws._internal.options.path = _str(path);
   char request[_AZ_MQTT_WEBSOCKET_REQUEST_MAX + 1];
   assert_int_equal(_request(&ws, host, 65535, true, request, sizeof(request)), AZ_OK);
 }
@@ -126,7 +134,7 @@ static void the_longest_request_fits(void** state)
 static void bad_hosts_and_paths_are_refused(void** state)
 {
   (void)state;
-  az_mqtt_websocket_options ws = az_mqtt_websocket_options_default();
+  az_mqtt_websocket ws = _ws();
   char request[_AZ_MQTT_WEBSOCKET_REQUEST_MAX];
   char const* hosts[] = { "", "a b", "a\r\nX: y", "a\n" };
   for (size_t i = 0; i < sizeof(hosts) / sizeof(hosts[0]); i++)
@@ -140,26 +148,25 @@ static void bad_hosts_and_paths_are_refused(void** state)
   assert_int_equal(
       _request(&ws, long_host, 80, false, request, sizeof(request)), AZ_MQTT_ERROR_INVALID_CONFIG);
 
-  assert_int_equal(_az_mqtt_websocket_check(NULL), AZ_OK);
   char const* good[] = { "", "/", "/mqtt", AZ_MQTT_WEBSOCKET_PATH_IOT_HUB, "/a?b=c&d=%20~" };
   for (size_t i = 0; i < sizeof(good) / sizeof(good[0]); i++)
   {
-    ws.path = _str(good[i]);
-    assert_int_equal(_az_mqtt_websocket_check(&ws), AZ_OK);
+    ws._internal.options.path = _str(good[i]);
+    assert_true(_az_mqtt_websocket_path_is_valid(ws._internal.options.path));
   }
   char const* bad[] = { "mqtt", "/a b", "/a\r\nX: y", "/a\tb", "/\x7f", "/\xc3\xa9" };
   for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++)
   {
-    ws.path = _str(bad[i]);
-    assert_int_equal(_az_mqtt_websocket_check(&ws), AZ_MQTT_ERROR_INVALID_CONFIG);
+    ws._internal.options.path = _str(bad[i]);
+    assert_false(_az_mqtt_websocket_path_is_valid(ws._internal.options.path));
   }
-  ws.path = az_span_create((uint8_t*)(uintptr_t) "/\0", 2);
-  assert_int_equal(_az_mqtt_websocket_check(&ws), AZ_MQTT_ERROR_INVALID_CONFIG);
+  ws._internal.options.path = az_span_create((uint8_t*)(uintptr_t) "/\0", 2);
+  assert_false(_az_mqtt_websocket_path_is_valid(ws._internal.options.path));
   static char long_path[AZ_MQTT_WEBSOCKET_PATH_MAX + 2];
   memset(long_path, 'p', AZ_MQTT_WEBSOCKET_PATH_MAX + 1);
   long_path[0] = '/';
-  ws.path = _str(long_path);
-  assert_int_equal(_az_mqtt_websocket_check(&ws), AZ_MQTT_ERROR_INVALID_CONFIG);
+  ws._internal.options.path = _str(long_path);
+  assert_false(_az_mqtt_websocket_path_is_valid(ws._internal.options.path));
 }
 
 /**
@@ -167,7 +174,7 @@ static void bad_hosts_and_paths_are_refused(void** state)
  * @return The parse result; *out_consumed sums what was consumed.
  */
 static az_result _parse(
-    az_mqtt_websocket_options* ws,
+    az_mqtt_websocket* ws,
     char const* reply,
     int32_t size,
     int32_t piece,
@@ -202,7 +209,7 @@ static void a_valid_reply_upgrades_in_any_number_of_pieces(void** state)
   char const* replies[] = {
     K_GOOD_REPLY,
     // mosquitto's spelling; no protocol; LF line ends; other tokens; spaces around values.
-    "HTTP/1.1 101 Switching Protocols\nupgrade:WebSocket\nCONNECTION: keep-alive ,  upgrade\n"
+    "HTTP/1.1 101 Switching Protocols\nupgrade:h2c, WebSocket\nCONNECTION: keep-alive ,  upgrade\n"
     "Server: x\nsec-websocket-accept:  \t" K_ACCEPT " \n\n",
   };
   for (size_t r = 0; r < sizeof(replies) / sizeof(replies[0]); r++)
@@ -211,7 +218,7 @@ static void a_valid_reply_upgrades_in_any_number_of_pieces(void** state)
     int const size = snprintf(reply, sizeof(reply), "%s\x82\x01X", replies[r]);
     for (int32_t piece = 1; piece <= size; piece++)
     {
-      az_mqtt_websocket_options ws = az_mqtt_websocket_options_default();
+      az_mqtt_websocket ws = _ws();
       int32_t consumed;
       uint16_t status;
       assert_int_equal(_parse(&ws, reply, size, piece, &consumed, &status), AZ_OK);
@@ -238,7 +245,7 @@ static void a_long_reply_is_accepted(void** state)
       "Set-Cookie: %0200d\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
       "Sec-WebSocket-Accept: " K_ACCEPT "\r\n\r\n",
       1);
-  az_mqtt_websocket_options ws = az_mqtt_websocket_options_default();
+  az_mqtt_websocket ws = _ws();
   int32_t consumed;
   uint16_t status;
   assert_int_equal(_parse(&ws, reply, len, 1000, &consumed, &status), AZ_OK);
@@ -289,7 +296,7 @@ static void invalid_replies_are_refused(void** state)
     int32_t const size = (int32_t)strlen(cases[i].reply);
     for (int32_t piece = 1; piece <= size; piece += 7)
     {
-      az_mqtt_websocket_options ws = az_mqtt_websocket_options_default();
+      az_mqtt_websocket ws = _ws();
       int32_t consumed;
       uint16_t status;
       assert_int_equal(
@@ -306,7 +313,7 @@ static void invalid_replies_are_refused(void** state)
   {
     len += snprintf(endless + len, sizeof(endless) - (size_t)len, "X: y\r\n");
   }
-  az_mqtt_websocket_options ws = az_mqtt_websocket_options_default();
+  az_mqtt_websocket ws = _ws();
   int32_t consumed;
   uint16_t status;
   assert_int_equal(_parse(&ws, endless, len, 100, &consumed, &status), AZ_MQTT_ERROR_WEBSOCKET);
@@ -416,7 +423,7 @@ static size_t _stream(size_t* out_expected)
 }
 
 /** @brief Deframe s_stream[0..size) in place, in pieces of @p piece; returns payload size. */
-static size_t _deframe_all(az_mqtt_websocket_options* ws, size_t size, size_t piece, int* out_pings)
+static size_t _deframe_all(az_mqtt_websocket* ws, size_t size, size_t piece, int* out_pings)
 {
   size_t payload = 0;
   *out_pings = 0;
@@ -457,7 +464,7 @@ static void frames_deframe_in_place_in_any_pieces(void** state)
   {
     size_t expected;
     size_t const size = _stream(&expected);
-    az_mqtt_websocket_options ws = az_mqtt_websocket_options_default();
+    az_mqtt_websocket ws = _ws();
     int pings;
     assert_int_equal(_deframe_all(&ws, size, pieces[p], &pings), expected);
     assert_memory_equal(s_stream, s_expected, expected);
@@ -468,7 +475,7 @@ static void frames_deframe_in_place_in_any_pieces(void** state)
 /** @brief Deframe @p frames (one buffer) and return the last event. */
 static _az_mqtt_websocket_event _last_event(uint8_t const* frames, size_t size)
 {
-  az_mqtt_websocket_options ws = az_mqtt_websocket_options_default();
+  az_mqtt_websocket ws = _ws();
   static uint8_t out[256];
   _az_mqtt_websocket_event event = _AZ_MQTT_WEBSOCKET_EVENT_DATA;
   int32_t in = 0;
@@ -489,7 +496,7 @@ static void close_frames_carry_their_code(void** state)
   uint8_t frames[16];
   size_t n = _frame(frames, 0x82, (uint8_t const*)"ab", 2);
   n += _frame(frames + n, 0x88, (uint8_t const*)"\x03\xe9" "bye", 5);
-  az_mqtt_websocket_options ws = az_mqtt_websocket_options_default();
+  az_mqtt_websocket ws = _ws();
   uint8_t out[16];
   int32_t consumed;
   int32_t produced;
@@ -501,7 +508,7 @@ static void close_frames_carry_their_code(void** state)
   assert_int_equal(_az_mqtt_websocket_close_code(&ws), 1001);
 
   n = _frame(frames, 0x88, (uint8_t const*)"", 0);
-  ws = az_mqtt_websocket_options_default();
+  ws = _ws();
   assert_int_equal(
       _az_mqtt_websocket_deframe(&ws, frames, (int32_t)n, out, &consumed, &produced),
       _AZ_MQTT_WEBSOCKET_EVENT_CLOSE);
@@ -525,12 +532,35 @@ static void frames_rfc_6455_forbids_are_refused(void** state)
     { 0x89, 0x7E, 0x00, 0x7E }, // Ping over 125 bytes
     { 0x88, 0x01, 0x03 }, // Close with a 1-byte body
     { 0x82, 0x7F, 0x80, 0, 0, 0, 0, 0, 0, 0 }, // 64-bit length with the top bit set
+    { 0x82, 0x7E, 0x00, 0x7D }, // 125 in a 16-bit length
+    { 0x82, 0x7F, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF }, // 65535 in a 64-bit length
+    { 0x88, 0x02, 0x03, 0xED }, // Close 1005: never sent
+    { 0x88, 0x02, 0x03, 0xEC }, // Close 1004: reserved
+    { 0x88, 0x02, 0x03, 0xE7 }, // Close 999
+    { 0x88, 0x02, 0x0B, 0xB7 }, // Close 2999
+    { 0x88, 0x02, 0x13, 0x88 }, // Close 5000
+    { 0x88, 0x04, 0x03, 0xE8, 0xC0, 0x80 }, // Close 1000, overlong UTF-8
+    { 0x88, 0x05, 0x03, 0xE8, 0xED, 0xA0, 0x80 }, // Close 1000, UTF-8 surrogate
+    { 0x88, 0x03, 0x03, 0xE8, 0xE2 }, // Close 1000, truncated UTF-8
   };
-  static size_t const sizes[] = { 7, 3, 3, 3, 3, 3, 2, 3, 6, 2, 4, 3, 10 };
+  static size_t const sizes[] = { 7, 3, 3, 3, 3, 3, 2, 3, 6, 2, 4, 3, 10, 4, 10, 4, 4, 4, 4, 4, 6, 7, 5 };
   for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++)
   {
     assert_int_equal(_last_event(cases[i], sizes[i]), _AZ_MQTT_WEBSOCKET_EVENT_ERROR);
   }
+  // Valid close frames.
+  static uint8_t const closes[][4] = {
+    { 0x88, 0x02, 0x03, 0xE8 }, // 1000
+    { 0x88, 0x02, 0x03, 0xF3 }, // 1011
+    { 0x88, 0x02, 0x0F, 0xA0 }, // 4000
+  };
+  for (size_t i = 0; i < sizeof(closes) / sizeof(closes[0]); i++)
+  {
+    assert_int_equal(_last_event(closes[i], 4), _AZ_MQTT_WEBSOCKET_EVENT_CLOSE);
+  }
+  // Reason "o", U+00E9, U+20AC, U+1F600.
+  uint8_t const utf8[] = { 0x88, 0x0C, 0x03, 0xE8, 'o', 0xC3, 0xA9, 0xE2, 0x82, 0xAC, 0xF0, 0x9F, 0x98, 0x80 };
+  assert_int_equal(_last_event(utf8, sizeof(utf8)), _AZ_MQTT_WEBSOCKET_EVENT_CLOSE);
   // The same, allowed.
   uint8_t const ok[] = { 0x02, 0x01, 'x', 0x89, 0x00, 0x80, 0x01, 'y', 0x8A, 0x7D };
   assert_int_equal(_last_event(ok, sizeof(ok) - 2), _AZ_MQTT_WEBSOCKET_EVENT_DATA);

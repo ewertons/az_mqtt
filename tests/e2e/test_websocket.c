@@ -24,11 +24,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define E2E_STR2(x) #x
+#define E2E_STR(x) E2E_STR2(x)
+/** @brief Per MQTT version, so both suites can run at once on one broker. */
+#define E2E_WS_NAME "az-mqtt-e2e-ws-v" E2E_STR(AZ_MQTT_TEST_VERSION)
+
 #define E2E_WS_PORT 8080
 #define E2E_WSS_PORT 8081
 
 static az_mqtt_e2e_fixture s_fixture;
-static az_mqtt_websocket_options s_websocket;
+static az_mqtt_websocket_options s_websocket_options;
 static az_mqtt_proxy_options s_proxy_options;
 static bool s_suback_received;
 static int32_t s_received_size;
@@ -62,20 +67,20 @@ static az_result _init(
     uint16_t proxy_port)
 {
   az_mqtt_e2e_fixture_reset(&s_fixture);
-  s_websocket = az_mqtt_websocket_options_default();
+  s_websocket_options = az_mqtt_websocket_options_default();
   memset(&s_proxy_options, 0, sizeof(s_proxy_options));
   s_proxy_options.host = proxy_port != 0 ? AZ_SPAN_FROM_STR("127.0.0.1") : AZ_SPAN_EMPTY;
   s_proxy_options.port = proxy_port;
   az_mqtt_e2e_client_params params;
   memset(&params, 0, sizeof(params));
-  params.client_id = AZ_SPAN_FROM_STR("az-mqtt-e2e-ws");
+  params.client_id = AZ_SPAN_FROM_STR(E2E_WS_NAME);
   params.hostname = az_span_create_from_str((char*)(uintptr_t)host);
   params.port = port;
   params.keep_alive_seconds = 30;
   params.clean_start = true;
   params.tls_options = tls;
   params.proxy_options = &s_proxy_options;
-  params.websocket_options = &s_websocket;
+  params.websocket_options = &s_websocket_options;
   params.on_publish = on_publish;
   params.on_suback = on_suback;
   return az_mqtt_e2e_init_client(&s_fixture, client, &params);
@@ -94,7 +99,7 @@ static void _roundtrip(AZ_MQTT_T(client)* client)
   s_suback_received = false;
   AZ_MQTT_T(subscription) sub;
   memset(&sub, 0, sizeof(sub));
-  sub.topic_filter = AZ_SPAN_FROM_STR("az-mqtt/e2e/ws");
+  sub.topic_filter = AZ_SPAN_FROM_STR(E2E_WS_NAME);
   sub.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
   assert_int_equal(AZ_MQTT_T(client_subscribe)(client, &sub, 1, NULL), AZ_OK);
   assert_int_equal(az_mqtt_e2e_wait_until(client, 100, 50, cond_suback), AZ_OK);
@@ -104,7 +109,7 @@ static void _roundtrip(AZ_MQTT_T(client)* client)
     s_received_size = -1;
     s_payload_size = sizes[i];
     AZ_MQTT_T(publish_options) pub = AZ_MQTT_T(publish_options_default)();
-    pub.topic = AZ_SPAN_FROM_STR("az-mqtt/e2e/ws");
+    pub.topic = AZ_SPAN_FROM_STR(E2E_WS_NAME);
     pub.payload = az_span_create(s_payload, s_payload_size);
     pub.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
     assert_int_equal(AZ_MQTT_T(client_publish)(client, &pub, NULL), AZ_OK);

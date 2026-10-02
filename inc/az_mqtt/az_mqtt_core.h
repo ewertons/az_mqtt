@@ -13,7 +13,6 @@
 
 #include <az_mqtt/az_mqtt_transport.h>
 #include <az_mqtt/az_mqtt_types.h>
-#include <az_mqtt/az_mqtt_websocket.h>
 
 #include <azure/core/az_span.h>
 
@@ -57,8 +56,6 @@ struct az_mqtt_core
     az_mqtt_tls_options const* tls_options;
     /** @brief For logging; the transport uses it (az_mqtt_transport_set_proxy()). */
     az_mqtt_proxy_options const* proxy;
-    /** @brief MQTT over WebSockets (NULL: none). */
-    az_mqtt_websocket_options* websocket;
     _az_mqtt_core_on_closed_fn on_closed;
     _az_mqtt_core_on_transport_error_fn on_transport_error;
     /** @brief In-flight requests: az_mqtt_inflight_entry[] (caller storage), at most UINT16_MAX. */
@@ -71,8 +68,6 @@ struct az_mqtt_core
     int32_t recv_buf_pos;
     /** @brief Bumped whenever a session ends; guards against callbacks that reconnect. */
     uint32_t session_generation;
-    /** @brief Connects started; az_mqtt_native_error.connect_attempt of WebSocket errors. */
-    uint32_t connect_attempts;
     /** @brief Server Maximum Packet Size (mqttv5 CONNACK); 0: none. Reset when a session ends. */
     uint32_t server_maximum_packet_size;
     az_mqtt_client_state state;

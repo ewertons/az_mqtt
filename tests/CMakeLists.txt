@@ -25,7 +25,7 @@ set(BUILD_SHARED_LIBS ${_saved_BUILD_SHARED_LIBS} CACHE BOOL "" FORCE)
 
 # ── Test subdirectories ──────────────────────────────────────
 
-if(AZ_MQTT_ENABLE_PROXY)
+if(AZ_MQTT_ENABLE_PROXY OR AZ_MQTT_ENABLE_WEBSOCKETS)
   add_subdirectory(unit)
 endif()
 add_subdirectory(e2e)

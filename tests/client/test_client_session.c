@@ -21,6 +21,8 @@
 
 #include "az_mqtt_test_api.h"
 
+#include <az_mqtt/az_mqtt_websocket.h>
+
 #include "test_native_errors.h"
 #include "test_proxy.h"
 #include "test_server.h"
@@ -39,7 +41,8 @@ typedef struct
   uint8_t recv_buf[1024];
   az_mqtt_tls_options tls;
   az_mqtt_inflight_entry inflight_control_buffer[8];
-  az_mqtt_websocket_options ws;
+  az_mqtt_websocket ws;
+  az_span ws_path;
 #if AZ_MQTT_TEST_VERSION == 5
   AZ_MQTT_T(user_property) props[4][4];
   int32_t sub_ids[4];
@@ -219,14 +222,14 @@ static void _setup(fixture* f, test_server_options const* server_options, uint16
     o.connect_options.username = AZ_SPAN_FROM_STR("SECRET-USERNAME");
     o.connect_options.password = AZ_SPAN_FROM_STR("SECRET-PASSWORD");
     o.connect_options.will = &s_will;
-    f->ws.path = AZ_SPAN_FROM_STR("/SECRET-PATH");
+    f->ws_path = AZ_SPAN_FROM_STR("/SECRET-PATH");
   }
   if (so->websocket)
   {
-    az_span const path = f->ws.path;
-    f->ws = az_mqtt_websocket_options_default();
-    f->ws.path = path;
-    o.websocket_options = &f->ws;
+    az_mqtt_websocket_options ws_options = az_mqtt_websocket_options_default();
+    ws_options.path = f->ws_path;
+    assert_int_equal(az_mqtt_websocket_init(&f->ws, f->transport, &ws_options), AZ_OK);
+    o.transport = az_mqtt_websocket_get_transport(&f->ws);
   }
   o.hostname = AZ_SPAN_FROM_STR("127.0.0.1");
   if (so->tls)
@@ -1057,36 +1060,27 @@ static void a_masked_server_frame_is_refused(void** state)
 static void invalid_websocket_options_fail_initialization(void** state)
 {
   (void)state;
-  fixture f;
-  memset(&f, 0, sizeof(f));
-  f.transport = (az_mqtt_transport*)calloc(1, (size_t)az_mqtt_transport_sizeof());
-  assert_non_null(f.transport);
-  assert_int_equal(az_mqtt_transport_init(f.transport), AZ_OK);
-  AZ_MQTT_T(client_options) o;
-  memset(&o, 0, sizeof(o));
-  o.transport = f.transport;
-  f.ws = az_mqtt_websocket_options_default();
-  f.ws.path = AZ_SPAN_FROM_STR("mqtt");
-  o.websocket_options = &f.ws;
-  assert_int_equal(AZ_MQTT_T(client_init)(&f.client, &o), AZ_MQTT_ERROR_INVALID_CONFIG);
-  free(f.transport);
+  az_mqtt_transport* const transport
+      = (az_mqtt_transport*)calloc(1, (size_t)az_mqtt_transport_sizeof());
+  assert_non_null(transport);
+  assert_int_equal(az_mqtt_transport_init(transport), AZ_OK);
+  az_mqtt_websocket ws;
+  az_mqtt_websocket_options options = az_mqtt_websocket_options_default();
+  options.path = AZ_SPAN_FROM_STR("mqtt");
+  assert_int_equal(az_mqtt_websocket_init(&ws, transport, &options), AZ_MQTT_ERROR_INVALID_CONFIG);
+  free(transport);
 }
 #else
-static void websocket_options_are_refused_without_websocket_support(void** state)
+static void websockets_are_refused_without_websocket_support(void** state)
 {
   (void)state;
-  fixture f;
-  memset(&f, 0, sizeof(f));
-  f.transport = (az_mqtt_transport*)calloc(1, (size_t)az_mqtt_transport_sizeof());
-  assert_non_null(f.transport);
-  assert_int_equal(az_mqtt_transport_init(f.transport), AZ_OK);
-  AZ_MQTT_T(client_options) o;
-  memset(&o, 0, sizeof(o));
-  o.transport = f.transport;
-  f.ws = az_mqtt_websocket_options_default();
-  o.websocket_options = &f.ws;
-  assert_int_equal(AZ_MQTT_T(client_init)(&f.client, &o), AZ_MQTT_ERROR_NOT_SUPPORTED);
-  free(f.transport);
+  az_mqtt_transport* const transport
+      = (az_mqtt_transport*)calloc(1, (size_t)az_mqtt_transport_sizeof());
+  assert_non_null(transport);
+  assert_int_equal(az_mqtt_transport_init(transport), AZ_OK);
+  az_mqtt_websocket ws;
+  assert_int_equal(az_mqtt_websocket_init(&ws, transport, NULL), AZ_MQTT_ERROR_NOT_SUPPORTED);
+  free(transport);
 }
 #endif // AZ_MQTT_NO_WEBSOCKETS
 
@@ -1190,15 +1184,11 @@ static void logs_never_contain_credentials_topics_or_payloads(void** state)
   snprintf(via, sizeof(via), " via 127.0.0.1:%u\n", test_proxy_port(proxy));
   test_proxy_stop(proxy);
   assert_non_null(strstr(s_log, via)); // The proxy, never its credentials.
-#if !defined(AZ_MQTT_TEST_BACKEND_NONE) && !defined(AZ_MQTT_NO_WEBSOCKETS)
-  assert_non_null(strstr(s_log, " tls ws via "));
-#elif !defined(AZ_MQTT_TEST_BACKEND_NONE)
+#if !defined(AZ_MQTT_TEST_BACKEND_NONE)
   assert_non_null(strstr(s_log, " tls via "));
 #endif
 #endif
-#ifndef AZ_MQTT_NO_WEBSOCKETS
-  assert_non_null(strstr(s_log, " ws"));
-#endif
+
   assert_non_null(strstr(s_log, "sent CONNECT "));
   assert_non_null(strstr(s_log, "received CONNACK "));
   assert_non_null(strstr(s_log, "sent SUBSCRIBE "));
@@ -1395,7 +1385,7 @@ int main(void)
     cmocka_unit_test(a_masked_server_frame_is_refused),
     cmocka_unit_test(invalid_websocket_options_fail_initialization),
 #else
-    cmocka_unit_test(websocket_options_are_refused_without_websocket_support),
+    cmocka_unit_test(websockets_are_refused_without_websocket_support),
 #endif
     cmocka_unit_test(an_idle_session_with_answered_pings_stays_up),
     cmocka_unit_test(a_missing_pingresp_ends_the_session),

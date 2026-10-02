@@ -9,11 +9,9 @@
 
 #include "az_mqtt_codec_internal.h"
 #include "az_mqtt_core_internal.h"
-#include "az_mqtt_websocket_internal.h"
 
 #include <azure/core/internal/az_log_internal.h>
 #include <azure/core/internal/az_precondition_internal.h>
-#include <azure/core/internal/az_result_internal.h>
 #include <azure/core/az_result.h>
 #include <azure/core/az_span.h>
 
@@ -92,7 +90,7 @@ static void _log_write(az_log_classification classification, az_span buffer, az_
   _az_LOG_WRITE(classification, az_span_slice(buffer, 0, az_span_size(buffer) - az_span_size(rest)));
 }
 
-/** @brief "connect <host>:<port>[ tls][ ws][ via <proxy host>:<proxy port>]". */
+/** @brief "connect <host>:<port>[ tls]". */
 static void _log_connect(az_mqtt_core* core)
 {
   if (!_az_LOG_SHOULD_WRITE(AZ_LOG_MQTT_CONNECTION))
@@ -110,12 +108,6 @@ static void _log_connect(az_mqtt_core* core)
   {
     _log_append(&out, AZ_SPAN_FROM_STR(" tls"));
   }
-#ifndef AZ_MQTT_NO_WEBSOCKETS
-  if (_S(core).websocket != NULL) // Never its path.
-  {
-    _log_append(&out, AZ_SPAN_FROM_STR(" ws"));
-  }
-#endif
   az_mqtt_proxy_options const* const proxy = _S(core).proxy;
   if (proxy != NULL && az_span_size(proxy->host) > 0) // Never its credentials.
   {
@@ -204,174 +196,6 @@ void _az_mqtt_core_register_transport_errors(az_mqtt_core* core)
   az_mqtt_transport_set_error_callback(_S(core).transport, _on_native_error, core);
 }
 
-// ──────────────────────── WebSocket ──────────────────────────
-
-#ifndef AZ_MQTT_NO_WEBSOCKETS
-/** @brief Report a WebSocket error (see AZ_MQTT_NATIVE_ERROR_WEBSOCKET). */
-static void _ws_report(az_mqtt_core* core, int32_t code, az_result result)
-{
-  az_mqtt_native_error const error
-      = { AZ_MQTT_NATIVE_ERROR_WEBSOCKET, code, result, _S(core).connect_attempts };
-  _on_native_error(&error, core);
-}
-
-/** @brief Send @p payload as one masked frame of @p opcode, through a stack buffer. */
-static az_result _ws_send(az_mqtt_core* core, uint8_t opcode, az_span payload)
-{
-  uint8_t chunk[AZ_MQTT_WEBSOCKET_SEND_CHUNK];
-  uint8_t mask[4];
-  _az_RETURN_IF_FAILED(az_mqtt_transport_random(AZ_SPAN_FROM_BUFFER(mask)));
-  int32_t const size = az_span_size(payload);
-  int32_t used
-      = _az_mqtt_websocket_frame_header(chunk, opcode, (uint64_t)size, mask);
-  int32_t offset = 0;
-  do
-  {
-    int32_t const room = (int32_t)sizeof(chunk) - used;
-    int32_t const take = size - offset < room ? size - offset : room;
-    if (take > 0)
-    {
-      memcpy(chunk + used, az_span_ptr(payload) + offset, (size_t)take);
-      _az_mqtt_websocket_mask(chunk + used, take, mask, (uint64_t)offset);
-    }
-    _az_RETURN_IF_FAILED(
-        az_mqtt_transport_send(_S(core).transport, az_span_create(chunk, used + take)));
-    offset += take;
-    used = 0;
-  } while (offset < size);
-  return AZ_OK;
-}
-
-/**
- * @brief Deframe @p size bytes just received at recv_buf_pos: their payload stays there and
- * recv_buf_pos moves past it. Answers pings.
- */
-static az_result _ws_receive(az_mqtt_core* core, int32_t size)
-{
-  az_mqtt_websocket_options* const ws = _S(core).websocket;
-  uint8_t* const base = az_span_ptr(_S(core).receive_buffer) + _S(core).recv_buf_pos;
-  int32_t in = 0;
-  int32_t out = 0;
-  az_result rc = AZ_OK;
-  while (az_result_succeeded(rc) && in < size)
-  {
-    int32_t consumed;
-    int32_t produced;
-    _az_mqtt_websocket_event const event
-        = _az_mqtt_websocket_deframe(ws, base + in, size - in, base + out, &consumed, &produced);
-    in += consumed;
-    out += produced;
-    if (event == _AZ_MQTT_WEBSOCKET_EVENT_PING)
-    {
-      rc = _ws_send(core, _AZ_MQTT_WEBSOCKET_PONG, _az_mqtt_websocket_control(ws));
-    }
-    else if (event == _AZ_MQTT_WEBSOCKET_EVENT_CLOSE)
-    {
-      // Echo its status code, then close the connection.
-      uint16_t const code = _az_mqtt_websocket_close_code(ws);
-      az_span const status = _az_mqtt_websocket_control(ws);
-      (void)_ws_send(
-          core,
-          _AZ_MQTT_WEBSOCKET_CLOSE,
-          az_span_slice(status, 0, az_span_size(status) < 2 ? az_span_size(status) : 2));
-      ws->_internal.stage = _AZ_MQTT_WEBSOCKET_CLOSED;
-      rc = AZ_MQTT_ERROR_CONNECTION_CLOSED;
-      if (code != _AZ_MQTT_WEBSOCKET_CLOSE_NORMAL)
-      {
-        _ws_report(core, code, rc);
-      }
-    }
-    else if (event == _AZ_MQTT_WEBSOCKET_EVENT_ERROR)
-    {
-      ws->_internal.stage = _AZ_MQTT_WEBSOCKET_CLOSED;
-      rc = AZ_MQTT_ERROR_WEBSOCKET;
-      _ws_report(core, _AZ_MQTT_WEBSOCKET_CLOSE_PROTOCOL_ERROR, rc);
-    }
-  }
-  _S(core).recv_buf_pos += out;
-  return rc;
-}
-
-/**
- * @brief CONNECTING, transport up: send the upgrade request, then read the reply until
- * @p deadline_ms. Bytes after the reply are deframed into the receive buffer.
- *
- * @retval AZ_MQTT_ERROR_TIMEOUT Reply incomplete: call again.
- */
-static az_result _ws_upgrade(az_mqtt_core* core, int64_t deadline_ms)
-{
-  az_mqtt_websocket_options* const ws = _S(core).websocket;
-  if (ws->_internal.stage == _AZ_MQTT_WEBSOCKET_IDLE)
-  {
-    uint8_t nonce[16];
-    uint8_t request[_AZ_MQTT_WEBSOCKET_REQUEST_MAX];
-    int32_t size = 0;
-    _az_RETURN_IF_FAILED(az_mqtt_transport_random(AZ_SPAN_FROM_BUFFER(nonce)));
-    _az_RETURN_IF_FAILED(_az_mqtt_websocket_request(
-        ws,
-        _S(core).hostname,
-        _S(core).port,
-        _S(core).tls_options != NULL,
-        nonce,
-        AZ_SPAN_FROM_BUFFER(request),
-        &size));
-    _az_RETURN_IF_FAILED(
-        az_mqtt_transport_send(_S(core).transport, az_span_create(request, size)));
-  }
-  while (ws->_internal.stage == _AZ_MQTT_WEBSOCKET_UPGRADING)
-  {
-    az_span received;
-    _az_RETURN_IF_FAILED(az_mqtt_transport_receive(
-        _S(core).transport, _S(core).receive_buffer, _remaining(deadline_ms), &received));
-    if (az_span_size(received) == 0)
-    {
-      return AZ_MQTT_ERROR_TIMEOUT;
-    }
-    int32_t consumed;
-    uint16_t status;
-    az_result const rc = _az_mqtt_websocket_reply_parse(ws, received, &consumed, &status);
-    if (rc == AZ_MQTT_ERROR_WEBSOCKET)
-    {
-      _ws_report(core, status, rc);
-      return rc;
-    }
-    if (rc == AZ_OK)
-    {
-      int32_t const rest = az_span_size(received) - consumed;
-      if (rest > 0)
-      {
-        memmove(az_span_ptr(received), az_span_ptr(received) + consumed, (size_t)rest);
-      }
-      _S(core).recv_buf_pos = 0;
-      return _ws_receive(core, rest);
-    }
-  }
-  return AZ_OK;
-}
-
-/** @brief Send @p data: framed once upgraded. */
-static az_result _transport_send(az_mqtt_core* core, az_span data)
-{
-  return _S(core).websocket != NULL
-      ? _ws_send(core, _AZ_MQTT_WEBSOCKET_BINARY, data)
-      : az_mqtt_transport_send(_S(core).transport, data);
-}
-
-/** @brief Account for @p size bytes just received at recv_buf_pos. */
-static az_result _transport_received(az_mqtt_core* core, int32_t size)
-{
-  if (_S(core).websocket != NULL)
-  {
-    return _ws_receive(core, size);
-  }
-  _S(core).recv_buf_pos += size;
-  return AZ_OK;
-}
-#else
-#define _transport_send(core, data) az_mqtt_transport_send(_S(core).transport, data)
-#define _transport_received(core, size) (_S(core).recv_buf_pos += (size), AZ_OK)
-#endif // AZ_MQTT_NO_WEBSOCKETS
-
 /** @brief Free every in-flight entry. */
 static void _clear_inflight_entries(az_mqtt_core* core)
 {
@@ -386,20 +210,10 @@ void _az_mqtt_core_close(
     az_result reason)
 {
   bool const was_open = _S(core).state != AZ_MQTT_CLIENT_STATE_DISCONNECTED;
-#ifndef AZ_MQTT_NO_WEBSOCKETS
-  az_mqtt_websocket_options* const ws = _S(core).websocket;
-  if (ws != NULL)
+  if (reason == AZ_OK && _S(core).state == AZ_MQTT_CLIENT_STATE_CONNECTED)
   {
-    if (reason == AZ_OK && ws->_internal.stage == _AZ_MQTT_WEBSOCKET_OPEN)
-    {
-      static uint8_t const normal[2] = { _AZ_MQTT_WEBSOCKET_CLOSE_NORMAL >> 8,
-                                         _AZ_MQTT_WEBSOCKET_CLOSE_NORMAL & 0xFF };
-      // Best effort, like the DISCONNECT before it.
-      (void)_ws_send(core, _AZ_MQTT_WEBSOCKET_CLOSE, az_span_create((uint8_t*)(uintptr_t)normal, 2));
-    }
-    ws->_internal.stage = _AZ_MQTT_WEBSOCKET_IDLE;
+    az_mqtt_transport_shutdown(_S(core).transport); // Orderly: after DISCONNECT.
   }
-#endif
   az_mqtt_transport_close(_S(core).transport);
   if (was_open)
   {
@@ -434,7 +248,8 @@ az_result _az_mqtt_core_send(
   {
     return AZ_MQTT_ERROR_PACKET_TOO_LARGE;
   }
-  az_result rc = _transport_send(core, az_span_slice(_S(core).send_buffer, 0, written));
+  az_result rc = az_mqtt_transport_send(
+      _S(core).transport, az_span_slice(_S(core).send_buffer, 0, written));
   if (az_result_succeeded(rc))
   {
     _S(core).last_send_time_ms = _get_clock_ms();
@@ -623,7 +438,7 @@ static az_result _ensure_received(
       }
       continue; // Woke early; wait out the rest of the deadline.
     }
-    _az_RETURN_IF_FAILED(_transport_received(core, az_span_size(received)));
+    _S(core).recv_buf_pos += az_span_size(received);
   }
   return AZ_OK;
 }
@@ -719,7 +534,6 @@ az_result _az_mqtt_core_connect_start(az_mqtt_core* core, int32_t timeout_ms)
   _S(core).connect_sent = false;
   _S(core).timer_ms = _deadline(timeout_ms);
   _S(core).state = AZ_MQTT_CLIENT_STATE_CONNECTING;
-  _S(core).connect_attempts++;
   _log_connect(core);
 
   az_result rc = az_mqtt_transport_connect_start(
@@ -767,20 +581,7 @@ static az_result _service_connect(az_mqtt_core* core, int64_t* deadline_ms)
     return AZ_OK;
   }
 
-  az_result rc = AZ_OK;
-#ifndef AZ_MQTT_NO_WEBSOCKETS
-  az_mqtt_websocket_options const* const ws = _S(core).websocket;
-  if (ws == NULL || ws->_internal.stage == _AZ_MQTT_WEBSOCKET_IDLE)
-#endif
-  {
-    rc = az_mqtt_transport_connect_poll(_S(core).transport, _remaining(*deadline_ms));
-  }
-#ifndef AZ_MQTT_NO_WEBSOCKETS
-  if (ws != NULL && az_result_succeeded(rc))
-  {
-    rc = _ws_upgrade(core, *deadline_ms);
-  }
-#endif
+  az_result rc = az_mqtt_transport_connect_poll(_S(core).transport, _remaining(*deadline_ms));
   if (rc == AZ_MQTT_ERROR_TIMEOUT)
   {
     return _connect_expired(core) ? rc : AZ_OK; // Not up yet.

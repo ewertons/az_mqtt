@@ -80,6 +80,7 @@ endfunction()
 set(AZ_MQTT_CORE_SOURCES
   src/core/az_mqtt_core.c
   src/core/az_mqtt_codec_common.c
+  src/core/az_mqtt_transport.c
 )
 if(AZ_MQTT_ENABLE_PROXY OR AZ_MQTT_ENABLE_WEBSOCKETS)
   list(APPEND AZ_MQTT_CORE_SOURCES src/platform/az_mqtt_http_connect.c)

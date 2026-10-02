@@ -39,7 +39,7 @@ enum
   _AZ_MQTT_WEBSOCKET_PONG = 0xA,
 };
 
-/** @brief Connection stage (options->_internal.stage). */
+/** @brief Connection stage (_internal.stage). */
 enum
 {
   _AZ_MQTT_WEBSOCKET_IDLE, ///< No upgrade requested on this connection yet.
@@ -60,19 +60,8 @@ typedef enum
 /** @brief SHA-1 of @p data (FIPS 180-4); only for the handshake's accept value. */
 void _az_mqtt_sha1(uint8_t const* data, size_t size, uint8_t out[20]);
 
-#ifndef AZ_MQTT_NO_WEBSOCKETS
-/**
- * @brief Validate @p options (see az_mqtt_websocket_options.path); NULL is valid.
- * @retval AZ_MQTT_ERROR_INVALID_CONFIG Path invalid or too long.
- */
-AZ_NODISCARD az_result _az_mqtt_websocket_check(az_mqtt_websocket_options const* options);
-#else // Built without WebSocket support (AZ_MQTT_ENABLE_WEBSOCKETS=OFF).
-AZ_NODISCARD AZ_INLINE az_result
-_az_mqtt_websocket_check(az_mqtt_websocket_options const* options)
-{
-  return options == NULL ? AZ_OK : AZ_MQTT_ERROR_NOT_SUPPORTED;
-}
-#endif // AZ_MQTT_NO_WEBSOCKETS
+/** @brief Whether @p path is a valid az_mqtt_websocket_options.path. */
+AZ_NODISCARD bool _az_mqtt_websocket_path_is_valid(az_span path);
 
 /**
  * @brief Write the upgrade request to @p buffer and reset @p ws for a new connection (stage
@@ -84,7 +73,7 @@ _az_mqtt_websocket_check(az_mqtt_websocket_options const* options)
  * @retval AZ_MQTT_ERROR_INVALID_CONFIG @p host is empty, too long, or has CR, LF, NUL or a space.
  */
 AZ_NODISCARD az_result _az_mqtt_websocket_request(
-    az_mqtt_websocket_options* ws,
+    az_mqtt_websocket* ws,
     az_span host,
     uint16_t port,
     bool tls,
@@ -102,7 +91,7 @@ AZ_NODISCARD az_result _az_mqtt_websocket_request(
  * @retval AZ_MQTT_ERROR_WEBSOCKET Refused (status not 101), invalid headers, or not HTTP.
  */
 AZ_NODISCARD az_result _az_mqtt_websocket_reply_parse(
-    az_mqtt_websocket_options* ws,
+    az_mqtt_websocket* ws,
     az_span data,
     int32_t* out_consumed,
     uint16_t* out_status);
@@ -131,7 +120,7 @@ void _az_mqtt_websocket_mask(uint8_t* data, int32_t size, uint8_t const mask[4],
  * @param[out] out_produced Payload bytes written to @p out.
  */
 _az_mqtt_websocket_event _az_mqtt_websocket_deframe(
-    az_mqtt_websocket_options* ws,
+    az_mqtt_websocket* ws,
     uint8_t const* in,
     int32_t in_size,
     uint8_t* out,
@@ -139,9 +128,9 @@ _az_mqtt_websocket_event _az_mqtt_websocket_deframe(
     int32_t* out_produced);
 
 /** @brief Payload of the last ping or close frame (at most 125 bytes). */
-AZ_NODISCARD az_span _az_mqtt_websocket_control(az_mqtt_websocket_options* ws);
+AZ_NODISCARD az_span _az_mqtt_websocket_control(az_mqtt_websocket* ws);
 
 /** @brief Status code of the last close frame; 1005 if it had none. */
-AZ_NODISCARD uint16_t _az_mqtt_websocket_close_code(az_mqtt_websocket_options const* ws);
+AZ_NODISCARD uint16_t _az_mqtt_websocket_close_code(az_mqtt_websocket const* ws);
 
 #endif // AZ_MQTT_WEBSOCKET_INTERNAL_H
