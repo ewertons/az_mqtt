@@ -11,19 +11,19 @@ GCC 12.2, `-O3 -DNDEBUG`, x86-64, Debian 12, no TLS. An application links `az_mq
 | az_mqtt_codec_common.c | core | 1,399 B | 0 | 0 | 0 |
 | transport_posix.c | core | 1,905 B | 0 | 0 | 0 |
 | az_mqtt_socket_posix.c | core | 6,513 B | 7 B | 0 | 0 |
-| az_mqtt_http_connect.c | core | 2,074 B | 100 B | 0 | 0 |
+| az_mqtt_http_connect.c | core | 2,239 B | 108 B | 0 | 0 |
 | az_mqtt3_client.c | mqttv3 | 2,512 B | 56 B | 0 | 0 |
 | az_mqtt3_codec.c | mqttv3 | 2,651 B | 37 B | 0 | 0 |
 | az_mqtt5_client.c | mqttv5 | 3,518 B | 64 B | 0 | 0 |
 | az_mqtt5_codec.c | mqttv5 | 9,993 B | 299 B | 0 | 0 |
-| **mqttv3 application** | core + mqttv3 | **23,221 B** | **475 B** | **0** | **0** |
-| **mqttv5 application** | core + mqttv5 | **31,569 B** | **745 B** | **0** | **0** |
-| **Both versions** | core + mqttv3 + mqttv5 | **36,732 B** | **838 B** | **0** | **0** |
+| **mqttv3 application** | core + mqttv3 | **23,386 B** | **483 B** | **0** | **0** |
+| **mqttv5 application** | core + mqttv5 | **31,734 B** | **753 B** | **0** | **0** |
+| **Both versions** | core + mqttv3 + mqttv5 | **36,897 B** | **846 B** | **0** | **0** |
 
 Proxy support (`AZ_MQTT_ENABLE_PROXY`, default `ON`) also links azure-sdk-for-c `az_base64.c`
 (4,633 B .text, 65 B .rodata). With it `OFF`, `az_mqtt_http_connect.c` and the tunnel code are
-compiled out: each application is then 4,180 B .text and 100 B .rodata smaller, plus
-`az_base64.c` (at `-Os`: 2,471 B, plus 1,596 B for `az_base64.c`).
+compiled out: each application is then 4,345 B .text and 108 B .rodata smaller, plus
+`az_base64.c` (at `-Os`: 2,555 B, plus 1,596 B for `az_base64.c`).
 
 azure-sdk-for-c `LOGGING=OFF` (`AZ_NO_LOGGING`) compiles az_mqtt logging out: az_mqtt_core.c is then
 4,023 B (.text) and 0 (.rodata): each application 2,144 B and 275 B smaller.

@@ -59,6 +59,8 @@ struct az_mqtt_transport
   _az_mqtt_error_sink errors;
   /** @brief Proxy to connect through (az_mqtt_transport_set_proxy()); NULL: none. */
   az_mqtt_proxy_options const* proxy;
+  /** @brief The current connect goes through a proxy (set_proxy() affects only the next one). */
+  bool via_proxy;
 #ifndef AZ_MQTT_NO_PROXY
   _az_mqtt_proxy_tunnel tunnel;
 #endif
@@ -586,8 +588,9 @@ AZ_NODISCARD az_result az_mqtt_transport_connect_start(
 #endif
 
   az_result rc = AZ_OK;
+  transport->via_proxy = transport->proxy != NULL;
 #ifndef AZ_MQTT_NO_PROXY
-  az_mqtt_proxy_options const* const proxy = transport->proxy;
+  az_mqtt_proxy_options const* const proxy = transport->proxy; // The tunnel keeps it.
   if (proxy != NULL)
   {
     rc = _az_mqtt_proxy_tunnel_start(&transport->tunnel, proxy, host, port);
@@ -646,7 +649,7 @@ az_mqtt_transport_connect_poll(az_mqtt_transport* transport, int32_t timeout_ms)
     {
       transport->socket_fd = transport->tcp.fd;
       _az_mqtt_tcp_connect_init(&transport->tcp);
-      if (transport->proxy != NULL)
+      if (transport->via_proxy)
       {
         transport->state = _TRANSPORT_PROXY;
       }

@@ -128,7 +128,11 @@ enum
   _REPLY_LINE_START, ///< A header line, or the empty line ending the headers
   _REPLY_HEADER, ///< Rest of a header line
   _REPLY_END_CR, ///< CR of the empty line seen
+  _REPLY_LINE_CR, ///< CR ending the status line or a header line seen
 };
+
+/** @brief Whether @p c may appear inside a reason phrase or header line (RFC 9110 §5.5). */
+static bool _is_field_byte(uint8_t c) { return c == '\t' || c >= 0x20 ? c != 0x7F : false; }
 
 void _az_mqtt_http_connect_reply_init(_az_mqtt_http_connect_reply* reply)
 {
@@ -167,21 +171,36 @@ static bool _reply_step(_az_mqtt_http_connect_reply* r, uint8_t c, bool* out_mal
       }
       if (r->position == 3 && (c == ' ' || c == '\r' || c == '\n'))
       {
-        r->state = c == '\n' ? _REPLY_LINE_START : _REPLY_REASON;
+        r->state = c == '\n' ? _REPLY_LINE_START : (c == '\r' ? _REPLY_LINE_CR : _REPLY_REASON);
         return false;
       }
       break;
     case _REPLY_REASON:
     case _REPLY_HEADER:
-      r->state = c == '\n' ? _REPLY_LINE_START : r->state;
-      return false;
+      if (c == '\r' || c == '\n' || _is_field_byte(c))
+      {
+        r->state = c == '\n' ? _REPLY_LINE_START : (c == '\r' ? _REPLY_LINE_CR : r->state);
+        return false;
+      }
+      break;
+    case _REPLY_LINE_CR:
+      if (c == '\n')
+      {
+        r->state = _REPLY_LINE_START;
+        return false;
+      }
+      break;
     case _REPLY_LINE_START:
       if (c == '\n')
       {
         return true;
       }
-      r->state = c == '\r' ? _REPLY_END_CR : _REPLY_HEADER;
-      return false;
+      if (c == '\r' || _is_field_byte(c))
+      {
+        r->state = c == '\r' ? _REPLY_END_CR : _REPLY_HEADER;
+        return false;
+      }
+      break;
     case _REPLY_END_CR:
       if (c == '\n')
       {

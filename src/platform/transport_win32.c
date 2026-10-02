@@ -56,10 +56,15 @@ struct az_mqtt_transport
 
   /** @brief Proxy to connect through (az_mqtt_transport_set_proxy()); NULL: none. */
   az_mqtt_proxy_options const* proxy;
-  /** @brief _WIN_PROXY: the server to reach through it, and the reply so far. */
+  /**
+   * @brief The current connect's proxy (set_proxy() affects only the next connect), the server
+   * to reach through it, request bytes sent, and the reply so far.
+   */
+  az_mqtt_proxy_options const* attempt_proxy;
   az_span proxy_target_host;
   uint16_t proxy_target_port;
-  bool proxy_request_sent;
+  int32_t proxy_request_sent;
+  bool proxy_request_done;
   _az_mqtt_http_connect_reply proxy_reply;
 
   /** @brief _WIN_TCP: resolved addresses, the next one to try, and when the current one started. */
@@ -1250,20 +1255,22 @@ AZ_NODISCARD az_result az_mqtt_transport_connect_start(
 #endif
 
   az_result rc = AZ_OK;
+  transport->attempt_proxy = transport->proxy;
 #ifndef AZ_MQTT_NO_PROXY
-  if (transport->proxy != NULL)
+  if (transport->attempt_proxy != NULL)
   {
     uint8_t request[_AZ_MQTT_HTTP_CONNECT_REQUEST_MAX];
     int32_t size = 0;
     rc = _az_mqtt_http_connect_request( // Only to validate host now.
-        transport->proxy, host, port, AZ_SPAN_FROM_BUFFER(request), &size);
+        transport->attempt_proxy, host, port, AZ_SPAN_FROM_BUFFER(request), &size);
     az_span_fill(AZ_SPAN_FROM_BUFFER(request), 0);
     transport->proxy_target_host = host;
     transport->proxy_target_port = port;
-    transport->proxy_request_sent = false;
+    transport->proxy_request_sent = 0;
+    transport->proxy_request_done = false;
     _az_mqtt_http_connect_reply_init(&transport->proxy_reply);
-    host = transport->proxy->host;
-    port = transport->proxy->port;
+    host = transport->attempt_proxy->host;
+    port = transport->attempt_proxy->port;
   }
 #endif
   if (az_result_succeeded(rc))
@@ -1304,39 +1311,85 @@ static az_result _proxy_socket_failure(az_mqtt_transport* transport, int err)
   return AZ_MQTT_ERROR_PROXY;
 }
 
+/** @brief Wait up to @p timeout_ms for @p fd to accept data: 1 ready, 0 not yet, -1 failed. */
+static int _socket_wait_writable(SOCKET fd, int32_t timeout_ms)
+{
+  fd_set write_fds;
+  FD_ZERO(&write_fds);
+  FD_SET(fd, &write_fds);
+  struct timeval tv;
+  tv.tv_sec = timeout_ms / 1000;
+  tv.tv_usec = (timeout_ms % 1000) * 1000;
+  int const sel = select(0, NULL, &write_fds, NULL, timeout_ms < 0 ? NULL : &tv);
+  return sel < 0 ? -1 : (sel > 0 ? 1 : 0);
+}
+
 /**
- * @brief Open the HTTP CONNECT tunnel on the (blocking) socket by @p deadline_ms; resumable.
- * Reads nothing past the reply.
+ * @brief Send the rest of the CONNECT request by @p deadline_ms, without blocking past it.
+ * @retval AZ_MQTT_ERROR_TIMEOUT Not all sent yet; proxy_request_sent keeps the progress.
+ */
+static az_result _proxy_send_request(az_mqtt_transport* transport, int64_t deadline_ms)
+{
+  if (transport->proxy_request_done)
+  {
+    return AZ_OK;
+  }
+  uint8_t request[_AZ_MQTT_HTTP_CONNECT_REQUEST_MAX];
+  int32_t size = 0;
+  az_result rc = _az_mqtt_http_connect_request(
+      transport->attempt_proxy,
+      transport->proxy_target_host,
+      transport->proxy_target_port,
+      AZ_SPAN_FROM_BUFFER(request),
+      &size);
+  u_long non_blocking = 1;
+  if (az_result_succeeded(rc) && ioctlsocket(transport->socket_fd, FIONBIO, &non_blocking) != 0)
+  {
+    rc = _proxy_socket_failure(transport, WSAGetLastError());
+  }
+  while (az_result_succeeded(rc) && transport->proxy_request_sent < size)
+  {
+    int32_t const sent = transport->proxy_request_sent;
+    int const n = send(transport->socket_fd, (char const*)request + sent, size - sent, 0);
+    if (n > 0)
+    {
+      transport->proxy_request_sent += n;
+      continue;
+    }
+    int err = WSAGetLastError();
+    int const w = err == WSAEWOULDBLOCK
+        ? _socket_wait_writable(transport->socket_fd, _remaining(deadline_ms))
+        : -1;
+    if (w < 0)
+    {
+      err = err == WSAEWOULDBLOCK ? WSAGetLastError() : err; // From select().
+      rc = _proxy_socket_failure(transport, err);
+    }
+    else if (w == 0)
+    {
+      rc = AZ_MQTT_ERROR_TIMEOUT;
+    }
+  }
+  az_span_fill(AZ_SPAN_FROM_BUFFER(request), 0); // It holds the credentials.
+  u_long blocking = 0; // Sends after the tunnel rely on SO_SNDTIMEO.
+  if (ioctlsocket(transport->socket_fd, FIONBIO, &blocking) != 0
+      && (az_result_succeeded(rc) || rc == AZ_MQTT_ERROR_TIMEOUT))
+  {
+    rc = _proxy_socket_failure(transport, WSAGetLastError());
+  }
+  transport->proxy_request_done = az_result_succeeded(rc);
+  return rc;
+}
+
+/**
+ * @brief Open the HTTP CONNECT tunnel by @p deadline_ms; resumable. Reads nothing past the reply.
  */
 static az_result _proxy_tunnel_poll(az_mqtt_transport* transport, int64_t deadline_ms)
 {
-  if (!transport->proxy_request_sent)
+  az_result const sent = _proxy_send_request(transport, deadline_ms);
+  if (az_result_failed(sent))
   {
-    uint8_t request[_AZ_MQTT_HTTP_CONNECT_REQUEST_MAX];
-    int32_t size = 0;
-    az_result rc = _az_mqtt_http_connect_request(
-        transport->proxy,
-        transport->proxy_target_host,
-        transport->proxy_target_port,
-        AZ_SPAN_FROM_BUFFER(request),
-        &size);
-    int err = 0;
-    for (int32_t sent = 0; az_result_succeeded(rc) && sent < size;)
-    {
-      int const n = send(transport->socket_fd, (char const*)request + sent, size - sent, 0);
-      if (n <= 0) // SO_SNDTIMEO bounds a blocked send.
-      {
-        err = WSAGetLastError();
-        rc = AZ_MQTT_ERROR_PROXY;
-      }
-      sent += n > 0 ? n : 0;
-    }
-    az_span_fill(AZ_SPAN_FROM_BUFFER(request), 0); // It holds the credentials.
-    if (az_result_failed(rc))
-    {
-      return rc == AZ_MQTT_ERROR_PROXY ? _proxy_socket_failure(transport, err) : rc;
-    }
-    transport->proxy_request_sent = true;
+    return sent;
   }
   for (;;)
   {
@@ -1393,7 +1446,8 @@ az_mqtt_transport_connect_poll(az_mqtt_transport* transport, int32_t timeout_ms)
     }
     if (az_result_succeeded(rc))
     {
-      transport->state = transport->proxy != NULL ? _WIN_PROXY : _after_tcp_state(transport);
+      transport->state
+          = transport->attempt_proxy != NULL ? _WIN_PROXY : _after_tcp_state(transport);
     }
   }
 

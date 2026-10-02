@@ -229,6 +229,50 @@ static void refusals_and_malformed_replies_fail(void** state)
   }
 }
 
+static void control_bytes_in_the_reply_are_refused(void** state)
+{
+  (void)state;
+  static struct
+  {
+    char const bytes[40];
+    int32_t size;
+  } const cases[] = {
+    { "HTTP/1.1 200 OK\0\r\n\r\n", 20 }, // NUL in the reason phrase
+    { "HTTP/1.1 200 OK\r\nX: a\0b\r\n\r\n", 27 }, // NUL in a header
+    { "HTTP/1.1 200 OK\r\nX: a\x01\r\n\r\n", 26 }, // other control byte
+    { "HTTP/1.1 200 OK\r\nX: a\x7f\r\n\r\n", 26 }, // DEL
+    { "HTTP/1.1 200 OK\rX: a\r\n\r\n", 24 }, // bare CR ending a line
+    { "HTTP/1.1 200\rOK\r\n\r\n", 19 }, // bare CR after the status
+  };
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+  {
+    for (int32_t piece = 1; piece <= cases[i].size; piece++)
+    {
+      _az_mqtt_http_connect_reply r;
+      _az_mqtt_http_connect_reply_init(&r);
+      az_span const all = az_span_create((uint8_t*)(uintptr_t)cases[i].bytes, cases[i].size);
+      az_result rc = AZ_MQTT_ERROR_TIMEOUT;
+      for (int32_t offset = 0; rc == AZ_MQTT_ERROR_TIMEOUT && offset < cases[i].size;)
+      {
+        int32_t const end = offset + piece < cases[i].size ? offset + piece : cases[i].size;
+        int32_t consumed = 0;
+        rc = _az_mqtt_http_connect_reply_parse(&r, az_span_slice(all, offset, end), &consumed);
+        offset += consumed;
+      }
+      assert_int_equal(rc, AZ_MQTT_ERROR_PROXY);
+    }
+  }
+  // Tabs and obs-text are allowed.
+  char const ok[] = "HTTP/1.1 200 \xc3\xa9t\xc3\xa9\r\nX:\ta\tb\r\n\r\n";
+  _az_mqtt_http_connect_reply r;
+  _az_mqtt_http_connect_reply_init(&r);
+  int32_t consumed = 0;
+  assert_int_equal(
+      _az_mqtt_http_connect_reply_parse(
+          &r, az_span_create((uint8_t*)(uintptr_t)ok, (int32_t)sizeof(ok) - 1), &consumed),
+      AZ_OK);
+}
+
 static void an_endless_reply_is_cut_off(void** state)
 {
   (void)state;
@@ -261,6 +305,7 @@ int main(void)
     cmocka_unit_test(bytes_after_the_reply_are_not_consumed),
     cmocka_unit_test(long_headers_are_skipped),
     cmocka_unit_test(refusals_and_malformed_replies_fail),
+    cmocka_unit_test(control_bytes_in_the_reply_are_refused),
     cmocka_unit_test(an_endless_reply_is_cut_off),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
