@@ -27,6 +27,11 @@ az_result az_mqtt_e2e_init_client(
 
   az_mqtt_transport* transport = (az_mqtt_transport*)fixture->transport_buf.bytes;
   az_result rc = az_mqtt_transport_init(transport);
+  if (az_result_succeeded(rc) && params->websocket_options != NULL)
+  {
+    rc = az_mqtt_websocket_init(&fixture->websocket, transport, params->websocket_options);
+    transport = az_mqtt_websocket_get_transport(&fixture->websocket);
+  }
   if (az_result_failed(rc))
   {
     return rc;

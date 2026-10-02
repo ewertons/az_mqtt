@@ -3,10 +3,11 @@
 
 /**
  * @file az_mqtt_transport.h
- * @brief Platform transport abstraction for TCP/TLS connections.
+ * @brief Transport abstraction: the byte stream a client runs over.
  *
- * Implement these functions for your platform. Implementations for Linux (POSIX + OpenSSL)
- * and Windows (Winsock + Schannel/OpenSSL) are provided.
+ * A transport is an az_mqtt_transport_vtable implementation. The platform transport (TCP, TLS,
+ * HTTP CONNECT proxy) is provided for POSIX (OpenSSL, mbedTLS) and Windows (Schannel); layers,
+ * such as az_mqtt_websocket, wrap another transport.
  */
 
 #ifndef AZ_MQTT_TRANSPORT_H
@@ -24,9 +25,7 @@
 
 // ──────────────────────── Transport handle ───────────────────
 
-/**
- * @brief Opaque transport handle. Each platform provides its own struct definition.
- */
+/** @brief A transport; see az_mqtt_transport_vtable. */
 typedef struct az_mqtt_transport az_mqtt_transport;
 
 // ──────────────────────── Proxy options ──────────────────────
@@ -188,13 +187,12 @@ AZ_NODISCARD AZ_INLINE az_result az_mqtt_tls_options_check(az_mqtt_tls_options c
 // ──────────────────────── Transport API ──────────────────────
 
 /**
- * @brief Get the size in bytes of the platform-specific transport struct.
- * Use this to stack-allocate the transport: uint8_t buf[az_mqtt_transport_sizeof()]; then cast.
+ * @brief Size in bytes of the platform transport, for caller allocation (pointer-aligned).
  */
 AZ_NODISCARD int32_t az_mqtt_transport_sizeof(void);
 
 /**
- * @brief Initialize a transport handle (already allocated by the caller).
+ * @brief Initialize a platform transport (caller storage of az_mqtt_transport_sizeof() bytes).
  */
 AZ_NODISCARD az_result az_mqtt_transport_init(az_mqtt_transport* transport);
 
@@ -274,6 +272,12 @@ AZ_NODISCARD az_result az_mqtt_transport_receive(
  */
 void az_mqtt_transport_close(az_mqtt_transport* transport);
 
+/**
+ * @brief End an established connection in an orderly way before az_mqtt_transport_close()
+ * (e.g. a WebSocket close frame). Best effort; nothing for the platform transport.
+ */
+void az_mqtt_transport_shutdown(az_mqtt_transport* transport);
+
 /** @brief What az_mqtt_native_error.code is. */
 typedef enum
 {
@@ -293,6 +297,12 @@ typedef enum
   AZ_MQTT_NATIVE_ERROR_TLS_VERIFY = 4,
   /** @brief The HTTP proxy's reply status (e.g. 407); 0 if the reply was not valid HTTP. */
   AZ_MQTT_NATIVE_ERROR_PROXY = 5,
+  /**
+   * @brief WebSocket layer (az_mqtt_websocket): the HTTP status of a refused or invalid upgrade
+   * reply (0: not HTTP), the status code of a close frame from the server other than 1000 (1005:
+   * none), or 1002 for a frame it refused.
+   */
+  AZ_MQTT_NATIVE_ERROR_WEBSOCKET = 6,
 } az_mqtt_native_error_source;
 
 /** @brief One platform error behind a transport failure, for diagnostics. */
@@ -324,6 +334,47 @@ typedef struct
  */
 typedef void (*az_mqtt_transport_error_fn)(az_mqtt_native_error const* error, void* context);
 
+// ──────────────────────── Implementing a transport ───────────
+
+/**
+ * @brief A transport implementation: what the az_mqtt_transport_* functions of the same names
+ * call, with the same contracts.
+ *
+ * Optional entries may be NULL: set_proxy (then only "no proxy" is accepted), set_error_callback,
+ * shutdown. A layer over another transport forwards what it does not handle to it.
+ */
+typedef struct
+{
+  az_result (*connect_start)(
+      az_mqtt_transport* transport,
+      az_span host,
+      uint16_t port,
+      az_mqtt_tls_options const* tls_options);
+  az_result (*connect_poll)(az_mqtt_transport* transport, int32_t timeout_ms);
+  az_result (*send)(az_mqtt_transport* transport, az_span data);
+  az_result (*receive)(
+      az_mqtt_transport* transport,
+      az_span buffer,
+      int32_t timeout_ms,
+      az_span* out_received);
+  void (*shutdown)(az_mqtt_transport* transport);
+  void (*close)(az_mqtt_transport* transport);
+  az_result (*set_proxy)(az_mqtt_transport* transport, az_mqtt_proxy_options const* proxy);
+  void (*set_error_callback)(
+      az_mqtt_transport* transport,
+      az_mqtt_transport_error_fn callback,
+      void* context);
+} az_mqtt_transport_vtable;
+
+/**
+ * @brief Base of every transport: an implementation's struct starts with it, and sets vtable
+ * when initialized.
+ */
+struct az_mqtt_transport
+{
+  az_mqtt_transport_vtable const* vtable;
+};
+
 /**
  * @brief Connect through @p proxy from the next connect on (NULL, or an empty host: directly).
  * A connect already started keeps the proxy it started with.
@@ -349,6 +400,16 @@ void az_mqtt_transport_set_error_callback(
     az_mqtt_transport* transport,
     az_mqtt_transport_error_fn callback,
     void* context);
+
+/**
+ * @brief Fill @p buffer with bytes from a cryptographically secure random source.
+ *
+ * Part of the platform port, like az_mqtt_transport_clock_ms(); used for WebSocket keys and
+ * frame masks.
+ *
+ * @retval AZ_MQTT_ERROR_TRANSPORT No random source.
+ */
+AZ_NODISCARD az_result az_mqtt_transport_random(az_span buffer);
 
 /**
  * @brief Monotonic clock in milliseconds, used for keep-alive and timeouts.

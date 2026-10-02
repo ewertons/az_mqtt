@@ -21,6 +21,8 @@
 
 #include "az_mqtt_test_api.h"
 
+#include <az_mqtt/az_mqtt_websocket.h>
+
 #include "test_native_errors.h"
 #include "test_proxy.h"
 #include "test_server.h"
@@ -39,6 +41,8 @@ typedef struct
   uint8_t recv_buf[1024];
   az_mqtt_tls_options tls;
   az_mqtt_inflight_entry inflight_control_buffer[8];
+  az_mqtt_websocket ws;
+  az_span ws_path;
 #if AZ_MQTT_TEST_VERSION == 5
   AZ_MQTT_T(user_property) props[4][4];
   int32_t sub_ids[4];
@@ -185,10 +189,15 @@ static AZ_MQTT_T(will_options) s_will;
 /** @brief Proxy the next _setup() connects through (then reset); NULL: none. */
 static az_mqtt_proxy_options const* s_proxy;
 
-static void _setup(fixture* f, test_server_options const* so, uint16_t keep_alive_s)
+static void _setup(fixture* f, test_server_options const* server_options, uint16_t keep_alive_s)
 {
   memset(f, 0, sizeof(*f));
   memset(&g, 0, sizeof(g));
+  test_server_options so_copy = *server_options;
+#ifdef AZ_MQTT_TEST_FORCE_WEBSOCKET
+  so_copy.websocket = true; // The whole suite, over WebSockets.
+#endif
+  test_server_options const* const so = &so_copy;
   f->server = test_server_start(so);
   assert_non_null(f->server);
   f->transport = (az_mqtt_transport*)calloc(1, (size_t)az_mqtt_transport_sizeof());
@@ -213,6 +222,14 @@ static void _setup(fixture* f, test_server_options const* so, uint16_t keep_aliv
     o.connect_options.username = AZ_SPAN_FROM_STR("SECRET-USERNAME");
     o.connect_options.password = AZ_SPAN_FROM_STR("SECRET-PASSWORD");
     o.connect_options.will = &s_will;
+    f->ws_path = AZ_SPAN_FROM_STR("/SECRET-PATH");
+  }
+  if (so->websocket)
+  {
+    az_mqtt_websocket_options ws_options = az_mqtt_websocket_options_default();
+    ws_options.path = f->ws_path;
+    assert_int_equal(az_mqtt_websocket_init(&f->ws, f->transport, &ws_options), AZ_OK);
+    o.transport = az_mqtt_websocket_get_transport(&f->ws);
   }
   o.hostname = AZ_SPAN_FROM_STR("127.0.0.1");
   if (so->tls)
@@ -874,6 +891,199 @@ static void invalid_proxy_options_fail_initialization(void** state)
   free(f.transport);
 }
 
+#ifndef AZ_MQTT_NO_WEBSOCKETS
+static test_server_options _ws(void)
+{
+  test_server_options o = _plain();
+  o.websocket = true;
+  return o;
+}
+
+/** @brief Subscribe and wait for the SUBACK. */
+static void _subscribe_and_wait(fixture* f)
+{
+  AZ_MQTT_T(subscription) sub;
+  memset(&sub, 0, sizeof(sub));
+  sub.topic_filter = AZ_SPAN_FROM_STR("t");
+  assert_int_equal(AZ_MQTT_T(client_subscribe)(&f->client, &sub, 1, NULL), AZ_OK);
+  int64_t const end = _now_ms() + 3000;
+  while (g.subacks == 0 && _now_ms() < end)
+  {
+    assert_int_equal(AZ_MQTT_T(client_process_loop)(&f->client, 20), AZ_OK);
+  }
+  assert_int_equal(g.subacks, 1);
+}
+
+static void a_websocket_session_upgrades_masks_and_closes_cleanly(void** state)
+{
+  (void)state;
+#if defined(AZ_MQTT_TEST_BACKEND_NONE)
+  int const tls_cases = 1;
+#else
+  int const tls_cases = 2;
+#endif
+  for (int tls = 0; tls < tls_cases; tls++)
+  {
+    test_server_options so = _ws();
+    so.tls = tls == 1;
+    so.ack_publishes = true;
+    fixture f;
+    _setup(&f, &so, 30);
+    assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+    char host[48];
+    snprintf(host, sizeof(host), "\r\nHost: 127.0.0.1:%u\r\n", test_server_port(f.server));
+    assert_true(test_server_ws_request_has(f.server, "GET /mqtt HTTP/1.1\r\n"));
+    assert_true(test_server_ws_request_has(f.server, host));
+    assert_true(test_server_ws_request_has(f.server, "\r\nSec-WebSocket-Protocol: mqtt\r\n"));
+    _subscribe_and_wait(&f);
+    AZ_MQTT_T(publish_options) p = AZ_MQTT_T(publish_options_default)();
+    p.topic = AZ_SPAN_FROM_STR("t");
+    static uint8_t payload[900]; // Over AZ_MQTT_WEBSOCKET_SEND_CHUNK.
+    p.payload = AZ_SPAN_FROM_BUFFER(payload);
+    p.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
+    assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &p, NULL), AZ_OK);
+    int64_t const end = _now_ms() + 3000;
+    while (g.pubacks == 0 && _now_ms() < end)
+    {
+      assert_int_equal(AZ_MQTT_T(client_process_loop)(&f.client, 20), AZ_OK);
+    }
+    assert_int_equal(g.pubacks, 1);
+    assert_int_equal(AZ_MQTT_TEST_DISCONNECT(&f.client), AZ_OK);
+    for (int i = 0; i < 100 && test_server_ws_client_close_code(f.server) < 0; i++)
+    {
+      _sleep_ms(10);
+    }
+    assert_int_equal(test_server_ws_client_close_code(f.server), 1000);
+    assert_int_equal(test_server_ws_unmasked(f.server), 0);
+    assert_int_equal(g.native.count, 0);
+    _teardown(&f);
+  }
+}
+
+static void fragmented_frames_and_pings_are_handled(void** state)
+{
+  (void)state;
+  test_server_options so = _ws();
+  so.ws_fragment = true;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  _subscribe_and_wait(&f);
+  assert_true(test_server_ws_pongs(f.server) >= 4); // CONNACK's 4 bytes at least.
+  assert_int_equal(test_server_ws_unmasked(f.server), 0);
+  _teardown(&f);
+}
+
+static void a_slow_long_upgrade_reply_completes_across_calls(void** state)
+{
+  (void)state;
+  test_server_options so = _ws();
+  so.ws_reply = TEST_SERVER_WS_SLOW_LONG_REPLY; // Then a ping in the same stream.
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect_start)(&f.client, 3000), AZ_OK);
+  assert_int_equal(_pump_connect(&f, 3000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+  _subscribe_and_wait(&f);
+  assert_int_equal(test_server_ws_pongs(f.server), 1);
+  _teardown(&f);
+}
+
+static void a_refused_or_invalid_upgrade_fails_the_connect(void** state)
+{
+  (void)state;
+  test_server_ws_reply const replies[] = { TEST_SERVER_WS_REFUSE, TEST_SERVER_WS_BAD_ACCEPT };
+  int const statuses[] = { 403, 101 };
+  for (int i = 0; i < 2; i++)
+  {
+    test_server_options so = _ws();
+    so.ws_reply = replies[i];
+    fixture f;
+    _setup(&f, &so, 30);
+    for (uint32_t attempt = 1; attempt <= 2; attempt++)
+    {
+      test_native_errors_clear(&g.native);
+      assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_MQTT_ERROR_WEBSOCKET);
+      assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_WEBSOCKET);
+      assert_int_equal(g.native.count, 1);
+      assert_int_equal(g.native_at_close, 1);
+      assert_int_equal(g.native.errors[0].source, AZ_MQTT_NATIVE_ERROR_WEBSOCKET);
+      assert_int_equal(g.native.errors[0].code, statuses[i]);
+      assert_int_equal(g.native.errors[0].result, AZ_MQTT_ERROR_WEBSOCKET);
+      assert_int_equal(g.native.errors[0].connect_attempt, attempt);
+    }
+    assert_int_equal(g.connacks, 0);
+    _teardown(&f);
+  }
+}
+
+static void a_server_close_frame_ends_the_session(void** state)
+{
+  (void)state;
+  test_server_options so = _ws();
+  so.ws_close_code = 1001;
+  fixture f;
+  _setup(&f, &so, 30);
+  az_result const rc = AZ_MQTT_T(client_connect)(&f.client, 3000);
+  assert_true(rc == AZ_OK || rc == AZ_MQTT_ERROR_CONNECTION_CLOSED);
+  _ignore(_pump_until_closed(&f, 3000));
+  assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_CONNECTION_CLOSED);
+  assert_int_equal(g.native.count, 1);
+  assert_int_equal(g.native.errors[0].source, AZ_MQTT_NATIVE_ERROR_WEBSOCKET);
+  assert_int_equal(g.native.errors[0].code, 1001);
+  assert_int_equal(g.native.errors[0].result, AZ_MQTT_ERROR_CONNECTION_CLOSED);
+  for (int i = 0; i < 100 && test_server_ws_client_close_code(f.server) < 0; i++)
+  {
+    _sleep_ms(10);
+  }
+  assert_int_equal(test_server_ws_client_close_code(f.server), 1001); // Echoed.
+  _teardown(&f);
+}
+
+static void a_masked_server_frame_is_refused(void** state)
+{
+  (void)state;
+  test_server_options so = _ws();
+  so.ws_masked_frame = true;
+  fixture f;
+  _setup(&f, &so, 30);
+  az_result const rc = AZ_MQTT_T(client_connect)(&f.client, 3000);
+  assert_true(rc == AZ_OK || rc == AZ_MQTT_ERROR_WEBSOCKET);
+  _ignore(_pump_until_closed(&f, 3000));
+  assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_WEBSOCKET);
+  assert_int_equal(g.native.count, 1);
+  assert_int_equal(g.native.errors[0].source, AZ_MQTT_NATIVE_ERROR_WEBSOCKET);
+  assert_int_equal(g.native.errors[0].code, 1002);
+  _teardown(&f);
+}
+
+static void invalid_websocket_options_fail_initialization(void** state)
+{
+  (void)state;
+  az_mqtt_transport* const transport
+      = (az_mqtt_transport*)calloc(1, (size_t)az_mqtt_transport_sizeof());
+  assert_non_null(transport);
+  assert_int_equal(az_mqtt_transport_init(transport), AZ_OK);
+  az_mqtt_websocket ws;
+  az_mqtt_websocket_options options = az_mqtt_websocket_options_default();
+  options.path = AZ_SPAN_FROM_STR("mqtt");
+  assert_int_equal(az_mqtt_websocket_init(&ws, transport, &options), AZ_MQTT_ERROR_INVALID_CONFIG);
+  free(transport);
+}
+#else
+static void websockets_are_refused_without_websocket_support(void** state)
+{
+  (void)state;
+  az_mqtt_transport* const transport
+      = (az_mqtt_transport*)calloc(1, (size_t)az_mqtt_transport_sizeof());
+  assert_non_null(transport);
+  assert_int_equal(az_mqtt_transport_init(transport), AZ_OK);
+  az_mqtt_websocket ws;
+  assert_int_equal(az_mqtt_websocket_init(&ws, transport, NULL), AZ_MQTT_ERROR_NOT_SUPPORTED);
+  free(transport);
+}
+#endif // AZ_MQTT_NO_WEBSOCKETS
+
 static void a_peer_close_is_reported_as_connection_closed(void** state)
 {
   (void)state;
@@ -927,6 +1137,9 @@ static void logs_never_contain_credentials_topics_or_payloads(void** state)
   so.tls = false;
 #endif
   so.ack_publishes = true;
+#ifndef AZ_MQTT_NO_WEBSOCKETS
+  so.websocket = true;
+#endif
   s_with_secrets = true;
 #ifndef AZ_MQTT_NO_PROXY
   test_proxy_options po = { 0 };
@@ -975,6 +1188,7 @@ static void logs_never_contain_credentials_topics_or_payloads(void** state)
   assert_non_null(strstr(s_log, " tls via "));
 #endif
 #endif
+
   assert_non_null(strstr(s_log, "sent CONNECT "));
   assert_non_null(strstr(s_log, "received CONNACK "));
   assert_non_null(strstr(s_log, "sent SUBSCRIBE "));
@@ -1162,6 +1376,17 @@ int main(void)
 {
   const struct CMUnitTest tests[] = {
     cmocka_unit_test(a_long_process_loop_wait_still_pings_on_time),
+#ifndef AZ_MQTT_NO_WEBSOCKETS
+    cmocka_unit_test(a_websocket_session_upgrades_masks_and_closes_cleanly),
+    cmocka_unit_test(fragmented_frames_and_pings_are_handled),
+    cmocka_unit_test(a_slow_long_upgrade_reply_completes_across_calls),
+    cmocka_unit_test(a_refused_or_invalid_upgrade_fails_the_connect),
+    cmocka_unit_test(a_server_close_frame_ends_the_session),
+    cmocka_unit_test(a_masked_server_frame_is_refused),
+    cmocka_unit_test(invalid_websocket_options_fail_initialization),
+#else
+    cmocka_unit_test(websockets_are_refused_without_websocket_support),
+#endif
     cmocka_unit_test(an_idle_session_with_answered_pings_stays_up),
     cmocka_unit_test(a_missing_pingresp_ends_the_session),
     cmocka_unit_test(server_keep_alive_overrides_the_clients),

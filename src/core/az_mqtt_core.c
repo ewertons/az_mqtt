@@ -210,6 +210,10 @@ void _az_mqtt_core_close(
     az_result reason)
 {
   bool const was_open = _S(core).state != AZ_MQTT_CLIENT_STATE_DISCONNECTED;
+  if (reason == AZ_OK && _S(core).state == AZ_MQTT_CLIENT_STATE_CONNECTED)
+  {
+    az_mqtt_transport_shutdown(_S(core).transport); // Orderly: after DISCONNECT.
+  }
   az_mqtt_transport_close(_S(core).transport);
   if (was_open)
   {

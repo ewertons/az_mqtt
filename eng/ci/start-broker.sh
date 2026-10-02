@@ -2,7 +2,8 @@
 # Copyright (c) Microsoft. All rights reserved.
 # Licensed under the MIT license. See LICENSE file in the project root for full license information.
 #
-# Start a local Mosquitto for the e2e tests: plain MQTT on 1883, TLS on 8883.
+# Start a local Mosquitto for the e2e tests: plain MQTT on 1883, TLS on 8883,
+# MQTT over WebSockets on 8080 (ws) and 8081 (wss).
 #
 #   eng/ci/start-broker.sh [work-dir]
 #
@@ -41,6 +42,13 @@ listener 8883 127.0.0.1
 cafile ${w}/ca.crt
 certfile ${w}/server.crt
 keyfile ${w}/server.key
+listener 8080 127.0.0.1
+protocol websockets
+listener 8081 127.0.0.1
+protocol websockets
+cafile ${w}/ca.crt
+certfile ${w}/server.crt
+keyfile ${w}/server.key
 CONF
 
 # A packaged broker may already own 1883.
@@ -53,7 +61,7 @@ nohup mosquitto -c "${w}/mosquitto.conf" > "${work}/mosquitto.log" 2>&1 &
 for _ in $(seq 1 30); do
   if mosquitto_pub -h 127.0.0.1 -p 1883 -t ci/ready -m ok 2>/dev/null \
     && mosquitto_pub -h localhost -p 8883 --cafile "${w}/ca.crt" -t ci/ready -m ok 2>/dev/null; then
-    echo "Mosquitto ready (1883, 8883)"
+    echo "Mosquitto ready (1883, 8883, 8080, 8081)"
     exit 0
   fi
   sleep 1

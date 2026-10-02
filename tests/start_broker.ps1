@@ -3,6 +3,7 @@
 # Launches a Mosquitto MQTT 5 broker in Docker with:
 #   - Plain TCP on port 1883
 #   - TLS on port 8883
+#   - MQTT over WebSockets on 8080, and over TLS on 8081
 #
 # Usage:
 #   .\start_broker.ps1          # Start broker
@@ -88,6 +89,10 @@ function Start-Broker {
 listener 1883
 protocol mqtt
 allow_anonymous true
+
+listener 8080
+protocol websockets
+allow_anonymous true
 "@ | Set-Content $noTlsConf -Encoding ASCII
     }
   }
@@ -101,11 +106,12 @@ allow_anonymous true
   $dockerArgs = @(
     "run", "-d",
     "--name", $ContainerName,
-    "-p", "1883:1883"
+    "-p", "1883:1883",
+    "-p", "8080:8080"
   )
 
   if ($hasOpenSSL) {
-    $dockerArgs += @("-p", "8883:8883")
+    $dockerArgs += @("-p", "8883:8883", "-p", "8081:8081")
     $dockerArgs += @("-v", "${confPath}:/mosquitto/config/mosquitto.conf:ro")
     $dockerArgs += @("-v", "${certsPath}:/mosquitto/certs:ro")
   } else {

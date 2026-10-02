@@ -25,6 +25,7 @@
 #include <schannel.h>
 #include <security.h>
 #include <wincrypt.h>
+#include <bcrypt.h>
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -40,12 +41,22 @@ typedef enum
   _WIN_CONNECTED,
 } _win_state;
 
-struct az_mqtt_transport
+typedef struct _platform_transport _platform_transport;
+static az_result _platform_connect_start(
+    _platform_transport* transport,
+    az_span host,
+    uint16_t port,
+    az_mqtt_tls_options const* tls_options);
+static az_result _platform_connect_poll(_platform_transport* transport, int32_t timeout_ms);
+static void _platform_close(_platform_transport* transport);
+
+struct _platform_transport
 {
+  az_mqtt_transport base; ///< Must be first.
   SOCKET socket_fd;
   bool connected;
   _win_state state;
-  /** @brief Native error callback; connect_attempt counts az_mqtt_transport_connect_start(). */
+  /** @brief Native error callback; connect_attempt counts _platform_connect_start(). */
   az_mqtt_transport_error_fn error_callback;
   void* error_context;
   uint32_t connect_attempt;
@@ -54,7 +65,7 @@ struct az_mqtt_transport
   /** @brief The handshake is running: its native errors belong to AZ_MQTT_ERROR_TLS_HANDSHAKE. */
   bool in_handshake;
 
-  /** @brief Proxy to connect through (az_mqtt_transport_set_proxy()); NULL: none. */
+  /** @brief Proxy to connect through (_platform_set_proxy()); NULL: none. */
   az_mqtt_proxy_options const* proxy;
   /**
    * @brief The current connect's proxy (set_proxy() affects only the next connect), the server
@@ -65,7 +76,7 @@ struct az_mqtt_transport
   uint16_t proxy_target_port;
   int32_t proxy_request_sent;
   bool proxy_request_done;
-  _az_mqtt_http_connect_reply proxy_reply;
+  _az_mqtt_http_reply proxy_reply;
 
   /** @brief _WIN_TCP: resolved addresses, the next one to try, and when the current one started. */
   struct addrinfo* addresses;
@@ -99,8 +110,6 @@ struct az_mqtt_transport
 #endif
 };
 
-AZ_NODISCARD int32_t az_mqtt_transport_sizeof(void) { return (int32_t)sizeof(az_mqtt_transport); }
-
 static bool _wsa_inited = false;
 
 static az_result _ensure_wsa(void)
@@ -117,7 +126,7 @@ static az_result _ensure_wsa(void)
   return AZ_OK;
 }
 
-AZ_NODISCARD az_result az_mqtt_transport_init(az_mqtt_transport* transport)
+static az_result _platform_init(_platform_transport* transport)
 {
   _az_PRECONDITION_NOT_NULL(transport);
 
@@ -160,7 +169,7 @@ static int32_t _remaining(int64_t deadline_ms)
   return left <= 0 ? 0 : (left > INT32_MAX ? INT32_MAX : (int32_t)left);
 }
 
-static void _release_addresses(az_mqtt_transport* transport)
+static void _release_addresses(_platform_transport* transport)
 {
   if (transport->addresses != NULL)
   {
@@ -172,7 +181,7 @@ static void _release_addresses(az_mqtt_transport* transport)
 
 /** @brief Report one native error to the callback, if any. */
 static void _report_error(
-    az_mqtt_transport* transport,
+    _platform_transport* transport,
     az_mqtt_native_error_source source,
     int32_t code,
     az_result result)
@@ -209,7 +218,7 @@ static az_result _wsa_result(int err)
  * @brief _wsa_result() of @p err, reported unless @p err is 0 (as AZ_MQTT_ERROR_TLS_HANDSHAKE
  * during the handshake).
  */
-static az_result _socket_error(az_mqtt_transport* transport, int err)
+static az_result _socket_error(_platform_transport* transport, int err)
 {
   az_result const rc = transport->in_handshake ? AZ_MQTT_ERROR_TLS_HANDSHAKE : _wsa_result(err);
   transport->last_socket_error = err;
@@ -221,7 +230,7 @@ static az_result _socket_error(az_mqtt_transport* transport, int err)
 }
 
 /** @brief Start a non-blocking connect to the next untried address. */
-static az_result _tcp_connect_next(az_mqtt_transport* transport)
+static az_result _tcp_connect_next(_platform_transport* transport)
 {
   while (transport->next_address != NULL)
   {
@@ -249,7 +258,7 @@ static az_result _tcp_connect_next(az_mqtt_transport* transport)
 }
 
 /** @brief Resolve @p host (the one blocking step) and start connecting to the first address. */
-static az_result _tcp_connect_start(az_mqtt_transport* transport, az_span host, uint16_t port)
+static az_result _tcp_connect_start(_platform_transport* transport, az_span host, uint16_t port)
 {
   char host_str[256];
   az_result rc = _span_to_cstr(host, host_str, (int32_t)sizeof(host_str));
@@ -294,7 +303,7 @@ static az_result _tcp_connect_start(az_mqtt_transport* transport, az_span host, 
  *
  * @retval AZ_MQTT_ERROR_TIMEOUT Still connecting.
  */
-static az_result _tcp_connect_poll(az_mqtt_transport* transport, int64_t deadline_ms)
+static az_result _tcp_connect_poll(_platform_transport* transport, int64_t deadline_ms)
 {
   while (transport->socket_fd != INVALID_SOCKET)
   {
@@ -365,7 +374,7 @@ static az_result _tcp_connect_poll(az_mqtt_transport* transport, int64_t deadlin
   return _wsa_result(transport->last_socket_error);
 }
 
-static az_result _socket_wait_readable(az_mqtt_transport* transport, int32_t timeout_ms, bool* out_ready)
+static az_result _socket_wait_readable(_platform_transport* transport, int32_t timeout_ms, bool* out_ready)
 {
   SOCKET const fd = transport->socket_fd;
   fd_set read_fds;
@@ -397,7 +406,7 @@ static az_result _socket_wait_readable(az_mqtt_transport* transport, int32_t tim
  * @retval AZ_MQTT_ERROR_CONNECTION_CLOSED The peer closed the connection.
  */
 static az_result _socket_recv_timeout(
-    az_mqtt_transport* transport,
+    _platform_transport* transport,
     uint8_t* buf,
     int32_t capacity,
     int32_t timeout_ms,
@@ -426,7 +435,7 @@ static az_result _socket_recv_timeout(
   return AZ_OK;
 }
 
-static az_result _socket_send_all(az_mqtt_transport* transport, uint8_t const* data, int32_t len)
+static az_result _socket_send_all(_platform_transport* transport, uint8_t const* data, int32_t len)
 {
   int32_t sent_total = 0;
   while (sent_total < len)
@@ -478,7 +487,7 @@ static az_result _host_to_wstr(az_span host, wchar_t* out_host, int32_t out_host
 }
 
 /** @brief Report @p err (Win32 error, SECURITY_STATUS) as a TLS error; AZ_MQTT_ERROR_TRANSPORT. */
-static az_result _tls_setup_failure(az_mqtt_transport* transport, DWORD err)
+static az_result _tls_setup_failure(_platform_transport* transport, DWORD err)
 {
   _report_error(transport, AZ_MQTT_NATIVE_ERROR_TLS, (int32_t)err, AZ_MQTT_ERROR_TRANSPORT);
   return AZ_MQTT_ERROR_TRANSPORT;
@@ -489,7 +498,7 @@ static az_result _decode_cert_file_to_der(
     uint8_t* der_out,
     DWORD der_capacity,
     DWORD* out_der_len,
-    az_mqtt_transport* transport)
+    _platform_transport* transport)
 {
   char cert_path[260];
   az_result rc = _span_to_cstr(tls_options->ca_cert_path, cert_path, (int32_t)sizeof(cert_path));
@@ -568,7 +577,7 @@ static az_result _decode_cert_file_to_der(
 static az_result _build_custom_root_store(
     az_mqtt_tls_options const* tls_options,
     HCERTSTORE* out_store,
-    az_mqtt_transport* transport)
+    _platform_transport* transport)
 {
   *out_store = NULL;
 
@@ -614,7 +623,7 @@ static az_result _validate_server_certificate(
     char const* host,
     HCERTSTORE custom_root,
     PCCERT_CONTEXT server_cert,
-    az_mqtt_transport* transport)
+    _platform_transport* transport)
 {
   wchar_t host_w[256];
   az_result rc = _host_to_wstr(
@@ -707,7 +716,7 @@ static az_result _validate_server_certificate(
 
 /** @brief Acquire credentials and keep what the handshake needs; reads @p tls_options only here. */
 static az_result _schannel_prepare(
-    az_mqtt_transport* transport,
+    _platform_transport* transport,
     az_span host,
     az_mqtt_tls_options const* tls_options)
 {
@@ -752,7 +761,7 @@ static az_result _schannel_prepare(
   return AZ_OK;
 }
 
-static az_result _schannel_handshake_steps(az_mqtt_transport* transport, int64_t deadline_ms);
+static az_result _schannel_handshake_steps(_platform_transport* transport, int64_t deadline_ms);
 
 /**
  * @brief Progress the TLS handshake until done, failed or @p deadline_ms.
@@ -760,7 +769,7 @@ static az_result _schannel_handshake_steps(az_mqtt_transport* transport, int64_t
  * Resumable: a wait for server data that reaches the deadline returns
  * AZ_MQTT_ERROR_TIMEOUT and the next call continues from there.
  */
-static az_result _schannel_handshake_steps(az_mqtt_transport* transport, int64_t deadline_ms)
+static az_result _schannel_handshake_steps(_platform_transport* transport, int64_t deadline_ms)
 {
   DWORD const req_flags = ISC_REQ_SEQUENCE_DETECT | ISC_REQ_REPLAY_DETECT | ISC_REQ_CONFIDENTIALITY
       | ISC_REQ_EXTENDED_ERROR | ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_STREAM;
@@ -944,7 +953,7 @@ static az_result _schannel_handshake_steps(az_mqtt_transport* transport, int64_t
 }
 
 /** @brief _schannel_handshake_steps(), with its socket errors reported as part of the handshake. */
-static az_result _schannel_handshake(az_mqtt_transport* transport, int64_t deadline_ms)
+static az_result _schannel_handshake(_platform_transport* transport, int64_t deadline_ms)
 {
   transport->in_handshake = true;
   az_result const rc = _schannel_handshake_steps(transport, deadline_ms);
@@ -952,7 +961,7 @@ static az_result _schannel_handshake(az_mqtt_transport* transport, int64_t deadl
   return rc;
 }
 
-static az_result _schannel_send(az_mqtt_transport* transport, az_span data)
+static az_result _schannel_send(_platform_transport* transport, az_span data)
 {
   uint8_t* ptr = az_span_ptr(data);
   int32_t remaining = az_span_size(data);
@@ -1017,7 +1026,7 @@ static az_result _schannel_send(az_mqtt_transport* transport, az_span data)
   return AZ_OK;
 }
 
-static az_result _schannel_consume_decrypted(az_mqtt_transport* transport, az_span buffer, az_span* out_received)
+static az_result _schannel_consume_decrypted(_platform_transport* transport, az_span buffer, az_span* out_received)
 {
   int32_t available = transport->decrypted_pending_len - transport->decrypted_pending_pos;
   if (available <= 0)
@@ -1049,7 +1058,7 @@ static az_result _schannel_consume_decrypted(az_mqtt_transport* transport, az_sp
 }
 
 static az_result _schannel_receive(
-    az_mqtt_transport* transport,
+    _platform_transport* transport,
     az_span buffer,
     int32_t timeout_ms,
     az_span* out_received)
@@ -1173,7 +1182,7 @@ static az_result _schannel_receive(
   }
 }
 
-static void _schannel_shutdown(az_mqtt_transport* transport)
+static void _schannel_shutdown(_platform_transport* transport)
 {
   if (transport->has_context && _handle_is_valid(&transport->context_handle))
   {
@@ -1212,15 +1221,27 @@ static void _schannel_shutdown(az_mqtt_transport* transport)
 
 AZ_NODISCARD int64_t az_mqtt_transport_clock_ms(void) { return _now_ms(); }
 
-AZ_NODISCARD az_result az_mqtt_transport_connect_start(
-    az_mqtt_transport* transport,
+AZ_NODISCARD az_result az_mqtt_transport_random(az_span buffer)
+{
+  return BCryptGenRandom(
+             NULL,
+             az_span_ptr(buffer),
+             (ULONG)az_span_size(buffer),
+             BCRYPT_USE_SYSTEM_PREFERRED_RNG)
+          == 0
+      ? AZ_OK
+      : AZ_MQTT_ERROR_TRANSPORT;
+}
+
+static az_result _platform_connect_start(
+    _platform_transport* transport,
     az_span host,
     uint16_t port,
     az_mqtt_tls_options const* tls_options)
 {
   _az_PRECONDITION_NOT_NULL(transport);
 
-  az_mqtt_transport_close(transport);
+  _platform_close(transport);
   transport->connect_attempt++;
 
 #ifdef AZ_MQTT_TLS_SCHANNEL
@@ -1242,7 +1263,7 @@ AZ_NODISCARD az_result az_mqtt_transport_connect_start(
     rc = _schannel_prepare(transport, host, tls_options);
     if (az_result_failed(rc))
     {
-      az_mqtt_transport_close(transport);
+      _platform_close(transport);
       return rc;
     }
   }
@@ -1268,7 +1289,7 @@ AZ_NODISCARD az_result az_mqtt_transport_connect_start(
     transport->proxy_target_port = port;
     transport->proxy_request_sent = 0;
     transport->proxy_request_done = false;
-    _az_mqtt_http_connect_reply_init(&transport->proxy_reply);
+    _az_mqtt_http_reply_init(&transport->proxy_reply);
     host = transport->attempt_proxy->host;
     port = transport->attempt_proxy->port;
   }
@@ -1279,7 +1300,7 @@ AZ_NODISCARD az_result az_mqtt_transport_connect_start(
   }
   if (az_result_failed(rc))
   {
-    az_mqtt_transport_close(transport);
+    _platform_close(transport);
     return rc;
   }
   transport->state = _WIN_TCP;
@@ -1287,7 +1308,7 @@ AZ_NODISCARD az_result az_mqtt_transport_connect_start(
 }
 
 /** @brief The state once the connection (or tunnel) to the server is up. */
-static _win_state _after_tcp_state(az_mqtt_transport const* transport)
+static _win_state _after_tcp_state(_platform_transport const* transport)
 {
 #ifdef AZ_MQTT_TLS_SCHANNEL
   if (transport->tls_requested)
@@ -1302,7 +1323,7 @@ static _win_state _after_tcp_state(az_mqtt_transport const* transport)
 
 #ifndef AZ_MQTT_NO_PROXY
 /** @brief Report a failure of the tunnel's connection (WSA error @p err; 0: closed) as PROXY. */
-static az_result _proxy_socket_failure(az_mqtt_transport* transport, int err)
+static az_result _proxy_socket_failure(_platform_transport* transport, int err)
 {
   if (err != 0)
   {
@@ -1348,7 +1369,7 @@ static int32_t _proxy_send(void* context, uint8_t const* data, int32_t size)
   return c->error == WSAEWOULDBLOCK ? 0 : -1;
 }
 
-static az_result _proxy_send_request(az_mqtt_transport* transport, int64_t deadline_ms)
+static az_result _proxy_send_request(_platform_transport* transport, int64_t deadline_ms)
 {
   if (transport->proxy_request_done)
   {
@@ -1395,7 +1416,7 @@ static az_result _proxy_send_request(az_mqtt_transport* transport, int64_t deadl
 /**
  * @brief Open the HTTP CONNECT tunnel by @p deadline_ms; resumable. Reads nothing past the reply.
  */
-static az_result _proxy_tunnel_poll(az_mqtt_transport* transport, int64_t deadline_ms)
+static az_result _proxy_tunnel_poll(_platform_transport* transport, int64_t deadline_ms)
 {
   az_result const sent = _proxy_send_request(transport, deadline_ms);
   if (az_result_failed(sent))
@@ -1441,8 +1462,7 @@ static az_result _proxy_tunnel_poll(az_mqtt_transport* transport, int64_t deadli
 
 #endif // AZ_MQTT_NO_PROXY
 
-AZ_NODISCARD az_result
-az_mqtt_transport_connect_poll(az_mqtt_transport* transport, int32_t timeout_ms)
+static az_result _platform_connect_poll(_platform_transport* transport, int32_t timeout_ms)
 {
   _az_PRECONDITION_NOT_NULL(transport);
   int64_t const deadline = _deadline(timeout_ms);
@@ -1498,32 +1518,14 @@ az_mqtt_transport_connect_poll(az_mqtt_transport* transport, int32_t timeout_ms)
   }
   if (az_result_failed(rc))
   {
-    az_mqtt_transport_close(transport);
+    _platform_close(transport);
     return rc;
   }
   transport->connected = true;
   return AZ_OK;
 }
 
-AZ_NODISCARD az_result az_mqtt_transport_connect(
-    az_mqtt_transport* transport,
-    az_span host,
-    uint16_t port,
-    az_mqtt_tls_options const* tls_options)
-{
-  az_result rc = az_mqtt_transport_connect_start(transport, host, port, tls_options);
-  if (az_result_succeeded(rc))
-  {
-    rc = az_mqtt_transport_connect_poll(transport, AZ_MQTT_TRANSPORT_CONNECT_TIMEOUT_MS);
-    if (rc == AZ_MQTT_ERROR_TIMEOUT)
-    {
-      az_mqtt_transport_close(transport);
-    }
-  }
-  return rc;
-}
-
-AZ_NODISCARD az_result az_mqtt_transport_send(az_mqtt_transport* transport, az_span data)
+static az_result _platform_send(_platform_transport* transport, az_span data)
 {
   _az_PRECONDITION_NOT_NULL(transport);
 
@@ -1537,8 +1539,8 @@ AZ_NODISCARD az_result az_mqtt_transport_send(az_mqtt_transport* transport, az_s
   return _socket_send_all(transport, az_span_ptr(data), az_span_size(data));
 }
 
-AZ_NODISCARD az_result az_mqtt_transport_receive(
-    az_mqtt_transport* transport,
+static az_result _platform_receive(
+    _platform_transport* transport,
     az_span buffer,
     int32_t timeout_ms,
     az_span* out_received)
@@ -1576,8 +1578,7 @@ AZ_NODISCARD az_result az_mqtt_transport_receive(
   return AZ_OK;
 }
 
-AZ_NODISCARD az_result
-az_mqtt_transport_set_proxy(az_mqtt_transport* transport, az_mqtt_proxy_options const* proxy)
+static az_result _platform_set_proxy(_platform_transport* transport, az_mqtt_proxy_options const* proxy)
 {
   _az_PRECONDITION_NOT_NULL(transport);
   az_result const rc = _az_mqtt_http_connect_check(proxy);
@@ -1588,8 +1589,8 @@ az_mqtt_transport_set_proxy(az_mqtt_transport* transport, az_mqtt_proxy_options 
   return rc;
 }
 
-void az_mqtt_transport_set_error_callback(
-    az_mqtt_transport* transport,
+static void _platform_set_error_callback(
+    _platform_transport* transport,
     az_mqtt_transport_error_fn callback,
     void* context)
 {
@@ -1598,7 +1599,7 @@ void az_mqtt_transport_set_error_callback(
   transport->error_context = context;
 }
 
-void az_mqtt_transport_close(az_mqtt_transport* transport)
+static void _platform_close(_platform_transport* transport)
 {
   if (transport == NULL)
   {
@@ -1619,3 +1620,5 @@ void az_mqtt_transport_close(az_mqtt_transport* transport)
   transport->state = _WIN_IDLE;
   transport->connected = false;
 }
+
+#include "az_mqtt_platform_vtable.h"

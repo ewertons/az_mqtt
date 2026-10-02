@@ -4,6 +4,7 @@
 # Launches a Mosquitto MQTT 5 broker in Docker with:
 #   - Plain TCP on port 1883
 #   - TLS on port 8883
+#   - MQTT over WebSockets on 8080, and over TLS on 8081
 #
 # Usage:
 #   ./start_broker.sh          # Start broker
@@ -72,6 +73,8 @@ start_broker() {
     --name "${CONTAINER_NAME}" \
     -p 1883:1883 \
     -p 8883:8883 \
+    -p 8080:8080 \
+    -p 8081:8081 \
     -v "${SCRIPT_DIR}/broker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
     -v "${CERTS_DIR}:/mosquitto/certs:ro" \
     eclipse-mosquitto:latest
@@ -83,6 +86,7 @@ start_broker() {
       echo " ready!"
       echo "  Plain TCP: localhost:1883"
       echo "  TLS:       localhost:8883"
+      echo "  WS / WSS:  localhost:8080 / 8081"
       echo "  CA cert:   ${CERTS_DIR}/ca.crt"
       return 0
     fi

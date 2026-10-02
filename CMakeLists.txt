@@ -11,6 +11,7 @@ set(CMAKE_C_STANDARD 99)
 option(AZ_MQTT_ENABLE_MQTTV3 "Build az_mqttv3 (MQTT 3.1.1 client)" ON)
 option(AZ_MQTT_ENABLE_MQTTV5 "Build az_mqttv5 (MQTT 5.0 client)" ON)
 option(AZ_MQTT_ENABLE_PROXY "HTTP CONNECT proxy support (az_mqtt_transport_set_proxy)" ON)
+option(AZ_MQTT_ENABLE_WEBSOCKETS "MQTT over WebSockets (websocket_options)" ON)
 option(AZ_MQTT_BUILD_SAMPLES "Build sample applications" ON)
 option(AZ_MQTT_BUILD_TESTS "Build tests" ON)
 option(AZ_MQTT_WARNINGS_AS_ERRORS "Treat warnings in az_mqtt code (libraries, samples, tests) as errors" OFF)
@@ -79,9 +80,13 @@ endfunction()
 set(AZ_MQTT_CORE_SOURCES
   src/core/az_mqtt_core.c
   src/core/az_mqtt_codec_common.c
+  src/core/az_mqtt_transport.c
 )
-if(AZ_MQTT_ENABLE_PROXY)
+if(AZ_MQTT_ENABLE_PROXY OR AZ_MQTT_ENABLE_WEBSOCKETS)
   list(APPEND AZ_MQTT_CORE_SOURCES src/platform/az_mqtt_http_connect.c)
+endif()
+if(AZ_MQTT_ENABLE_WEBSOCKETS)
+  list(APPEND AZ_MQTT_CORE_SOURCES src/core/az_mqtt_websocket.c)
 endif()
 
 if(WIN32)
@@ -107,6 +112,10 @@ if(NOT AZ_MQTT_ENABLE_PROXY)
   # Proxy support compiled out: az_mqtt_transport_set_proxy() refuses any proxy.
   target_compile_definitions(az_mqtt_core PUBLIC AZ_MQTT_NO_PROXY)
 endif()
+if(NOT AZ_MQTT_ENABLE_WEBSOCKETS)
+  # WebSocket support compiled out: clients refuse websocket_options.
+  target_compile_definitions(az_mqtt_core PUBLIC AZ_MQTT_NO_WEBSOCKETS)
+endif()
 if(NOT LOGGING)
   # azure-sdk-for-c built without az_log (its LOGGING option): compile our logging out too.
   target_compile_definitions(az_mqtt_core PUBLIC AZ_NO_LOGGING)
@@ -115,7 +124,7 @@ endif()
 # Wire the selected TLS backend.
 if(WIN32)
   target_compile_definitions(az_mqtt_core PRIVATE AZ_MQTT_TLS_SCHANNEL)
-  target_link_libraries(az_mqtt_core PRIVATE secur32 crypt32 ws2_32)
+  target_link_libraries(az_mqtt_core PRIVATE secur32 crypt32 ws2_32 bcrypt)
   set(AZ_MQTT_TLS_BACKEND_RESOLVED "schannel")
   message(STATUS "az_mqtt: TLS backend = Schannel")
 elseif(AZ_MQTT_TLS_BACKEND STREQUAL "mbedtls")

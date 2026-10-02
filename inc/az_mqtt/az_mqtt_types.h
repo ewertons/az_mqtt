@@ -65,6 +65,11 @@ enum az_mqtt_result
   AZ_MQTT_ERROR_PROXY = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 28),
   /** @brief The HTTP proxy requires other credentials (407 Proxy Authentication Required). */
   AZ_MQTT_ERROR_PROXY_AUTH = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 29),
+  /**
+   * @brief The server refused the WebSocket upgrade or answered it invalidly, or sent a frame
+   * RFC 6455 does not allow.
+   */
+  AZ_MQTT_ERROR_WEBSOCKET = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 30),
 };
 
 // ──────────────────────── Log classifications ────────────────
