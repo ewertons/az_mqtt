@@ -119,6 +119,34 @@ az_result _az_mqtt_http_connect_request(
   return AZ_OK;
 }
 
+az_result _az_mqtt_http_connect_send_request(
+    az_mqtt_proxy_options const* proxy,
+    az_span host,
+    uint16_t port,
+    int32_t* in_out_sent,
+    _az_mqtt_http_connect_send_fn send,
+    void* context)
+{
+  uint8_t request[_AZ_MQTT_HTTP_CONNECT_REQUEST_MAX];
+  int32_t size = 0;
+  az_result rc
+      = _az_mqtt_http_connect_request(proxy, host, port, AZ_SPAN_FROM_BUFFER(request), &size);
+  while (az_result_succeeded(rc) && *in_out_sent < size)
+  {
+    int32_t const n = send(context, request + *in_out_sent, size - *in_out_sent);
+    if (n > 0)
+    {
+      *in_out_sent += n < size - *in_out_sent ? n : size - *in_out_sent;
+    }
+    else
+    {
+      rc = n == 0 ? AZ_MQTT_ERROR_TIMEOUT : AZ_MQTT_ERROR_PROXY;
+    }
+  }
+  az_span_fill(AZ_SPAN_FROM_BUFFER(request), 0); // It holds the credentials.
+  return rc;
+}
+
 /** @brief Where the parser is in the reply. */
 enum
 {

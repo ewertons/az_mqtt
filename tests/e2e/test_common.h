@@ -50,6 +50,8 @@ typedef struct
   /** @brief Clean start (MQTT 5) / clean session (MQTT 3.1.1). */
   bool clean_start;
   az_mqtt_tls_options const* tls_options;
+  /** @brief HTTP proxy to connect through (NULL: none); must outlive the client. */
+  az_mqtt_proxy_options const* proxy_options;
 
   AZ_MQTT_T(on_connack_fn) on_connack;
   AZ_MQTT_T(on_publish_received_fn) on_publish;

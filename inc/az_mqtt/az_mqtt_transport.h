@@ -328,9 +328,11 @@ typedef void (*az_mqtt_transport_error_fn)(az_mqtt_native_error const* error, vo
  * @brief Connect through @p proxy from the next connect on (NULL, or an empty host: directly).
  * A connect already started keeps the proxy it started with.
  *
- * @p proxy and the spans in it are used, not copied: they must stay valid while set. With a
- * proxy, the host passed to az_mqtt_transport_connect_start() must stay valid until the connect
- * completes. A connect through a proxy never falls back to connecting directly.
+ * @p proxy and the spans in it are used, not copied: they must stay valid while set, and until
+ * every connect started with them has completed or the transport is closed, even after
+ * another proxy (or NULL) is set. With a proxy, the host passed to
+ * az_mqtt_transport_connect_start() must stay valid until the connect completes. A connect
+ * through a proxy never falls back to connecting directly.
  *
  * @retval AZ_MQTT_ERROR_INVALID_CONFIG Port 0; host or credentials too long, or containing CR,
  *         LF or NUL; user name containing ':'; or a password without a user name.

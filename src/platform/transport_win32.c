@@ -1328,51 +1328,62 @@ static int _socket_wait_writable(SOCKET fd, int32_t timeout_ms)
  * @brief Send the rest of the CONNECT request by @p deadline_ms, without blocking past it.
  * @retval AZ_MQTT_ERROR_TIMEOUT Not all sent yet; proxy_request_sent keeps the progress.
  */
+/** @brief Socket and last error for _proxy_send(). */
+typedef struct
+{
+  SOCKET fd;
+  int error;
+} _proxy_send_context;
+
+/** @brief _az_mqtt_http_connect_send_fn over a non-blocking socket. */
+static int32_t _proxy_send(void* context, uint8_t const* data, int32_t size)
+{
+  _proxy_send_context* const c = (_proxy_send_context*)context;
+  int const n = send(c->fd, (char const*)data, size, 0);
+  if (n >= 0)
+  {
+    return n;
+  }
+  c->error = WSAGetLastError();
+  return c->error == WSAEWOULDBLOCK ? 0 : -1;
+}
+
 static az_result _proxy_send_request(az_mqtt_transport* transport, int64_t deadline_ms)
 {
   if (transport->proxy_request_done)
   {
     return AZ_OK;
   }
-  uint8_t request[_AZ_MQTT_HTTP_CONNECT_REQUEST_MAX];
-  int32_t size = 0;
-  az_result rc = _az_mqtt_http_connect_request(
-      transport->attempt_proxy,
-      transport->proxy_target_host,
-      transport->proxy_target_port,
-      AZ_SPAN_FROM_BUFFER(request),
-      &size);
+  _proxy_send_context context = { transport->socket_fd, 0 };
   u_long non_blocking = 1;
-  if (az_result_succeeded(rc) && ioctlsocket(transport->socket_fd, FIONBIO, &non_blocking) != 0)
+  az_result rc = ioctlsocket(context.fd, FIONBIO, &non_blocking) == 0
+      ? AZ_MQTT_ERROR_TIMEOUT
+      : _proxy_socket_failure(transport, WSAGetLastError());
+  while (rc == AZ_MQTT_ERROR_TIMEOUT)
   {
-    rc = _proxy_socket_failure(transport, WSAGetLastError());
-  }
-  while (az_result_succeeded(rc) && transport->proxy_request_sent < size)
-  {
-    int32_t const sent = transport->proxy_request_sent;
-    int const n = send(transport->socket_fd, (char const*)request + sent, size - sent, 0);
-    if (n > 0)
+    rc = _az_mqtt_http_connect_send_request(
+        transport->attempt_proxy,
+        transport->proxy_target_host,
+        transport->proxy_target_port,
+        &transport->proxy_request_sent,
+        _proxy_send,
+        &context);
+    if (rc == AZ_MQTT_ERROR_PROXY)
     {
-      transport->proxy_request_sent += n;
-      continue;
+      rc = _proxy_socket_failure(transport, context.error);
     }
-    int err = WSAGetLastError();
-    int const w = err == WSAEWOULDBLOCK
-        ? _socket_wait_writable(transport->socket_fd, _remaining(deadline_ms))
-        : -1;
-    if (w < 0)
+    else if (rc == AZ_MQTT_ERROR_TIMEOUT)
     {
-      err = err == WSAEWOULDBLOCK ? WSAGetLastError() : err; // From select().
-      rc = _proxy_socket_failure(transport, err);
-    }
-    else if (w == 0)
-    {
-      rc = AZ_MQTT_ERROR_TIMEOUT;
+      int const w = _socket_wait_writable(context.fd, _remaining(deadline_ms));
+      if (w <= 0)
+      {
+        rc = w == 0 ? AZ_MQTT_ERROR_TIMEOUT : _proxy_socket_failure(transport, WSAGetLastError());
+        break;
+      }
     }
   }
-  az_span_fill(AZ_SPAN_FROM_BUFFER(request), 0); // It holds the credentials.
   u_long blocking = 0; // Sends after the tunnel rely on SO_SNDTIMEO.
-  if (ioctlsocket(transport->socket_fd, FIONBIO, &blocking) != 0
+  if (ioctlsocket(context.fd, FIONBIO, &blocking) != 0
       && (az_result_succeeded(rc) || rc == AZ_MQTT_ERROR_TIMEOUT))
   {
     rc = _proxy_socket_failure(transport, WSAGetLastError());

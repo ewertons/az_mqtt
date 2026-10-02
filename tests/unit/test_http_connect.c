@@ -273,6 +273,96 @@ static void control_bytes_in_the_reply_are_refused(void** state)
       AZ_OK);
 }
 
+/** @brief A send that takes at most `chunk` bytes per call, says "would block" every
+ * `block_every` calls, and fails after `fail_after` bytes (-1: never). */
+typedef struct
+{
+  char out[_AZ_MQTT_HTTP_CONNECT_REQUEST_MAX + 1];
+  int32_t size;
+  int32_t chunk;
+  int calls;
+  int block_every;
+  int32_t fail_after;
+} fake_socket;
+
+static int32_t _fake_send(void* context, uint8_t const* data, int32_t size)
+{
+  fake_socket* const s = (fake_socket*)context;
+  s->calls++;
+  if (s->block_every > 0 && s->calls % s->block_every == 0)
+  {
+    return 0;
+  }
+  if (s->fail_after >= 0 && s->size >= s->fail_after)
+  {
+    return -1;
+  }
+  int32_t const n = size < s->chunk ? size : s->chunk;
+  if (s->size + n > _AZ_MQTT_HTTP_CONNECT_REQUEST_MAX)
+  {
+    return -1; // More than any request: bytes were sent twice.
+  }
+  memcpy(s->out + s->size, data, (size_t)n);
+  s->size += n;
+  return n;
+}
+
+static void the_request_is_sent_across_partial_and_blocked_sends(void** state)
+{
+  (void)state;
+  az_mqtt_proxy_options const p = _proxy("dev@corp", "p@ss%77rd:x");
+  char const* const expected = _request(&p, "hub.example", 8883);
+  for (int32_t chunk = 1; chunk <= 7; chunk += 3)
+  {
+    for (int block_every = 0; block_every <= 3; block_every += 3)
+    {
+      fake_socket s;
+      memset(&s, 0, sizeof(s));
+      s.chunk = chunk;
+      s.block_every = block_every;
+      s.fail_after = -1;
+      int32_t sent = 0;
+      int blocked = 0;
+      az_result rc = AZ_MQTT_ERROR_TIMEOUT;
+      for (int i = 0; i < 4000 && rc == AZ_MQTT_ERROR_TIMEOUT; i++)
+      {
+        int32_t const before = sent;
+        rc = _az_mqtt_http_connect_send_request(
+            &p, _str("hub.example"), 8883, &sent, _fake_send, &s);
+        assert_true(sent >= before); // Progress is kept across calls.
+        blocked += rc == AZ_MQTT_ERROR_TIMEOUT;
+      }
+      assert_int_equal(rc, AZ_OK);
+      assert_int_equal(sent, (int32_t)strlen(expected));
+      assert_string_equal(s.out, expected);
+      assert_true(block_every == 0 ? blocked == 0 : blocked > 0);
+      // Done: further calls send nothing more.
+      assert_int_equal(
+          _az_mqtt_http_connect_send_request(&p, _str("hub.example"), 8883, &sent, _fake_send, &s),
+          AZ_OK);
+      assert_int_equal(s.size, (int32_t)strlen(expected));
+    }
+  }
+}
+
+static void a_failed_send_is_a_proxy_error(void** state)
+{
+  (void)state;
+  az_mqtt_proxy_options const p = _proxy("", "");
+  fake_socket s;
+  memset(&s, 0, sizeof(s));
+  s.chunk = 5;
+  s.fail_after = 10;
+  int32_t sent = 0;
+  assert_int_equal(
+      _az_mqtt_http_connect_send_request(&p, _str("hub.example"), 8883, &sent, _fake_send, &s),
+      AZ_MQTT_ERROR_PROXY);
+  assert_int_equal(sent, 10);
+  assert_int_equal(
+      _az_mqtt_http_connect_send_request(&p, _str("bad host"), 1, &sent, _fake_send, &s),
+      AZ_MQTT_ERROR_INVALID_CONFIG);
+}
+
 static void an_endless_reply_is_cut_off(void** state)
 {
   (void)state;
@@ -306,6 +396,8 @@ int main(void)
     cmocka_unit_test(long_headers_are_skipped),
     cmocka_unit_test(refusals_and_malformed_replies_fail),
     cmocka_unit_test(control_bytes_in_the_reply_are_refused),
+    cmocka_unit_test(the_request_is_sent_across_partial_and_blocked_sends),
+    cmocka_unit_test(a_failed_send_is_a_proxy_error),
     cmocka_unit_test(an_endless_reply_is_cut_off),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
