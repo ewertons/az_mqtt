@@ -489,11 +489,12 @@ static az_result _decode_cert_file_to_der(
   }
 
   LARGE_INTEGER file_size;
-  if (!GetFileSizeEx(h, &file_size) || file_size.QuadPart <= 0 || file_size.QuadPart > 64 * 1024)
+  BOOL const size_ok = GetFileSizeEx(h, &file_size);
+  if (!size_ok || file_size.QuadPart <= 0 || file_size.QuadPart > 64 * 1024)
   {
-    DWORD const err = GetLastError();
+    DWORD const err = size_ok ? ERROR_INVALID_DATA : GetLastError(); // Empty or over 64 KiB.
     CloseHandle(h);
-    return _tls_setup_failure(transport, err != 0 ? err : ERROR_INVALID_DATA);
+    return _tls_setup_failure(transport, err);
   }
 
   uint32_t file_len = (uint32_t)file_size.QuadPart;

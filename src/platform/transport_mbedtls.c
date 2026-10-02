@@ -485,7 +485,17 @@ static int _tls_wait(
       _az_mqtt_remaining_ms(deadline));
   if (w < 0)
   {
-    *out_failure = _az_mqtt_socket_error(errno, &transport->errors);
+    int const wait_errno = errno;
+    if (handshake)
+    {
+      *out_failure = AZ_MQTT_ERROR_TLS_HANDSHAKE;
+      _az_mqtt_report_error(
+          &transport->errors, AZ_MQTT_NATIVE_ERROR_SOCKET, wait_errno, AZ_MQTT_ERROR_TLS_HANDSHAKE);
+    }
+    else
+    {
+      *out_failure = _az_mqtt_socket_error(wait_errno, &transport->errors);
+    }
   }
   return w;
 }
