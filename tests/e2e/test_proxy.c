@@ -114,6 +114,8 @@ static void _connect_in_short_polls(AZ_MQTT_T(client)* client)
 /** @brief Subscribe, publish QoS 1 to the same topic, and receive it: traffic flows both ways. */
 static void _roundtrip(AZ_MQTT_T(client)* client)
 {
+  s_suback_received = false;
+  s_message_received = false;
   AZ_MQTT_T(subscription) sub;
   memset(&sub, 0, sizeof(sub));
   sub.topic_filter = AZ_SPAN_FROM_STR("az-mqtt/e2e/proxy");
