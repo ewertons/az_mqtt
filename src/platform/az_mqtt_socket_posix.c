@@ -26,6 +26,7 @@
 #include <time.h>
 #include <unistd.h>
 
+// ESP-IDF provides getrandom() in <sys/random.h> (over esp_fill_random()).
 #if defined(__linux__) || defined(ESP_PLATFORM)
 #include <sys/random.h>
 #define _AZ_MQTT_GETRANDOM
