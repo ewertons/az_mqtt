@@ -72,12 +72,11 @@ static struct
   AZ_MQTT_T(client) const* native_client;
   int reconnects_left;
   az_result reconnect_rc;
-  /** @brief on_publish_resend: what to do, offers so far, and how many had come at on_connack. */
+  /** @brief get_resend_message: what to do, calls so far, and how many had come at on_connack. */
   int resend_mode;
   int offers;
   int offers_at_connack;
   uint16_t offered_ids[8];
-  az_result resend_rc[8][4];
 } g;
 
 static void _on_connack(AZ_MQTT_T(client)* c, AZ_MQTT_T(connack_data) const* d)
@@ -161,45 +160,48 @@ static void _on_transport_error(AZ_MQTT_T(client)* c, az_mqtt_native_error const
 
 static AZ_MQTT_T(publish_options) _publish_options(az_mqtt_qos qos);
 
-/** @brief _on_publish_resend modes. */
+/** @brief _get_resend_message modes. */
 enum
 {
-  _RESEND_NONE, ///< Leave each one (abandoned).
-  _RESEND_ALL, ///< Resend each one.
-  _RESEND_PROBE, ///< Wrong QoS, unknown id, then resend twice (results in resend_rc).
-  _RESEND_DISCONNECT, ///< Disconnect at the first offer.
-  _RESEND_NO_TOPIC, ///< Resend without a topic.
+  _RESEND_ALL, ///< Supply each message.
+  _RESEND_NONE, ///< Supply none (each abandoned).
+  _RESEND_WRONG_QOS, ///< Supply each at another QoS (invalid: abandoned).
+  _RESEND_NO_TOPIC, ///< Supply each without a topic (invalid in mqttv5: abandoned).
+  _RESEND_DISCONNECT, ///< Disconnect at the first call.
 };
 
-static void _on_publish_resend(AZ_MQTT_T(client)* c, uint16_t packet_id, az_mqtt_qos qos)
+static bool _get_resend_message(
+    AZ_MQTT_T(client)* c,
+    uint16_t packet_id,
+    az_mqtt_qos qos,
+    AZ_MQTT_T(publish_options)* out_message)
 {
   int const n = g.offers < 8 ? g.offers : 7;
   g.offers++;
   g.offered_ids[n] = packet_id;
-  AZ_MQTT_T(publish_options) p = _publish_options(qos);
-  if (g.resend_mode == _RESEND_ALL)
+  assert_int_equal(out_message->qos, qos); // Preset.
+  *out_message = _publish_options(qos);
+  switch (g.resend_mode)
   {
-    g.resend_rc[n][0] = AZ_MQTT_T(client_publish_resend)(c, packet_id, &p);
-  }
-  else if (g.resend_mode == _RESEND_PROBE)
-  {
-    AZ_MQTT_T(publish_options) wrong = _publish_options(
-        qos == AZ_MQTT_QOS_AT_LEAST_ONCE ? AZ_MQTT_QOS_EXACTLY_ONCE : AZ_MQTT_QOS_AT_LEAST_ONCE);
-    g.resend_rc[n][0] = AZ_MQTT_T(client_publish_resend)(c, packet_id, &wrong);
-    g.resend_rc[n][1] = AZ_MQTT_T(client_publish_resend)(c, (uint16_t)(packet_id + 100), &p);
-    g.resend_rc[n][2] = AZ_MQTT_T(client_publish_resend)(c, packet_id, &p);
-    g.resend_rc[n][3] = AZ_MQTT_T(client_publish_resend)(c, packet_id, &p);
-  }
-  else if (g.resend_mode == _RESEND_DISCONNECT)
-  {
-    _ignore(AZ_MQTT_TEST_DISCONNECT(c));
-  }
-  else if (g.resend_mode == _RESEND_NO_TOPIC)
-  {
-    p.topic = AZ_SPAN_EMPTY;
-    g.resend_rc[n][0] = AZ_MQTT_T(client_publish_resend)(c, packet_id, &p);
+    case _RESEND_NONE:
+      return false;
+    case _RESEND_WRONG_QOS:
+      out_message->qos
+          = qos == AZ_MQTT_QOS_AT_LEAST_ONCE ? AZ_MQTT_QOS_EXACTLY_ONCE : AZ_MQTT_QOS_AT_MOST_ONCE;
+      return true;
+    case _RESEND_NO_TOPIC:
+      out_message->topic = AZ_SPAN_EMPTY;
+      return true;
+    case _RESEND_DISCONNECT:
+      _ignore(AZ_MQTT_TEST_DISCONNECT(c));
+      return false;
+    default:
+      return true;
   }
 }
+
+/** @brief Next _setup() keeps the session (Clean Session / Clean Start 0; then reset). */
+static bool s_persistent;
 
 static void _on_closed(AZ_MQTT_T(client)* c, az_result reason)
 {
@@ -302,7 +304,17 @@ static void _setup(fixture* f, test_server_options const* server_options, uint16
   o.proxy_options = s_proxy;
   s_proxy = NULL;
   o.on_transport_error = _on_transport_error;
-  o.on_publish_resend = _on_publish_resend;
+  o.get_resend_message = _get_resend_message;
+  if (s_persistent)
+  {
+    s_persistent = false;
+#if AZ_MQTT_TEST_VERSION == 5
+    o.connect_options.clean_start = false;
+    o.connect_options.session_expiry_interval = 3600;
+#else
+    o.connect_options.clean_session = false;
+#endif
+  }
 #if AZ_MQTT_TEST_VERSION == 5
   o.on_disconnect = _on_disconnect;
   o.buffers.connack_user_properties = ARRAY_SPAN(f->props[0]);
@@ -765,7 +777,7 @@ static void a_session_end_abandons_what_is_in_flight(void** state)
 }
 
 /**
- * @brief Connect to a server that answers only QoS 2 with PUBREC, leave QoS 1 (a), QoS 2 at
+ * @brief Connect to a server that answers only QoS 2 with PUBREC; leave QoS 1 (a), QoS 2 at
  * PUBREL (b) and QoS 1 (c) unacknowledged, then disconnect. The server log is cleared.
  */
 static void _leave_three_in_flight(fixture* f, uint16_t ids[3])
@@ -791,10 +803,8 @@ static void _take_log(fixture* f, int count, char* out, int size)
   char log[256] = "";
   for (;;)
   {
-    char more[256];
-    test_server_take_log(f->server, more, (int)sizeof(more));
     size_t const used = strlen(log);
-    (void)snprintf(log + used, sizeof(log) - used, "%s", more);
+    test_server_take_log(f->server, log + used, (int)(sizeof(log) - used));
     int entries = 0;
     for (char const* p = log; *p != '\0'; p++)
     {
@@ -809,32 +819,37 @@ static void _take_log(fixture* f, int count, char* out, int size)
   (void)snprintf(out, (size_t)size, "%s", log);
 }
 
+/** @brief _setup() of a kept session with a PUBREC-only server; three left in flight. */
+static void _setup_resume(fixture* f, uint16_t ids[3], int slots)
+{
+  test_server_options so = _plain();
+  so.pubrec_only = true;
+  s_inflight_slots = slots;
+  s_persistent = true;
+  _setup(f, &so, 30);
+  _leave_three_in_flight(f, ids);
+  test_server_set_session_present(f->server, true);
+}
+
 static void a_resumed_session_resends_pubrel_then_publishes_oldest_first(void** state)
 {
   (void)state;
-  test_server_options so = _plain();
-  so.pubrec_only = true;
   fixture f;
-  _setup(&f, &so, 30);
   uint16_t ids[3];
-  _leave_three_in_flight(&f, ids);
-
-  test_server_set_session_present(f.server, true);
+  _setup_resume(&f, ids, 4);
   g.resend_mode = _RESEND_ALL;
   assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
   assert_int_equal(g.offers, 2);
   assert_int_equal(g.offers_at_connack, 2); // Before on_connack.
   assert_int_equal(g.offered_ids[0], ids[0]);
   assert_int_equal(g.offered_ids[1], ids[2]);
-  assert_int_equal(g.resend_rc[0][0], AZ_OK);
-  assert_int_equal(g.resend_rc[1][0], AZ_OK);
   char expected[64];
   (void)snprintf(expected, sizeof(expected), "R:%u P1:%ud P1:%ud ", ids[1], ids[0], ids[2]);
   char log[256];
   _take_log(&f, 3, log, (int)sizeof(log));
   assert_string_equal(log, expected);
 
-  // Still in flight: resent again on the next resume.
+  // Still unacknowledged: resent again on the next resume.
   g.offers = 0;
   assert_int_equal(AZ_MQTT_TEST_DISCONNECT(&f.client), AZ_OK);
   assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
@@ -844,46 +859,56 @@ static void a_resumed_session_resends_pubrel_then_publishes_oldest_first(void** 
   _teardown(&f);
 }
 
-static void publishes_left_by_on_publish_resend_are_abandoned(void** state)
+/** @brief The PUBREL alone was resent, and two entries were freed (the PUBREL holds the third). */
+static void _assert_publishes_abandoned(fixture* f, uint16_t const ids[3])
 {
-  (void)state;
-  test_server_options so = _plain();
-  so.pubrec_only = true;
-  s_inflight_slots = 3;
-  fixture f;
-  _setup(&f, &so, 30);
-  uint16_t ids[3];
-  _leave_three_in_flight(&f, ids);
-
-  test_server_set_session_present(f.server, true);
-  g.resend_mode = _RESEND_NONE;
-  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
-  assert_int_equal(g.offers, 2);
   char expected[32];
   (void)snprintf(expected, sizeof(expected), "R:%u ", ids[1]);
   char log[256];
-  _take_log(&f, 1, log, (int)sizeof(log));
+  _take_log(f, 1, log, (int)sizeof(log));
+  _sleep_ms(50);
+  size_t const used = strlen(log);
+  test_server_take_log(f->server, log + used, (int)(sizeof(log) - used));
   assert_string_equal(log, expected);
-  // Two entries freed; the PUBREL still holds the third.
   AZ_MQTT_T(publish_options) const qos1 = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE);
-  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, NULL), AZ_OK);
-  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, NULL), AZ_OK);
-  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, NULL), AZ_MQTT_ERROR_FLOW_CONTROL);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f->client, &qos1, NULL), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f->client, &qos1, NULL), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f->client, &qos1, NULL), AZ_MQTT_ERROR_FLOW_CONTROL);
+}
+
+static void messages_not_supplied_are_abandoned(void** state)
+{
+  (void)state;
+  fixture f;
+  uint16_t ids[3];
+  _setup_resume(&f, ids, 3);
+  g.resend_mode = _RESEND_NONE;
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  assert_int_equal(g.offers, 2);
+  _assert_publishes_abandoned(&f, ids);
+  _teardown(&f);
+}
+
+static void invalid_resend_messages_are_abandoned(void** state)
+{
+  (void)state;
+  fixture f;
+  uint16_t ids[3];
+  _setup_resume(&f, ids, 3);
+  g.resend_mode = _RESEND_WRONG_QOS; // Exactly the original QoS, nothing else.
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  assert_int_equal(g.offers, 2);
+  _assert_publishes_abandoned(&f, ids);
   _teardown(&f);
 }
 
 static void without_session_present_nothing_is_resent(void** state)
 {
   (void)state;
-  test_server_options so = _plain();
-  so.pubrec_only = true;
-  s_inflight_slots = 3;
   fixture f;
-  _setup(&f, &so, 30);
   uint16_t ids[3];
-  _leave_three_in_flight(&f, ids);
-
-  g.resend_mode = _RESEND_ALL;
+  _setup_resume(&f, ids, 3);
+  test_server_set_session_present(f.server, false);
   assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
   assert_int_equal(g.offers, 0);
   _sleep_ms(100);
@@ -898,99 +923,157 @@ static void without_session_present_nothing_is_resent(void** state)
   _teardown(&f);
 }
 
-static void publish_resend_refuses_what_is_not_awaiting_it(void** state)
-{
-  (void)state;
-  test_server_options so = _plain();
-  so.pubrec_only = true;
-  fixture f;
-  _setup(&f, &so, 30);
-  uint16_t ids[3];
-  _leave_three_in_flight(&f, ids);
-
-  test_server_set_session_present(f.server, true);
-  g.resend_mode = _RESEND_PROBE;
-  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
-  assert_int_equal(g.offers, 2);
-  for (int i = 0; i < 2; i++)
-  {
-    assert_int_equal(g.resend_rc[i][0], AZ_ERROR_ARG); // Not the original QoS.
-    assert_int_equal(g.resend_rc[i][1], AZ_MQTT_ERROR_INVALID_STATE); // Not offered.
-    assert_int_equal(g.resend_rc[i][2], AZ_OK);
-    assert_int_equal(g.resend_rc[i][3], AZ_MQTT_ERROR_INVALID_STATE); // Already resent.
-  }
-  AZ_MQTT_T(publish_options) const qos1 = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE);
-  assert_int_equal( // Outside on_publish_resend.
-      AZ_MQTT_T(client_publish_resend)(&f.client, ids[0], &qos1),
-      AZ_MQTT_ERROR_INVALID_STATE);
-  _teardown(&f);
-}
-
 static void a_session_ended_during_resends_keeps_the_rest(void** state)
 {
   (void)state;
-  test_server_options so = _plain();
-  so.pubrec_only = true;
   fixture f;
-  _setup(&f, &so, 30);
   uint16_t ids[3];
-  _leave_three_in_flight(&f, ids);
-
-  test_server_set_session_present(f.server, true);
+  _setup_resume(&f, ids, 4);
   g.resend_mode = _RESEND_DISCONNECT;
   assert_int_not_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
   assert_int_equal(g.offers, 1);
-  assert_int_equal(g.offers_at_connack, 0); // No on_connack.
+  assert_int_equal(g.connacks, 1); // Only the first connect's: none for the ended one.
   assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_DISCONNECTED);
 
   g.offers = 0;
   g.resend_mode = _RESEND_ALL;
   assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
-  assert_int_equal(g.offers, 2); // Both offered again.
+  assert_int_equal(g.offers, 2); // Both again.
   _teardown(&f);
 }
 
-#if AZ_MQTT_TEST_VERSION == 5
-static void resends_respect_the_new_receive_maximum(void** state)
+static void resends_keep_their_order_across_identifier_wraps(void** state)
 {
   (void)state;
   test_server_options so = _plain();
-  so.pubrec_only = true;
+  so.ack_publishes = true;
+  so.hold_first_publish = true;
+  s_inflight_slots = 3;
+  s_persistent = true;
   fixture f;
   _setup(&f, &so, 30);
-  uint16_t ids[3];
-  _leave_three_in_flight(&f, ids);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  AZ_MQTT_T(publish_options) const qos1 = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE);
+  uint16_t oldest;
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, &oldest), AZ_OK); // Held.
+  int acked = 0;
+  uint16_t id = oldest;
+  while (id != 65533)
+  {
+    assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, &id), AZ_OK);
+    acked++;
+    PUMP_UNTIL(&f, g.pubacks == acked);
+    assert_int_equal(g.pubacks, acked);
+  }
+  test_server_set_ack_publishes(f.server, false);
+  int const seen = test_server_publishes(f.server);
+  uint16_t newer;
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, &newer), AZ_OK);
+  assert_int_equal(newer, 65534);
+  PUMP_UNTIL(&f, test_server_publishes(f.server) == seen + 1); // Read while acks are off.
+  test_server_set_ack_publishes(f.server, true);
+  for (int i = 0; i < 2; i++) // 65535, then 2 (1 is held): newest ids now below both.
+  {
+    assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, &id), AZ_OK);
+    acked++;
+    PUMP_UNTIL(&f, g.pubacks == acked);
+    assert_int_equal(g.pubacks, acked);
+  }
+  assert_int_equal(id, 2);
+  assert_int_equal(AZ_MQTT_TEST_DISCONNECT(&f.client), AZ_OK);
+  char log[256];
+  test_server_take_log(f.server, log, (int)sizeof(log));
 
   test_server_set_session_present(f.server, true);
-  test_server_set_receive_maximum(f.server, 2); // The PUBREL and one PUBLISH.
   g.resend_mode = _RESEND_ALL;
   assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
-  assert_int_equal(g.offers, 2);
-  assert_int_equal(g.resend_rc[0][0], AZ_OK);
-  assert_int_equal(g.resend_rc[1][0], AZ_MQTT_ERROR_FLOW_CONTROL);
   char expected[64];
-  (void)snprintf(expected, sizeof(expected), "R:%u P1:%ud ", ids[1], ids[0]);
-  char log[256];
+  (void)snprintf(expected, sizeof(expected), "P1:%ud P1:%ud ", oldest, newer);
   _take_log(&f, 2, log, (int)sizeof(log));
   assert_string_equal(log, expected);
   _teardown(&f);
 }
 
-static void a_resend_needs_the_topic(void** state)
+/** @brief Wait, without running the client, until the server has read @p count PUBLISH. */
+static void _wait_server_publishes(fixture* f, int count)
+{
+  for (int i = 0; i < 150 && test_server_publishes(f->server) < count; i++)
+  {
+    _sleep_ms(20);
+  }
+  assert_int_equal(test_server_publishes(f->server), count);
+}
+
+static void resends_keep_their_order_when_older_entries_were_freed(void** state)
 {
   (void)state;
   test_server_options so = _plain();
-  so.pubrec_only = true;
+  so.ack_publishes = true;
+  s_inflight_slots = 3;
+  s_persistent = true;
   fixture f;
   _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  AZ_MQTT_T(publish_options) const qos1 = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE);
   uint16_t ids[3];
-  _leave_three_in_flight(&f, ids);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, &ids[0]), AZ_OK); // Acknowledged,
+  _wait_server_publishes(&f, 1);
+  test_server_set_ack_publishes(f.server, false);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, &ids[1]), AZ_OK); // not this one:
+  _wait_server_publishes(&f, 2);
+  PUMP_UNTIL(&f, g.pubacks == 1); // the oldest entry is freed while a newer one is held,
+  assert_int_equal(g.pubacks, 1);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, &ids[2]), AZ_OK); // then this.
+  _wait_server_publishes(&f, 3);
+  assert_int_equal(AZ_MQTT_TEST_DISCONNECT(&f.client), AZ_OK);
+  char log[256];
+  test_server_take_log(f.server, log, (int)sizeof(log));
+
   test_server_set_session_present(f.server, true);
-  g.resend_mode = _RESEND_NO_TOPIC;
+  g.resend_mode = _RESEND_ALL;
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  char expected[64];
+  (void)snprintf(expected, sizeof(expected), "P1:%ud P1:%ud ", ids[1], ids[2]);
+  _take_log(&f, 2, log, (int)sizeof(log));
+  assert_string_equal(log, expected);
+  _teardown(&f);
+}
+
+#if AZ_MQTT_TEST_VERSION == 5
+static void resends_wait_for_room_under_the_new_receive_maximum(void** state)
+{
+  (void)state;
+  fixture f;
+  uint16_t ids[3];
+  _setup_resume(&f, ids, 4);
+  test_server_set_receive_maximum(f.server, 2); // The PUBREL and one PUBLISH.
+  test_server_set_ack_publishes(f.server, true);
+  g.resend_mode = _RESEND_ALL;
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  assert_int_equal(g.offers_at_connack, 1);
+  AZ_MQTT_T(publish_options) const qos1 = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE);
+  // Not before the resend still waiting.
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, NULL), AZ_MQTT_ERROR_FLOW_CONTROL);
+  PUMP_UNTIL(&f, g.offers == 2); // Sent once an acknowledgement makes room.
+  assert_int_equal(g.offers, 2);
+  char expected[64];
+  (void)snprintf(expected, sizeof(expected), "R:%u P1:%ud P1:%ud ", ids[1], ids[0], ids[2]);
+  char log[256];
+  _take_log(&f, 3, log, (int)sizeof(log));
+  assert_string_equal(log, expected);
+  _teardown(&f);
+}
+
+static void a_resend_message_needs_the_topic(void** state)
+{
+  (void)state;
+  fixture f;
+  uint16_t ids[3];
+  _setup_resume(&f, ids, 3);
+  g.resend_mode = _RESEND_NO_TOPIC; // No Topic Alias mapping survives the connection.
   assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
   assert_int_equal(g.offers, 2);
-  assert_int_equal(g.resend_rc[0][0], AZ_ERROR_ARG); // No alias mapping on this connection.
-  assert_int_equal(g.resend_rc[1][0], AZ_ERROR_ARG);
+  _assert_publishes_abandoned(&f, ids);
   _teardown(&f);
 }
 #endif
@@ -1765,13 +1848,15 @@ int main(void)
     cmocka_unit_test(a_held_packet_identifier_is_not_reused),
     cmocka_unit_test(a_session_end_abandons_what_is_in_flight),
     cmocka_unit_test(a_resumed_session_resends_pubrel_then_publishes_oldest_first),
-    cmocka_unit_test(publishes_left_by_on_publish_resend_are_abandoned),
+    cmocka_unit_test(messages_not_supplied_are_abandoned),
+    cmocka_unit_test(invalid_resend_messages_are_abandoned),
     cmocka_unit_test(without_session_present_nothing_is_resent),
-    cmocka_unit_test(publish_resend_refuses_what_is_not_awaiting_it),
     cmocka_unit_test(a_session_ended_during_resends_keeps_the_rest),
+    cmocka_unit_test(resends_keep_their_order_across_identifier_wraps),
+    cmocka_unit_test(resends_keep_their_order_when_older_entries_were_freed),
 #if AZ_MQTT_TEST_VERSION == 5
-    cmocka_unit_test(resends_respect_the_new_receive_maximum),
-    cmocka_unit_test(a_resend_needs_the_topic),
+    cmocka_unit_test(resends_wait_for_room_under_the_new_receive_maximum),
+    cmocka_unit_test(a_resend_message_needs_the_topic),
 #endif
     cmocka_unit_test(inbound_qos2_duplicates_are_delivered_once),
     cmocka_unit_test(inbound_qos2_without_a_free_slot_is_still_delivered),

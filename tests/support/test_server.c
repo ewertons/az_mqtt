@@ -590,13 +590,15 @@ static void _serve(test_server* s, conn* c)
 {
   uint8_t body[512];
   int len = 0;
-  if (_read_packet(s, c, body, (int)sizeof(body), &len) != 1 || len < 7)
+  if (_read_packet(s, c, body, (int)sizeof(body), &len) != 1 || len < 8)
   {
     return;
   }
   // CONNECT variable header: 00 04 'M' 'Q' 'T' 'T' <level>
   bool const v5 = body[6] == 5;
-  uint8_t const present = s->options.connack_code == 0 && _get_present(s) ? 0x01 : 0x00;
+  bool const keep_session = (body[7] & 0x02) == 0; // Clean Session / Clean Start 0.
+  uint8_t const present
+      = s->options.connack_code == 0 && keep_session && _get_present(s) ? 0x01 : 0x00;
   uint8_t const connack_v3[] = { 0x20, 0x02, present, s->options.connack_code };
   uint8_t props[24];
   int p = 0;
@@ -885,7 +887,10 @@ static void _serve(test_server* s, conn* c)
           (void)_write(c, pubrec, (int)sizeof(pubrec));
         }
       }
-      if (s->options.ack_publishes && !held && qos > 0 && id_at + 2 <= len)
+      pthread_mutex_lock(&s->lock);
+      bool const ack_publishes = s->options.ack_publishes;
+      pthread_mutex_unlock(&s->lock);
+      if (ack_publishes && !held && qos > 0 && id_at + 2 <= len)
       {
         bool const reason = v5 && qos == 2 && s->options.pubrec_reason != 0;
         uint8_t const ack[] = { (uint8_t)(qos == 1 ? 0x40 : 0x50), (uint8_t)(reason ? 3 : 2),
@@ -900,7 +905,10 @@ static void _serve(test_server* s, conn* c)
       s->last_pubrel_reason = len >= 3 ? body[2] : 0;
       pthread_mutex_unlock(&s->lock);
       _log(s, 'R', 0, (body[0] << 8) | body[1], false);
-      if (s->options.ack_publishes)
+      pthread_mutex_lock(&s->lock);
+      bool const ack_publishes = s->options.ack_publishes;
+      pthread_mutex_unlock(&s->lock);
+      if (ack_publishes)
       {
         uint8_t const pubcomp[] = { 0x70, 0x02, body[0], body[1] };
         (void)_write(c, pubcomp, (int)sizeof(pubcomp));
@@ -1130,6 +1138,13 @@ void test_server_set_session_present(test_server* s, bool present)
 {
   pthread_mutex_lock(&s->lock);
   s->session_present = present;
+  pthread_mutex_unlock(&s->lock);
+}
+
+void test_server_set_ack_publishes(test_server* s, bool ack)
+{
+  pthread_mutex_lock(&s->lock);
+  s->options.ack_publishes = ack;
   pthread_mutex_unlock(&s->lock);
 }
 

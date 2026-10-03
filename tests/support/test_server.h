@@ -164,8 +164,14 @@ int test_server_last_pubrel_reason(test_server* server);
 int test_server_pubcomps(test_server* server);
 int test_server_last_pubcomp_reason(test_server* server);
 
-/** @brief Set Session Present in the CONNACKs that follow (accepted ones). */
+/**
+ * @brief Keep sessions: the CONNACKs that follow (accepted ones) set Session Present when the
+ * CONNECT has Clean Session / Clean Start 0.
+ */
 void test_server_set_session_present(test_server* server, bool present);
+
+/** @brief Change ack_publishes from now on. */
+void test_server_set_ack_publishes(test_server* server, bool ack);
 
 /** @brief MQTT 5 Receive Maximum of the CONNACKs that follow (0: absent). */
 void test_server_set_receive_maximum(test_server* server, uint16_t receive_maximum);

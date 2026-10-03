@@ -23,10 +23,12 @@ the [Azure SDK for C](https://github.com/Azure/azure-sdk-for-c) span and platfor
   QoS 2 duplicate detection, acknowledgements for unknown identifiers ignored. With no free entry a
   request fails with `AZ_MQTT_ERROR_FLOW_CONTROL`.
 - Session resumption: unacknowledged QoS 1/2 exchanges outlive the connection. If the next
-  accepted CONNACK has Session Present, PUBRELs are resent, then each PUBLISH is offered to
-  `on_publish_resend`, oldest first; it resends it (`az_mqttN_client_publish_resend`, DUP set,
-  same packet identifier) from the caller's own copy, or it is abandoned. Without Session Present
-  all are abandoned. SUBSCRIBE/UNSUBSCRIBE in flight are abandoned when the connection ends.
+  accepted CONNACK has Session Present, the client resends them as MQTT requires: PUBRELs, then
+  each PUBLISH, oldest first, with DUP and its original packet identifier (mqttv5: within the new
+  Receive Maximum, the rest as acknowledgements free room). The library keeps no message copy:
+  `get_resend_message` supplies each from the caller's own; one it cannot supply is abandoned.
+  Without Session Present all are abandoned. SUBSCRIBE/UNSUBSCRIBE in flight are abandoned when
+  the connection ends.
   Session state is kept in memory only, not across a restart.
 - mqttv5 enforces the CONNACK Receive Maximum, Maximum QoS, Retain Available, Topic Alias Maximum
   and Maximum Packet Size.
