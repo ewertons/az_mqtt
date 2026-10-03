@@ -27,9 +27,8 @@ jobs:
       fail-fast: false
       matrix:
         # mbedtls-4.x is what ESP-IDF v6 ships.
-        # TEMPORARY (Windows transport PR): openssl/gcc only. Revert before merging.
-        tls: [openssl]
-        cc: [gcc]
+        tls: [openssl, mbedtls-3.6.7, mbedtls-4.1.1, mbedtls-4.2.0, none]
+        cc: [gcc, clang]
     env:
       CC: ${{ matrix.cc }}
       MBEDTLS_PREFIX: ${{ github.workspace }}/build/${{ matrix.tls }}
@@ -62,7 +61,6 @@ jobs:
 
   # Builds and tests with only one MQTT version enabled.
   single-version:
-    if: false # TEMPORARY (Windows transport PR). Revert before merging.
     name: mqttv${{ matrix.only }} only
     runs-on: ubuntu-24.04
     strategy:
@@ -92,7 +90,6 @@ jobs:
         run: eng/ci/build-and-test.sh openssl debug
 
   sanitizers:
-    if: false # TEMPORARY (Windows transport PR). Revert before merging.
     name: ASan + UBSan
     runs-on: ubuntu-24.04
     steps:
@@ -115,7 +112,6 @@ jobs:
         run: eng/ci/build-and-test.sh openssl asan
 
   hardened:
-    if: false # TEMPORARY (Windows transport PR). Revert before merging.
     name: hardened release
     runs-on: ubuntu-24.04
     steps:
