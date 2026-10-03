@@ -108,6 +108,11 @@ typedef struct
   bool send_qos2_sequence;
   /** @brief After CONNACK: PUBACK, PUBCOMP, PUBREC, PUBREL, SUBACK, UNSUBACK for unused packet ids. */
   bool send_unknown_acks;
+  /**
+   * @brief TLS 1.3: after CONNACK, send a session ticket then the burst in one flight. Below TLS
+   * 1.3 (no post-handshake tickets) the burst alone; see test_server_last_tls13().
+   */
+  bool ticket_before_burst;
   /** @brief Close the connection right after CONNACK (TLS: without close_notify). */
   bool close_after_connack;
 } test_server_options;
@@ -165,6 +170,10 @@ int test_server_ws_unmasked(test_server* server);
 int test_server_ws_client_close_code(test_server* server);
 /** @brief Whether the last upgrade request contains @p text. */
 bool test_server_ws_request_has(test_server* server, char const* text);
+/** @brief Whether the last TLS connection negotiated TLS 1.3. */
+bool test_server_last_tls13(test_server* server);
+/** @brief TLS connections the client ended with close_notify. */
+int test_server_close_notifies(test_server* server);
 /** @brief Whether the client closed the last connection (orderly or not). */
 bool test_server_client_closed(test_server* server);
 

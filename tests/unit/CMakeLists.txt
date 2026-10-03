@@ -9,6 +9,13 @@ if(AZ_MQTT_ENABLE_PROXY)
   target_link_libraries(az_mqtt_test_http_connect PRIVATE az_mqtt::core cmocka)
   az_mqtt_apply_warnings(az_mqtt_test_http_connect)
   add_test(NAME az_mqtt_test_http_connect COMMAND az_mqtt_test_http_connect)
+
+  add_executable(az_mqtt_test_proxy_transport test_proxy_transport.c test_fake_transport.c)
+  target_include_directories(az_mqtt_test_proxy_transport PRIVATE
+    ${cmocka_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/core ${PROJECT_SOURCE_DIR}/src/platform)
+  target_link_libraries(az_mqtt_test_proxy_transport PRIVATE az_mqtt::core cmocka)
+  az_mqtt_apply_warnings(az_mqtt_test_proxy_transport)
+  add_test(NAME az_mqtt_test_proxy_transport COMMAND az_mqtt_test_proxy_transport)
 endif()
 
 if(AZ_MQTT_ENABLE_WEBSOCKETS)

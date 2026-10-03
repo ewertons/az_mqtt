@@ -10,6 +10,8 @@
 #ifndef TEST_FAKE_TRANSPORT_H
 #define TEST_FAKE_TRANSPORT_H
 
+#include "az_mqtt_io_layers_internal.h"
+
 #include <az_mqtt/az_mqtt_transport.h>
 
 #include <stdbool.h>
@@ -17,8 +19,9 @@
 
 typedef struct
 {
-  az_mqtt_transport base; ///< Must be first.
-  /** @brief What the peer sends (fed with test_fake_transport_feed()); read up to chunk at a time. */
+  _az_mqtt_io_layer layer; ///< Must be first; layer.base is the transport.
+  /** @brief What the peer sends (fed with test_fake_transport_feed()); read up to chunk at a time.
+   */
   az_span input;
   int32_t input_size;
   int32_t input_read;
@@ -27,13 +30,20 @@ typedef struct
   az_span sent;
   int32_t sent_size;
   int send_calls;
+  /** @brief Bytes send_some() may still take (-1: no limit), used up as it takes them: buffer space. */
+  int32_t send_some_budget;
   /** @brief Fail this send call (1-based; 0: none) and later ones. */
   int fail_send_call;
   /** @brief connect_poll() returns AZ_MQTT_ERROR_TIMEOUT this many times before succeeding. */
   int connect_polls_pending;
   /** @brief Returned by receive once the input is exhausted; AZ_OK: no bytes. */
   az_result end_of_input;
+  /** @brief Non-zero: a failing send or receive first reports this socket error (as a socket does). */
+  int32_t failure_errno;
   int connects;
+  /** @brief Of the last connect_start(). */
+  az_span host;
+  uint16_t port;
   int shutdowns;
   int closes;
   bool connected;

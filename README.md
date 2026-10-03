@@ -37,7 +37,12 @@ the [Azure SDK for C](https://github.com/Azure/azure-sdk-for-c) span and platfor
   connection. CMake `AZ_MQTT_ENABLE_PROXY=OFF` compiles it out.
 - Transports are pluggable: `az_mqtt_transport` is an `az_mqtt_transport_vtable` implementation
   (connect, send, receive, shutdown, close, proxy, error callback); `az_mqtt_transport_*` calls
-  dispatch to it. The platform transport (TCP, TLS, proxy) is one; layers wrap another transport.
+  dispatch to it. Layers wrap another transport. The platform transport is a stack of layers in
+  the caller's storage: TLS (OpenSSL or mbedTLS) over the HTTP CONNECT proxy over the socket
+  (Windows: one Schannel transport). On POSIX a TLS session still usable is ended with
+  close_notify on any close (orderly disconnect or a failed session, e.g. keep-alive timeout);
+  errors met doing so go to `on_transport_error`. A connection that failed is closed as is.
+  Windows sends no close_notify.
   The platform port provides `az_mqtt_transport_init()`, `_sizeof()`, `_clock_ms()` and
   `_random()`.
 - MQTT over WebSockets (RFC 6455, subprotocol `mqtt`) is such a layer: `az_mqtt_websocket_init()`

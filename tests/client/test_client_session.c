@@ -396,6 +396,28 @@ static void a_server_disconnect_closes_the_connection(void** state)
   _teardown(&f);
 }
 
+#if !defined(AZ_MQTT_TEST_BACKEND_NONE)
+static void data_after_a_session_ticket_is_read_without_waiting(void** state)
+{
+  (void)state;
+  test_server_options so = test_server_options_default(); // TLS 1.3
+  so.burst_publishes = 10;
+  so.ticket_before_burst = true;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  _sleep_ms(200); // Ticket and burst have arrived.
+  if (!test_server_last_tls13(f.server))
+  {
+    _teardown(&f); // No TLS 1.3 in this build: no post-handshake ticket to test.
+    skip();
+  }
+  assert_int_equal(AZ_MQTT_T(client_process_loop)(&f.client, 0), AZ_OK);
+  assert_int_equal(g.publishes, 10);
+  _teardown(&f);
+}
+#endif
+
 static void one_process_loop_drains_a_burst(void** state)
 {
   (void)state;
@@ -1084,6 +1106,56 @@ static void websockets_are_refused_without_websocket_support(void** state)
 }
 #endif // AZ_MQTT_NO_WEBSOCKETS
 
+#if !defined(AZ_MQTT_TEST_BACKEND_NONE)
+/** @brief Wait up to 2 s for the server to count @p n close_notify. */
+static int _close_notifies(fixture* f, int n)
+{
+  for (int i = 0; i < 200 && test_server_close_notifies(f->server) < n; i++)
+  {
+    _sleep_ms(10);
+  }
+  return test_server_close_notifies(f->server);
+}
+
+static void tls_sessions_end_with_close_notify_whatever_the_reason(void** state)
+{
+  (void)state;
+  // Orderly disconnect.
+  test_server_options so = test_server_options_default();
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  assert_int_equal(AZ_MQTT_TEST_DISCONNECT(&f.client), AZ_OK);
+  assert_int_equal(_close_notifies(&f, 1), 1);
+  _teardown(&f);
+
+  // Keep-alive timeout: the session failed, the connection did not.
+  so = test_server_options_default();
+  so.no_pingresp = true;
+  _setup(&f, &so, 1);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  assert_int_equal(_pump_until_closed(&f, 5000), AZ_MQTT_ERROR_KEEP_ALIVE_TIMEOUT);
+  assert_int_equal(_close_notifies(&f, 1), 1);
+  assert_int_equal(g.native.count, 0); // Sent without error.
+  _teardown(&f);
+
+  // Protocol error.
+  so = test_server_options_default();
+  so.send_auth = true; // Reserved in MQTT 3.1.1; valid in 5.
+  _setup(&f, &so, 30);
+  az_result const rc = AZ_MQTT_T(client_connect)(&f.client, 3000);
+  _ignore(_pump_until_closed(&f, 1000));
+#if AZ_MQTT_TEST_VERSION == 3
+  (void)rc;
+  assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_PROTOCOL);
+  assert_int_equal(_close_notifies(&f, 1), 1);
+#else
+  assert_int_equal(rc, AZ_OK);
+#endif
+  _teardown(&f);
+}
+#endif
+
 static void a_peer_close_is_reported_as_connection_closed(void** state)
 {
   (void)state;
@@ -1376,6 +1448,9 @@ int main(void)
 {
   const struct CMUnitTest tests[] = {
     cmocka_unit_test(a_long_process_loop_wait_still_pings_on_time),
+#if !defined(AZ_MQTT_TEST_BACKEND_NONE)
+    cmocka_unit_test(tls_sessions_end_with_close_notify_whatever_the_reason),
+#endif
 #ifndef AZ_MQTT_NO_WEBSOCKETS
     cmocka_unit_test(a_websocket_session_upgrades_masks_and_closes_cleanly),
     cmocka_unit_test(fragmented_frames_and_pings_are_handled),
@@ -1392,6 +1467,9 @@ int main(void)
     cmocka_unit_test(server_keep_alive_overrides_the_clients),
     cmocka_unit_test(a_server_disconnect_closes_the_connection),
     cmocka_unit_test(one_process_loop_drains_a_burst),
+#if !defined(AZ_MQTT_TEST_BACKEND_NONE)
+    cmocka_unit_test(data_after_a_session_ticket_is_read_without_waiting),
+#endif
     cmocka_unit_test(a_local_disconnect_reports_closed_once),
     cmocka_unit_test(connect_to_a_silent_peer_times_out),
     cmocka_unit_test(a_started_connect_completes_in_process_loop),

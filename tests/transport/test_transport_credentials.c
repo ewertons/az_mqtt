@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <cmocka.h>
 
@@ -221,6 +222,8 @@ typedef struct
 #if defined(AZ_MQTT_TEST_BACKEND_MBEDTLS)
   mbedtls_x509_crt ca;
 #endif
+  /** @brief mbedTLS: have reads return MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET. */
+  bool signal_tickets;
 } hook_state;
 
 static az_result _hook(void* native, void* context)
@@ -251,6 +254,14 @@ static az_result _hook(void* native, void* context)
   {
     mbedtls_ssl_conf_authmode(conf, MBEDTLS_SSL_VERIFY_NONE);
   }
+#if defined(MBEDTLS_SSL_TLS1_3_SIGNAL_NEW_SESSION_TICKETS_ENABLED) && defined(MBEDTLS_SSL_PROTO_TLS1_3) \
+    && defined(MBEDTLS_SSL_SESSION_TICKETS) && defined(MBEDTLS_SSL_CLI_C) // mbedTLS 3.x client
+  if (h->signal_tickets)
+  {
+    mbedtls_ssl_conf_tls13_enable_signal_new_session_tickets(
+        conf, MBEDTLS_SSL_TLS1_3_SIGNAL_NEW_SESSION_TICKETS_ENABLED);
+  }
+#endif
 #endif
   return AZ_OK;
 }
@@ -287,6 +298,47 @@ static void the_configure_hook_can_install_trust(void** state)
   assert_int_equal(_connect(&f, &t), AZ_OK);
   assert_true(_exchange(&f));
   assert_int_equal(h.calls, 1);
+  _hook_free(&h);
+  _teardown(&f);
+}
+
+/**
+ * @brief A TLS 1.3 session ticket in the same flight as data: a read without waiting returns the
+ * data (mbedTLS: also when its ticket signal is enabled through the hook).
+ */
+static void data_after_a_session_ticket_is_read_without_waiting(void** state)
+{
+  (void)state;
+  test_server_options o = test_server_options_default();
+  o.burst_publishes = 10;
+  o.ticket_before_burst = true;
+  fixture f;
+  _setup(&f, &o);
+  hook_state h;
+  _hook_init(&h);
+  h.ca_path = test_server_ca_path(f.server);
+  h.signal_tickets = true;
+  az_mqtt_tls_options t = az_mqtt_tls_options_default();
+  t.configure = _hook;
+  t.configure_context = &h;
+  assert_int_equal(_connect(&f, &t), AZ_OK);
+  assert_true(_exchange(&f)); // CONNACK; the ticket and the burst follow in one flight.
+  struct timespec const pause = { 0, 200 * 1000000L };
+  nanosleep(&pause, NULL);
+  if (!test_server_last_tls13(f.server))
+  {
+    _hook_free(&h);
+    _teardown(&f); // No TLS 1.3 in this build: no post-handshake ticket to test.
+    skip();
+  }
+  // QoS 0 PUBLISH "t"/"p" (MQTT 5): 30 05 00 01 't' 00 'p' = 7 bytes each, in one TLS record.
+  uint8_t buf[256];
+  az_span received = AZ_SPAN_EMPTY;
+  assert_int_equal(
+      az_mqtt_transport_receive(f.transport, AZ_SPAN_FROM_BUFFER(buf), 0, &received), AZ_OK);
+  int32_t const got = az_span_size(received);
+  assert_int_equal(got, 70);
+  assert_int_equal(buf[0], 0x30);
   _hook_free(&h);
   _teardown(&f);
 }
@@ -414,6 +466,7 @@ int main(void)
     cmocka_unit_test(client_identity_from_memory_is_presented),
     cmocka_unit_test(conflicting_sources_are_refused_before_connecting),
     cmocka_unit_test(the_configure_hook_can_install_trust),
+    cmocka_unit_test(data_after_a_session_ticket_is_read_without_waiting),
     cmocka_unit_test(a_failing_configure_hook_aborts_before_connecting),
     cmocka_unit_test(a_configure_hook_turning_verification_off_is_caught),
     cmocka_unit_test(a_key_uri_is_used_or_refused),
