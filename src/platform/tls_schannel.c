@@ -221,7 +221,8 @@ static az_result _build_custom_root(
 
 /**
  * @brief Check @p server_cert chains to the custom root (else the system store) and names the
- * host. SCH_CRED_MANUAL_CRED_VALIDATION turns Schannel's own check off.
+ * host. SCH_CRED_MANUAL_CRED_VALIDATION turns Schannel's own check off. Revocation is not checked
+ * (as with the OpenSSL and mbedTLS layers).
  */
 static az_result _validate_server_certificate(_tls_transport* transport, PCCERT_CONTEXT server_cert)
 {
@@ -290,7 +291,6 @@ static az_result _validate_server_certificate(_tls_transport* transport, PCCERT_
     { CERT_TRUST_IS_UNTRUSTED_ROOT, CERT_E_UNTRUSTEDROOT },
     { CERT_TRUST_IS_NOT_SIGNATURE_VALID, TRUST_E_CERT_SIGNATURE },
     { CERT_TRUST_IS_NOT_TIME_VALID, CERT_E_EXPIRED },
-    { CERT_TRUST_IS_REVOKED, CRYPT_E_REVOKED },
   };
   for (size_t i = 0; policy_error == 0 && i < sizeof(rejected) / sizeof(rejected[0]); ++i)
   {
