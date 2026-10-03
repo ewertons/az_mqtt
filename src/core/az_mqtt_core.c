@@ -197,13 +197,73 @@ void _az_mqtt_core_register_transport_errors(az_mqtt_core* core)
   az_mqtt_transport_set_error_callback(_S(core).transport, _on_native_error, core);
 }
 
-/** @brief Free every in-flight entry. */
+// ──────────────────────── Stored PUBLISH packets ─────────────
+// inflight_message_buffer holds records oldest first, each a header then the packet:
+// packet id (2 bytes), packet length (4), deadline (8; -1: none), expiry offset (4).
+
+/** @brief Header of a stored PUBLISH. */
+typedef struct
+{
+  uint16_t packet_id;
+  int32_t length;
+  int64_t deadline_ms;
+  uint32_t expiry_offset;
+} _message_header;
+
+static void _write_header(uint8_t* at, _message_header const* header)
+{
+  memcpy(at, &header->packet_id, 2);
+  memcpy(at + 2, &header->length, 4);
+  memcpy(at + 6, &header->deadline_ms, 8);
+  memcpy(at + 14, &header->expiry_offset, 4);
+}
+
+static void _read_header(uint8_t const* at, _message_header* header)
+{
+  memcpy(&header->packet_id, at, 2);
+  memcpy(&header->length, at + 2, 4);
+  memcpy(&header->deadline_ms, at + 6, 8);
+  memcpy(&header->expiry_offset, at + 14, 4);
+}
+
+/** @brief Offset of the stored PUBLISH @p packet_id, or -1. */
+static int32_t _find_message(az_mqtt_core* core, uint16_t packet_id, _message_header* out_header)
+{
+  uint8_t const* const base = az_span_ptr(_S(core).inflight_message_buffer);
+  for (int32_t at = 0; at < _S(core).inflight_message_used;
+       at += AZ_MQTT_INFLIGHT_MESSAGE_OVERHEAD + out_header->length)
+  {
+    _read_header(base + at, out_header);
+    if (out_header->packet_id == packet_id)
+    {
+      return at;
+    }
+  }
+  return -1;
+}
+
+/** @brief Free the stored PUBLISH @p packet_id, if any, keeping the others in order. */
+static void _free_message(az_mqtt_core* core, uint16_t packet_id)
+{
+  _message_header header;
+  int32_t const at = _find_message(core, packet_id, &header);
+  if (at >= 0)
+  {
+    uint8_t* const base = az_span_ptr(_S(core).inflight_message_buffer);
+    int32_t const size = AZ_MQTT_INFLIGHT_MESSAGE_OVERHEAD + header.length;
+    memmove(base + at, base + at + size, (size_t)(_S(core).inflight_message_used - at - size));
+    _S(core).inflight_message_used -= size;
+  }
+}
+
+/** @brief Free every in-flight entry and stored PUBLISH. */
 static void _clear_inflight_entries(az_mqtt_core* core)
 {
   if (az_span_size(_S(core).inflight_control_buffer) > 0) // az_span_fill: no NULL pointer.
   {
     az_span_fill(_S(core).inflight_control_buffer, 0);
   }
+  _S(core).inflight_message_used = 0;
 }
 
 /** @brief Drop free entries from among those in use, keeping their order. */
@@ -273,6 +333,24 @@ void _az_mqtt_core_close(
   }
 }
 
+/** @brief Send @p packet, unless over the server's Maximum Packet Size. Does not close. */
+static az_result _send_packet(az_mqtt_core* core, az_span packet)
+{
+  int32_t const size = az_span_size(packet);
+  if (_S(core).server_maximum_packet_size > 0
+      && (uint32_t)size > _S(core).server_maximum_packet_size)
+  {
+    return AZ_MQTT_ERROR_PACKET_TOO_LARGE;
+  }
+  az_result rc = az_mqtt_transport_send(_S(core).transport, packet);
+  if (az_result_succeeded(rc))
+  {
+    _S(core).last_send_time_ms = _get_clock_ms();
+    _log_packet(AZ_SPAN_FROM_STR("sent "), az_span_ptr(packet)[0], size);
+  }
+  return rc;
+}
+
 az_result _az_mqtt_core_send(
     az_mqtt_core* core,
     az_span remaining)
@@ -282,30 +360,31 @@ az_result _az_mqtt_core_send(
   {
     return AZ_OK;
   }
-  if (_S(core).server_maximum_packet_size > 0
-      && (uint32_t)written > _S(core).server_maximum_packet_size)
-  {
-    return AZ_MQTT_ERROR_PACKET_TOO_LARGE;
-  }
-  az_result rc = az_mqtt_transport_send(
-      _S(core).transport, az_span_slice(_S(core).send_buffer, 0, written));
-  if (az_result_succeeded(rc))
-  {
-    _S(core).last_send_time_ms = _get_clock_ms();
-    _log_packet(AZ_SPAN_FROM_STR("sent "), az_span_ptr(_S(core).send_buffer)[0], written);
-  }
-  return rc;
+  return _send_packet(core, az_span_slice(_S(core).send_buffer, 0, written));
 }
 
 // ──────────────────────── In-flight table ────────────────────
 
-void _az_mqtt_core_inflight_init(az_mqtt_core* core, az_span buffer)
+az_result _az_mqtt_core_inflight_init(
+    az_mqtt_core* core,
+    az_span entries,
+    az_span messages,
+    bool keep_messages)
 {
-  int32_t count = az_span_size(buffer) / (int32_t)sizeof(az_mqtt_inflight_entry);
+  int32_t const messages_size = az_span_size(messages);
+  if (messages_size > 0
+      && messages_size < az_span_size(_S(core).send_buffer) + AZ_MQTT_INFLIGHT_MESSAGE_OVERHEAD)
+  {
+    return AZ_MQTT_ERROR_INVALID_CONFIG; // Must hold any PUBLISH the send buffer can.
+  }
+  int32_t count = az_span_size(entries) / (int32_t)sizeof(az_mqtt_inflight_entry);
   count = count > UINT16_MAX ? UINT16_MAX : count;
   _S(core).inflight_control_buffer
-      = az_span_slice(buffer, 0, count * (int32_t)sizeof(az_mqtt_inflight_entry));
+      = az_span_slice(entries, 0, count * (int32_t)sizeof(az_mqtt_inflight_entry));
+  _S(core).inflight_message_buffer = messages;
+  _S(core).keep_messages = keep_messages;
   _clear_inflight_entries(core);
+  return AZ_OK;
 }
 
 /** @brief Whether an outgoing request holds @p packet_id (inbound QoS 2 uses server identifiers). */
@@ -386,8 +465,118 @@ az_result _az_mqtt_core_inflight_reserve_entry(
 
 void _az_mqtt_core_inflight_free_entry(az_mqtt_core* core, az_mqtt_inflight_entry* entry)
 {
+  uint8_t const kind = entry->_internal.kind;
+  if (kind == _AZ_MQTT_INFLIGHT_PUBLISH_QOS1 || kind == _AZ_MQTT_INFLIGHT_PUBLISH_QOS2)
+  {
+    _free_message(core, entry->_internal.packet_id);
+  }
   entry->_internal.kind = _AZ_MQTT_INFLIGHT_FREE;
   _compact_inflight_entries(core);
+}
+
+void _az_mqtt_core_inflight_to_pubrel(az_mqtt_core* core, az_mqtt_inflight_entry* entry)
+{
+  _free_message(core, entry->_internal.packet_id); // Only the PUBREL is resent from now on.
+  entry->_internal.kind = _AZ_MQTT_INFLIGHT_PUBREL;
+}
+
+az_result _az_mqtt_core_publish_buffer(az_mqtt_core* core, az_span* out_buffer)
+{
+  if (!_S(core).keep_messages)
+  {
+    *out_buffer = _S(core).send_buffer;
+    return AZ_OK;
+  }
+  int32_t const size = az_span_size(_S(core).inflight_message_buffer);
+  if (size == 0)
+  {
+    return AZ_MQTT_ERROR_INVALID_CONFIG;
+  }
+  int32_t const start = _S(core).inflight_message_used + AZ_MQTT_INFLIGHT_MESSAGE_OVERHEAD;
+  if (start >= size)
+  {
+    return AZ_MQTT_ERROR_OUT_OF_STORAGE;
+  }
+  int32_t const send_size = az_span_size(_S(core).send_buffer);
+  *out_buffer = az_span_slice(
+      _S(core).inflight_message_buffer, start, size - start < send_size ? size : start + send_size);
+  return AZ_OK;
+}
+
+az_result _az_mqtt_core_send_publish(
+    az_mqtt_core* core,
+    az_mqtt_inflight_entry* entry,
+    az_result encode_result,
+    az_span buffer,
+    az_span remaining,
+    int64_t deadline_ms,
+    uint32_t expiry_offset)
+{
+  bool const stored = az_span_ptr(buffer) != az_span_ptr(_S(core).send_buffer);
+  az_result rc = encode_result;
+  int32_t const size = az_span_size(buffer) - az_span_size(remaining);
+  if (rc == AZ_ERROR_NOT_ENOUGH_SPACE && stored
+      && az_span_size(buffer) < az_span_size(_S(core).send_buffer))
+  {
+    rc = AZ_MQTT_ERROR_OUT_OF_STORAGE; // It would fit once acknowledgements free room.
+  }
+  if (az_result_succeeded(rc) && _S(core).server_maximum_packet_size > 0
+      && (uint32_t)size > _S(core).server_maximum_packet_size)
+  {
+    rc = AZ_MQTT_ERROR_PACKET_TOO_LARGE; // Refused before sending: the session stays up.
+  }
+  if (az_result_failed(rc))
+  {
+    _az_mqtt_core_inflight_free_entry(core, entry);
+    return rc;
+  }
+  if (stored)
+  {
+    _message_header const header = { entry->_internal.packet_id, size, deadline_ms, expiry_offset };
+    _write_header(az_span_ptr(buffer) - AZ_MQTT_INFLIGHT_MESSAGE_OVERHEAD, &header);
+    _S(core).inflight_message_used += AZ_MQTT_INFLIGHT_MESSAGE_OVERHEAD + size;
+  }
+  rc = _send_packet(core, az_span_slice(buffer, 0, size));
+  if (az_result_failed(rc))
+  {
+    _az_mqtt_core_close(core, rc); // Kept: resent if the session resumes.
+  }
+  return rc;
+}
+
+/** @brief "dropped <packet id> <result>". */
+static void _log_dropped(uint16_t packet_id, az_result status)
+{
+  if (!_az_LOG_SHOULD_WRITE(AZ_LOG_MQTT_CONNECTION))
+  {
+    return;
+  }
+  uint8_t buffer[40];
+  az_span out = AZ_SPAN_FROM_BUFFER(buffer);
+  _log_append(&out, AZ_SPAN_FROM_STR("dropped publish "));
+  _log_append_i32(&out, packet_id);
+  _log_append(&out, AZ_SPAN_FROM_STR(" "));
+  _log_append_hex(&out, (uint32_t)status);
+  _log_write(AZ_LOG_MQTT_CONNECTION, AZ_SPAN_FROM_BUFFER(buffer), out);
+}
+
+/**
+ * @brief Free @p entry and report it to @p dropped with @p status.
+ * @return Whether the session is still @p generation (a callback may end it).
+ */
+static bool _drop(
+    az_mqtt_core* core,
+    az_mqtt_inflight_entry* entry,
+    az_result status,
+    _az_mqtt_core_publish_dropped_fn dropped,
+    uint32_t generation)
+{
+  uint16_t const packet_id = entry->_internal.packet_id;
+  bool const qos1 = entry->_internal.kind == _AZ_MQTT_INFLIGHT_PUBLISH_QOS1;
+  _az_mqtt_core_inflight_free_entry(core, entry);
+  _log_dropped(packet_id, status);
+  dropped(core, packet_id, qos1, status);
+  return _S(core).session_generation == generation;
 }
 
 az_result _az_mqtt_core_inflight_resume(
@@ -395,15 +584,27 @@ az_result _az_mqtt_core_inflight_resume(
     bool session_present,
     _az_mqtt_core_encode_pubrel_fn encode_pubrel,
     uint16_t publish_limit,
-    _az_mqtt_core_resend_fn resend)
+    _az_mqtt_core_publish_dropped_fn dropped)
 {
-  if (!session_present)
-  {
-    _clear_inflight_entries(core); // The server kept none of it.
-    return AZ_OK;
-  }
+  uint32_t const generation = _S(core).session_generation;
   int32_t count;
   az_mqtt_inflight_entry* entries = _get_inflight_entries(core, &count);
+  if (!session_present)
+  {
+    for (int32_t i = 0; i < count; i++)
+    {
+      if (_is_publish_exchange(&entries[i]))
+      {
+        if (!_drop(core, &entries[i], AZ_MQTT_ERROR_SESSION_NOT_RESUMED, dropped, generation))
+        {
+          return AZ_OK;
+        }
+        i--; // The next one moved into entries[i].
+      }
+    }
+    _clear_inflight_entries(core); // Inbound QoS 2 too: the server kept none of it.
+    return AZ_OK;
+  }
   for (int32_t i = 0; i < count; i++)
   {
     uint8_t const k = entries[i]._internal.kind;
@@ -420,13 +621,13 @@ az_result _az_mqtt_core_inflight_resume(
       _az_RETURN_IF_FAILED(rc);
     }
   }
-  return _az_mqtt_core_inflight_resend_due(core, publish_limit, resend);
+  return _az_mqtt_core_inflight_resend_due(core, publish_limit, dropped);
 }
 
 az_result _az_mqtt_core_inflight_resend_due(
     az_mqtt_core* core,
     uint16_t publish_limit,
-    _az_mqtt_core_resend_fn resend)
+    _az_mqtt_core_publish_dropped_fn dropped)
 {
   uint32_t const generation = _S(core).session_generation;
   for (;;)
@@ -438,25 +639,57 @@ az_result _az_mqtt_core_inflight_resend_due(
     {
       entry = entries[i]._internal.resend ? &entries[i] : NULL; // The oldest.
     }
-    if (entry == NULL || _publishes_in_flight(core) >= publish_limit)
+    if (entry == NULL)
     {
       return AZ_OK;
     }
-    entry->_internal.resend = false;
-    uint16_t const packet_id = entry->_internal.packet_id;
-    uint8_t const kind = entry->_internal.kind;
-    az_result const rc = resend(core, entry);
-    if (_S(core).session_generation != generation)
+    _message_header header;
+    int32_t const at = _find_message(core, entry->_internal.packet_id, &header);
+    az_result drop = AZ_OK;
+    if (at < 0)
     {
-      return rc; // Ended: what is left stays for the next resume.
+      drop = AZ_MQTT_ERROR_SESSION_NOT_RESUMED; // No copy was kept.
     }
+    else if (header.deadline_ms >= 0 && _get_clock_ms() >= header.deadline_ms)
+    {
+      drop = AZ_MQTT_ERROR_MESSAGE_EXPIRED;
+    }
+    else if (
+        _S(core).server_maximum_packet_size > 0
+        && (uint32_t)header.length > _S(core).server_maximum_packet_size)
+    {
+      drop = AZ_MQTT_ERROR_PACKET_TOO_LARGE; // [MQTT-3.1.2-25]: discarded as if sent.
+    }
+    if (az_result_failed(drop))
+    {
+      if (!_drop(core, entry, drop, dropped, generation))
+      {
+        return AZ_OK;
+      }
+      continue;
+    }
+    if (_publishes_in_flight(core) >= publish_limit)
+    {
+      return AZ_OK; // Resent once an acknowledgement makes room.
+    }
+    entry->_internal.resend = false;
+    uint8_t* const packet
+        = az_span_ptr(_S(core).inflight_message_buffer) + at + AZ_MQTT_INFLIGHT_MESSAGE_OVERHEAD;
+    packet[0] |= 0x08; // DUP
+    if (header.expiry_offset != 0 && header.deadline_ms >= 0)
+    {
+      // The time left, as a server forwarding it would [MQTT-3.3.2-6]: whole seconds, rounded up.
+      uint32_t const left = (uint32_t)((header.deadline_ms - _get_clock_ms() + 999) / 1000);
+      for (int b = 0; b < 4; b++)
+      {
+        packet[header.expiry_offset + (uint32_t)b] = (uint8_t)(left >> (24 - 8 * b));
+      }
+    }
+    az_result const rc = _send_packet(core, az_span_create(packet, header.length));
     if (az_result_failed(rc))
     {
-      entry = _az_mqtt_core_inflight_find_entry(core, (_az_mqtt_inflight_kind)kind, packet_id);
-      if (entry != NULL)
-      {
-        _az_mqtt_core_inflight_free_entry(core, entry); // Abandoned.
-      }
+      _az_mqtt_core_close(core, rc);
+      return rc;
     }
   }
 }
@@ -525,8 +758,7 @@ az_result _az_mqtt_core_send_tracked_request(
     az_mqtt_core* core,
     az_mqtt_inflight_entry* entry,
     az_result encode_result,
-    az_span remaining,
-    bool dup)
+    az_span remaining)
 {
   az_result rc = encode_result;
   int32_t const size = az_span_size(_S(core).send_buffer) - az_span_size(remaining);
@@ -542,10 +774,6 @@ az_result _az_mqtt_core_send_tracked_request(
       _az_mqtt_core_inflight_free_entry(core, entry);
     }
     return rc;
-  }
-  if (dup)
-  {
-    az_span_ptr(_S(core).send_buffer)[0] |= 0x08;
   }
   return _az_mqtt_core_send_request(core, remaining);
 }

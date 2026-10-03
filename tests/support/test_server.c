@@ -571,12 +571,18 @@ static bool _get_present(test_server* s)
   return present;
 }
 
-/** @brief Append one entry to the log (dropped if full). */
-static void _log(test_server* s, char kind, int qos, int id, bool dup)
+/** @brief Append one entry to the log (dropped if full); @p expiry: -1 if none. */
+static void _log(test_server* s, char kind, int qos, int id, bool dup, int64_t expiry)
 {
-  char entry[32];
-  int const n = kind == 'P' ? snprintf(entry, sizeof(entry), "P%d:%d%s ", qos, id, dup ? "d" : "")
-                            : snprintf(entry, sizeof(entry), "R:%d ", id);
+  char entry[48];
+  char x[24] = "";
+  if (expiry >= 0)
+  {
+    (void)snprintf(x, sizeof(x), "x%lld", (long long)expiry);
+  }
+  int const n = kind == 'P'
+      ? snprintf(entry, sizeof(entry), "P%d:%d%s%s ", qos, id, dup ? "d" : "", x)
+      : snprintf(entry, sizeof(entry), "R:%d ", id);
   pthread_mutex_lock(&s->lock);
   size_t const used = strlen(s->log);
   if (n > 0 && used + (size_t)n < sizeof(s->log))
@@ -627,13 +633,22 @@ static void _serve(test_server* s, conn* c)
     props[p++] = 0x25;
     props[p++] = 0x00;
   }
-  if (s->options.maximum_packet_size != 0)
+  pthread_mutex_lock(&s->lock);
+  uint32_t const maximum_packet_size = s->options.maximum_packet_size;
+  pthread_mutex_unlock(&s->lock);
+  if (maximum_packet_size != 0)
   {
     props[p++] = 0x27;
     for (int shift = 24; shift >= 0; shift -= 8)
     {
-      props[p++] = (uint8_t)(s->options.maximum_packet_size >> shift);
+      props[p++] = (uint8_t)(maximum_packet_size >> shift);
     }
+  }
+  if (s->options.topic_alias_maximum != 0)
+  {
+    props[p++] = 0x22;
+    props[p++] = (uint8_t)(s->options.topic_alias_maximum >> 8);
+    props[p++] = (uint8_t)(s->options.topic_alias_maximum & 0xFF);
   }
   uint8_t connack_v5[5 + sizeof(props)]
       = { 0x20, (uint8_t)(3 + p), present, s->options.connack_code, (uint8_t)p };
@@ -749,6 +764,40 @@ static void _serve(test_server* s, conn* c)
   {
     static const uint8_t auth[] = { 0xF0, 0x00 };
     if (!_write(c, auth, (int)sizeof(auth)))
+    {
+      return;
+    }
+  }
+  if (s->options.resume_inbound_qos2)
+  {
+    // PUBLISH QoS 2 "t"/"p" id 7 (DUP after the first connection), then PUBREL 7.
+    bool const resend = test_server_accepted(s) > 1;
+    uint8_t const qos2[] = { (uint8_t)(resend ? 0x3C : 0x34),
+                             (uint8_t)(v5 ? 0x07 : 0x06),
+                             0x00,
+                             0x01,
+                             't',
+                             0x00,
+                             0x07,
+                             0x00,
+                             'p' };
+    uint8_t seq[16];
+    int n = 0;
+    for (size_t i = 0; i < sizeof(qos2); i++)
+    {
+      if (i != 7 || v5) // Property length: MQTT 5 only.
+      {
+        seq[n++] = qos2[i];
+      }
+    }
+    if (resend)
+    {
+      seq[n++] = 0x62;
+      seq[n++] = 0x02;
+      seq[n++] = 0x00;
+      seq[n++] = 0x07;
+    }
+    if (!_write(c, seq, n))
     {
       return;
     }
@@ -880,7 +929,19 @@ static void _serve(test_server* s, conn* c)
       bool const held = s->options.hold_first_publish && test_server_publishes(s) == 1;
       if (qos > 0 && id_at + 2 <= len)
       {
-        _log(s, 'P', qos, (body[id_at] << 8) | body[id_at + 1], (c->flags & 0x08) != 0);
+        // MQTT 5: Message Expiry Interval, if first or after the Payload Format Indicator.
+        int64_t expiry = -1;
+        int at = id_at + 3; // After the Property Length (one byte here).
+        if (v5 && at < len && body[at] == 0x01)
+        {
+          at += 2;
+        }
+        if (v5 && at + 4 < len && body[id_at + 2] != 0 && body[at] == 0x02)
+        {
+          expiry = ((int64_t)body[at + 1] << 24) | (body[at + 2] << 16) | (body[at + 3] << 8)
+              | body[at + 4];
+        }
+        _log(s, 'P', qos, (body[id_at] << 8) | body[id_at + 1], (c->flags & 0x08) != 0, expiry);
         if (s->options.pubrec_only && qos == 2)
         {
           uint8_t const pubrec[] = { 0x50, 0x02, body[id_at], body[id_at + 1] };
@@ -904,7 +965,7 @@ static void _serve(test_server* s, conn* c)
       s->pubrels++;
       s->last_pubrel_reason = len >= 3 ? body[2] : 0;
       pthread_mutex_unlock(&s->lock);
-      _log(s, 'R', 0, (body[0] << 8) | body[1], false);
+      _log(s, 'R', 0, (body[0] << 8) | body[1], false, -1);
       pthread_mutex_lock(&s->lock);
       bool const ack_publishes = s->options.ack_publishes;
       pthread_mutex_unlock(&s->lock);
@@ -1138,6 +1199,13 @@ void test_server_set_session_present(test_server* s, bool present)
 {
   pthread_mutex_lock(&s->lock);
   s->session_present = present;
+  pthread_mutex_unlock(&s->lock);
+}
+
+void test_server_set_maximum_packet_size(test_server* s, uint32_t maximum_packet_size)
+{
+  pthread_mutex_lock(&s->lock);
+  s->options.maximum_packet_size = maximum_packet_size;
   pthread_mutex_unlock(&s->lock);
 }
 

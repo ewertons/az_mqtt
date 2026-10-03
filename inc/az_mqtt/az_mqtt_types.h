@@ -70,6 +70,18 @@ enum az_mqtt_result
    * RFC 6455 does not allow.
    */
   AZ_MQTT_ERROR_WEBSOCKET = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 30),
+  /**
+   * @brief No room in inflight_message_buffer for the PUBLISH now. Nothing was sent; retry after
+   * an acknowledgement frees some.
+   */
+  AZ_MQTT_ERROR_OUT_OF_STORAGE = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 31),
+  /** @brief A PUBLISH was dropped unacknowledged: its expiry interval elapsed before a resend. */
+  AZ_MQTT_ERROR_MESSAGE_EXPIRED = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 32),
+  /**
+   * @brief A QoS 1/2 exchange was dropped unacknowledged: the server did not resume the session,
+   * or the client kept no copy to resend (the session was not set to outlive the connection).
+   */
+  AZ_MQTT_ERROR_SESSION_NOT_RESUMED = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 33),
 };
 
 // ──────────────────────── Log classifications ────────────────

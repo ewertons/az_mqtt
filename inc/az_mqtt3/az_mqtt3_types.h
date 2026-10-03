@@ -96,12 +96,19 @@ typedef struct
   az_span payload;
   az_mqtt_qos qos;
   bool retain;
+  /**
+   * @brief QoS 1/2: seconds after which, if still unacknowledged at a resend, the message is
+   * dropped instead (local; MQTT 3.1.1 has no expiry). 0: never (as MQTT requires).
+   */
+  uint32_t message_expiry_interval;
 } az_mqtt3_publish_options;
 
-/** @brief Received PUBACK, PUBREC, PUBREL, PUBCOMP or UNSUBACK: a packet identifier only. */
+/** @brief Received PUBACK, PUBREC, PUBREL, PUBCOMP or UNSUBACK: a packet identifier. */
 typedef struct
 {
   uint16_t packet_id;
+  /** @brief AZ_OK: received. Otherwise why an outgoing exchange was dropped unacknowledged. */
+  az_result status;
 } az_mqtt3_ack_data;
 
 /** @brief Received SUBACK. */
@@ -136,6 +143,7 @@ AZ_NODISCARD AZ_INLINE az_mqtt3_publish_options az_mqtt3_publish_options_default
   opts.payload = AZ_SPAN_EMPTY;
   opts.qos = AZ_MQTT_QOS_AT_MOST_ONCE;
   opts.retain = false;
+  opts.message_expiry_interval = 0;
   return opts;
 }
 

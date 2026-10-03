@@ -57,14 +57,16 @@ typedef void (*az_mqtt5_on_suback_fn)(az_mqtt5_client* client, az_mqtt5_suback_d
 typedef void (*az_mqtt5_on_unsuback_fn)(az_mqtt5_client* client, az_mqtt5_suback_data const* unsuback);
 
 /**
- * @brief Called when a PUBACK is received for a QoS 1 PUBLISH in flight.
+ * @brief A QoS 1 PUBLISH in flight ended: PUBACK received (ack->status AZ_OK), or dropped
+ * unacknowledged (ack->status says why; see az_mqtt5_client_options.inflight_message_buffer).
  */
 typedef void (*az_mqtt5_on_puback_fn)(az_mqtt5_client* client, az_mqtt5_ack_data const* ack);
 
 /**
  * @brief A QoS 2 exchange ended: PUBCOMP received; or a PUBREC with a reason code
  * of 0x80 or more (failed: no PUBREL is sent, @p ack is the PUBREC); or, for an
- * inbound one held in an in-flight entry, PUBREL received and PUBCOMP sent.
+ * inbound one held in an in-flight entry, PUBREL received and PUBCOMP sent; or an outgoing one
+ * was dropped unacknowledged (ack->status says why).
  */
 typedef void (*az_mqtt5_on_pubcomp_fn)(az_mqtt5_client* client, az_mqtt5_ack_data const* ack);
 
@@ -83,27 +85,6 @@ typedef void (*az_mqtt5_on_disconnect_fn)(az_mqtt5_client* client, az_mqtt5_disc
  * az_mqtt5_client_connect() to reconnect.
  */
 typedef void (*az_mqtt5_on_connection_closed_fn)(az_mqtt5_client* client, az_result reason);
-
-/**
- * @brief Supplies a QoS 1/2 PUBLISH to resend: one an earlier connection left unacknowledged,
- * after the server resumed the session. MQTT requires resending each, in the original order, with
- * its original packet identifier; the client does so (DUP set) as soon as it may, oldest first,
- * calling this for the message. It must not call into the client, except
- * az_mqtt5_client_disconnect().
- *
- * @param[out] out_message Preset by az_mqtt5_publish_options_default() with @p qos: fill in the
- * original message, at @p qos. It need only stay valid until this returns.
- * The message must carry its topic (a Topic Alias set on an earlier connection does not apply)
- * and fit the server's current limits.
- * @return false if the message is no longer available. The exchange is then abandoned (its
- * in-flight entry freed), contrary to the protocol, as is one with an invalid message. For QoS 2
- * the server may then take a later PUBLISH that reuses @p packet_id for a duplicate.
- */
-typedef bool (*az_mqtt5_get_resend_message_fn)(
-    az_mqtt5_client* client,
-    uint16_t packet_id,
-    az_mqtt_qos qos,
-    az_mqtt5_publish_options* out_message);
 
 /**
  * @brief Called for each native transport error (see az_mqtt_transport_error_fn), before the
@@ -177,9 +158,8 @@ typedef struct
    * detection. May be empty if only QoS 0 is published and nothing is subscribed.
    * Acknowledgements for packet identifiers not in flight are ignored.
    *
-   * When a session ends, SUBSCRIBE and UNSUBSCRIBE in flight are abandoned; PUBLISH exchanges are
-   * kept. If the next accepted CONNACK has Session Present, each PUBREL is resent, then each
-   * PUBLISH (see get_resend_message); otherwise all are abandoned.
+   * When a connection ends, SUBSCRIBE and UNSUBSCRIBE in flight are abandoned; PUBLISH exchanges
+   * are kept until the next accepted CONNACK (see inflight_message_buffer).
    */
   az_span inflight_control_buffer;
 
@@ -201,8 +181,33 @@ typedef struct
   az_mqtt5_on_connection_closed_fn on_connection_closed;
   /** @brief Optional. See az_mqtt5_on_transport_error_fn. */
   az_mqtt5_on_transport_error_fn on_transport_error;
-  /** @brief Needed to resend unacknowledged PUBLISH. See az_mqtt5_get_resend_message_fn. */
-  az_mqtt5_get_resend_message_fn get_resend_message;
+
+  /**
+   * @brief Copies of the QoS 1/2 PUBLISH awaiting acknowledgement (caller storage), resent when
+   * the server resumes the session, as MQTT requires.
+   *
+   * Required for QoS 1/2 PUBLISH when the session outlives the connection (Clean Start 0 and a
+   * Session Expiry Interval above 0): without it they fail with AZ_MQTT_ERROR_INVALID_CONFIG, and
+   * with a Topic Alias with AZ_MQTT_ERROR_NOT_SUPPORTED. Otherwise unused: a device with clean
+   * sessions can leave it empty to save the memory.
+   *
+   * If not empty, it must hold at least send_buffer + AZ_MQTT_INFLIGHT_MESSAGE_OVERHEAD bytes (else
+   * initialization fails with AZ_MQTT_ERROR_INVALID_CONFIG). Each stored PUBLISH takes its size +
+   * AZ_MQTT_INFLIGHT_MESSAGE_OVERHEAD until PUBACK or PUBREC; with no room left, a PUBLISH fails
+   * with AZ_MQTT_ERROR_OUT_OF_STORAGE.
+   *
+   * On the next accepted CONNACK, before on_connack:
+   * - Session Present: each PUBREL is resent, then each stored PUBLISH, oldest first, with DUP, its
+   *   packet identifier and the Message Expiry Interval left, within the new Receive Maximum (the
+   *   rest as acknowledgements free room). Dropped instead: one whose Message Expiry Interval
+   *   elapsed (AZ_MQTT_ERROR_MESSAGE_EXPIRED; MQTT itself would resend it), or over the new
+   *   Maximum Packet Size (AZ_MQTT_ERROR_PACKET_TOO_LARGE).
+   * - Otherwise each outgoing QoS 1/2 exchange is dropped (AZ_MQTT_ERROR_SESSION_NOT_RESUMED).
+   *
+   * Each drop is logged and reported to on_puback (QoS 1) or on_pubcomp (QoS 2) with that status.
+   * Kept in memory only: not across a restart.
+   */
+  az_span inflight_message_buffer;
 } az_mqtt5_client_options;
 
 // ──────────────────────── Client ─────────────────────────────
@@ -225,7 +230,6 @@ struct az_mqtt5_client
     az_mqtt5_on_disconnect_fn on_disconnect;
     az_mqtt5_on_connection_closed_fn on_connection_closed;
     az_mqtt5_on_transport_error_fn on_transport_error;
-    az_mqtt5_get_resend_message_fn get_resend_message;
     void* user_context;
     /** @brief From the accepted CONNACK (MQTT 5.0 defaults when absent); see also the core. */
     uint16_t server_receive_maximum;
