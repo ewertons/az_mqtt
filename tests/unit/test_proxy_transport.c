@@ -13,7 +13,7 @@
 
 #include <cmocka.h>
 
-#include "az_mqtt_layers_internal.h"
+#include "az_mqtt_io_layers_internal.h"
 #include "test_fake_transport.h"
 
 #include <string.h>
@@ -160,7 +160,8 @@ static void the_request_is_sent_across_polls_without_blocking(void** state)
   // Partial sends pass through once open.
   f.fake.send_some_budget = 7;
   int32_t sent = 0;
-  assert_int_equal(_az_mqtt_layer_send_some(&f.proxy.layer, AZ_SPAN_FROM_STR("0123456789"), 0, &sent), AZ_OK);
+  assert_int_equal(
+      _az_mqtt_io_layer_send_some(&f.proxy.layer, AZ_SPAN_FROM_STR("0123456789"), 0, &sent), AZ_OK);
   assert_int_equal(sent, 7);
 }
 

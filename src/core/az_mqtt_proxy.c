@@ -6,7 +6,7 @@
  * @brief Internal: HTTP CONNECT proxy layer over another transport (RFC 9110 §9.3.6).
  */
 
-#include "az_mqtt_layers_internal.h"
+#include "az_mqtt_io_layers_internal.h"
 
 #include <azure/core/internal/az_precondition_internal.h>
 #include <azure/core/internal/az_result_internal.h>
@@ -68,7 +68,7 @@ static az_result _connect_start(
 /** @brief _az_mqtt_http_connect_send_request()'s context: where, and until when. */
 typedef struct
 {
-  _az_mqtt_layer* lower;
+  _az_mqtt_io_layer* lower;
   int64_t deadline_ms;
 } _request_sink;
 
@@ -77,10 +77,10 @@ static int32_t _send_request_part(void* context, uint8_t const* data, int32_t si
 {
   _request_sink const* const sink = (_request_sink const*)context;
   int32_t sent = 0;
-  az_result const rc = _az_mqtt_layer_send_some(
+  az_result const rc = _az_mqtt_io_layer_send_some(
       sink->lower,
       az_span_create((uint8_t*)(uintptr_t)data, size),
-      _az_mqtt_layer_remaining(sink->deadline_ms),
+      _az_mqtt_io_layer_remaining(sink->deadline_ms),
       &sent);
   return az_result_failed(rc) ? -1 : sent;
 }
@@ -102,7 +102,7 @@ static az_result _read_reply(_az_mqtt_proxy_transport* p, int64_t deadline_ms)
 {
   for (;;)
   {
-    int32_t const wait_ms = _az_mqtt_layer_remaining(deadline_ms);
+    int32_t const wait_ms = _az_mqtt_io_layer_remaining(deadline_ms);
     az_span received;
     az_result rc = az_mqtt_transport_receive(
         _LOWER_T(p), AZ_SPAN_FROM_BUFFER(p->stash), wait_ms, &received);
@@ -126,7 +126,7 @@ static az_result _read_reply(_az_mqtt_proxy_transport* p, int64_t deadline_ms)
     }
     if (az_result_failed(rc))
     {
-      _az_mqtt_layer_report(&p->errors, AZ_MQTT_NATIVE_ERROR_PROXY, p->reply.status, rc);
+      _az_mqtt_io_layer_report(&p->errors, AZ_MQTT_NATIVE_ERROR_PROXY, p->reply.status, rc);
       return rc;
     }
     p->stash_start = (uint16_t)consumed;
@@ -138,7 +138,7 @@ static az_result _read_reply(_az_mqtt_proxy_transport* p, int64_t deadline_ms)
 static az_result _connect_poll(az_mqtt_transport* t, int32_t timeout_ms)
 {
   _az_mqtt_proxy_transport* const p = _P(t);
-  int64_t const deadline = _az_mqtt_layer_deadline(timeout_ms);
+  int64_t const deadline = _az_mqtt_io_layer_deadline(timeout_ms);
   if (p->stage == _OPEN || p->stage == _IDLE)
   {
     return p->stage == _OPEN ? AZ_OK : AZ_MQTT_ERROR_INVALID_STATE;
@@ -193,11 +193,16 @@ static az_result _send(az_mqtt_transport* t, az_span data)
                                : AZ_MQTT_ERROR_TRANSPORT;
 }
 
-static az_result _send_some(az_mqtt_transport* t, az_span data, int32_t timeout_ms, int32_t* out_sent)
+static az_result _send_some(
+    az_mqtt_transport* t,
+    az_span data,
+    int32_t timeout_ms,
+    int32_t* out_sent)
 {
   *out_sent = 0;
-  return _P(t)->stage == _OPEN ? _az_mqtt_layer_send_some(_P(t)->lower, data, timeout_ms, out_sent)
-                               : AZ_MQTT_ERROR_TRANSPORT;
+  return _P(t)->stage == _OPEN
+      ? _az_mqtt_io_layer_send_some(_P(t)->lower, data, timeout_ms, out_sent)
+      : AZ_MQTT_ERROR_TRANSPORT;
 }
 
 static az_result
@@ -251,9 +256,9 @@ static az_mqtt_transport_vtable const _vtable = {
   _shutdown,      _close,        _set_proxy, _set_error_callback,
 };
 
-static _az_mqtt_layer_ops const _ops = { _send_some };
+static _az_mqtt_io_layer_ops const _ops = { _send_some };
 
-az_result _az_mqtt_proxy_transport_init(_az_mqtt_proxy_transport* proxy, _az_mqtt_layer* lower)
+az_result _az_mqtt_proxy_transport_init(_az_mqtt_proxy_transport* proxy, _az_mqtt_io_layer* lower)
 {
   _az_PRECONDITION_NOT_NULL(proxy);
   _az_PRECONDITION_NOT_NULL(lower);
@@ -261,7 +266,7 @@ az_result _az_mqtt_proxy_transport_init(_az_mqtt_proxy_transport* proxy, _az_mqt
   proxy->layer.base.vtable = &_vtable;
   proxy->layer.ops = &_ops;
   proxy->lower = lower;
-  _az_mqtt_layer_errors_attach(&proxy->errors, &lower->base);
+  _az_mqtt_io_layer_errors_attach(&proxy->errors, &lower->base);
   return AZ_OK;
 }
 

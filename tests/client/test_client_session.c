@@ -396,6 +396,23 @@ static void a_server_disconnect_closes_the_connection(void** state)
   _teardown(&f);
 }
 
+#if !defined(AZ_MQTT_TEST_BACKEND_NONE)
+static void data_after_a_session_ticket_is_read_without_waiting(void** state)
+{
+  (void)state;
+  test_server_options so = test_server_options_default(); // TLS 1.3
+  so.burst_publishes = 10;
+  so.ticket_before_burst = true;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  _sleep_ms(200); // Ticket and burst have arrived.
+  assert_int_equal(AZ_MQTT_T(client_process_loop)(&f.client, 0), AZ_OK);
+  assert_int_equal(g.publishes, 10);
+  _teardown(&f);
+}
+#endif
+
 static void one_process_loop_drains_a_burst(void** state)
 {
   (void)state;
@@ -1445,6 +1462,9 @@ int main(void)
     cmocka_unit_test(server_keep_alive_overrides_the_clients),
     cmocka_unit_test(a_server_disconnect_closes_the_connection),
     cmocka_unit_test(one_process_loop_drains_a_burst),
+#if !defined(AZ_MQTT_TEST_BACKEND_NONE)
+    cmocka_unit_test(data_after_a_session_ticket_is_read_without_waiting),
+#endif
     cmocka_unit_test(a_local_disconnect_reports_closed_once),
     cmocka_unit_test(connect_to_a_silent_peer_times_out),
     cmocka_unit_test(a_started_connect_completes_in_process_loop),

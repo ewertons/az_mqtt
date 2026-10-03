@@ -10,7 +10,7 @@
 #ifndef TEST_FAKE_TRANSPORT_H
 #define TEST_FAKE_TRANSPORT_H
 
-#include "az_mqtt_layers_internal.h"
+#include "az_mqtt_io_layers_internal.h"
 
 #include <az_mqtt/az_mqtt_transport.h>
 
@@ -19,8 +19,9 @@
 
 typedef struct
 {
-  _az_mqtt_layer layer; ///< Must be first; layer.base is the transport.
-  /** @brief What the peer sends (fed with test_fake_transport_feed()); read up to chunk at a time. */
+  _az_mqtt_io_layer layer; ///< Must be first; layer.base is the transport.
+  /** @brief What the peer sends (fed with test_fake_transport_feed()); read up to chunk at a time.
+   */
   az_span input;
   int32_t input_size;
   int32_t input_read;

@@ -125,7 +125,7 @@ static az_mqtt_transport_vtable const _vtable = {
   _shutdown,      _close,        _set_proxy, _set_error_callback,
 };
 
-static _az_mqtt_layer_ops const _ops = { _send_some };
+static _az_mqtt_io_layer_ops const _ops = { _send_some };
 
 void test_fake_transport_init(test_fake_transport* fake, az_span input, az_span sent)
 {

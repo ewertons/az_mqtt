@@ -10,7 +10,7 @@
 #define _DEFAULT_SOURCE // recv, ssize_t under -std=c99
 #endif
 
-#include "az_mqtt_layers_internal.h"
+#include "az_mqtt_io_layers_internal.h"
 #include "az_mqtt_socket_posix.h"
 
 #include <azure/core/internal/az_precondition_internal.h>
@@ -21,7 +21,7 @@
 
 typedef struct
 {
-  _az_mqtt_layer layer; ///< Must be first.
+  _az_mqtt_io_layer layer; ///< Must be first.
   int fd;
   _az_mqtt_tcp_connect tcp;
   _az_mqtt_error_sink errors;
@@ -91,7 +91,11 @@ static az_result _connect_poll(az_mqtt_transport* t, int32_t timeout_ms)
   return AZ_OK;
 }
 
-static az_result _send_some(az_mqtt_transport* t, az_span data, int32_t timeout_ms, int32_t* out_sent)
+static az_result _send_some(
+    az_mqtt_transport* t,
+    az_span data,
+    int32_t timeout_ms,
+    int32_t* out_sent)
 {
   _socket_transport* const s = _S(t);
   *out_sent = 0;
@@ -194,11 +198,11 @@ static az_mqtt_transport_vtable const _vtable = {
   _connect_start, _connect_poll, _send, _receive, NULL, _close, NULL, _set_error_callback,
 };
 
-static _az_mqtt_layer_ops const _ops = { _send_some };
+static _az_mqtt_io_layer_ops const _ops = { _send_some };
 
 int32_t _az_mqtt_socket_transport_sizeof(void) { return (int32_t)sizeof(_socket_transport); }
 
-az_result _az_mqtt_socket_transport_init(_az_mqtt_layer* storage)
+az_result _az_mqtt_socket_transport_init(_az_mqtt_io_layer* storage)
 {
   _az_PRECONDITION_NOT_NULL(storage);
   _socket_transport* const s = (_socket_transport*)storage;

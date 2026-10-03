@@ -10,6 +10,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
@@ -647,7 +648,28 @@ static void _serve(test_server* s, conn* c)
       }
       burst[n++] = 'p';
     }
-    if (!_write(c, burst, n))
+    if (s->options.ticket_before_burst && c->ssl != NULL)
+    {
+      int const on = 1; // Without Nagle the flight leaves now, not at the client's delayed ACK.
+      (void)setsockopt(c->fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+      // Hold the ticket and the burst in one buffered BIO so they leave in one flight.
+      BIO* const net = SSL_get_wbio(c->ssl);
+      BIO* const buffered = BIO_new(BIO_f_buffer());
+      if (buffered == NULL || !BIO_up_ref(net))
+      {
+        BIO_free(buffered);
+        return;
+      }
+      BIO_push(buffered, net);
+      SSL_set0_wbio(c->ssl, buffered);
+      bool const flushed = SSL_new_session_ticket(c->ssl) == 1 && SSL_do_handshake(c->ssl) == 1
+          && _write(c, burst, n) && BIO_flush(buffered) == 1;
+      if (!flushed)
+      {
+        return;
+      }
+    }
+    else if (!_write(c, burst, n))
     {
       return;
     }

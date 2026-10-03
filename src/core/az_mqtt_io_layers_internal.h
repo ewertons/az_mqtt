@@ -1,14 +1,15 @@
 // Copyright (c) Microsoft. All rights reserved.
-// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+// Licensed under the MIT license. See LICENSE file in the project root for full license
+// information.
 
 /**
- * @file az_mqtt_layers_internal.h
+ * @file az_mqtt_io_layers_internal.h
  * @brief Internal: the layers the platform transport is stacked from (TLS over HTTP CONNECT
  * proxy over socket; see az_mqtt_transport_init()), and what layers share.
  */
 
-#ifndef AZ_MQTT_LAYERS_INTERNAL_H
-#define AZ_MQTT_LAYERS_INTERNAL_H
+#ifndef AZ_MQTT_IO_LAYERS_INTERNAL_H
+#define AZ_MQTT_IO_LAYERS_INTERNAL_H
 
 #include "../platform/az_mqtt_http_connect.h"
 
@@ -34,23 +35,23 @@ typedef struct
   void* context;
   uint32_t connect_attempt;
   az_result phase_result;
-} _az_mqtt_layer_errors;
+} _az_mqtt_io_layer_errors;
 
 /** @brief Route @p lower's native errors through @p errors. */
-void _az_mqtt_layer_errors_attach(_az_mqtt_layer_errors* errors, az_mqtt_transport* lower);
+void _az_mqtt_io_layer_errors_attach(_az_mqtt_io_layer_errors* errors, az_mqtt_transport* lower);
 
 /** @brief Report one native error of the layer itself. */
-void _az_mqtt_layer_report(
-    _az_mqtt_layer_errors const* errors,
+void _az_mqtt_io_layer_report(
+    _az_mqtt_io_layer_errors const* errors,
     az_mqtt_native_error_source source,
     int32_t code,
     az_result result);
 
 /** @brief Milliseconds left until @p deadline_ms (-1: none), 0 if passed. */
-int32_t _az_mqtt_layer_remaining(int64_t deadline_ms);
+int32_t _az_mqtt_io_layer_remaining(int64_t deadline_ms);
 
 /** @brief Absolute deadline @p timeout_ms from now; -1 for a negative timeout. */
-int64_t _az_mqtt_layer_deadline(int32_t timeout_ms);
+int64_t _az_mqtt_io_layer_deadline(int32_t timeout_ms);
 
 // ──────────────────────── Internal layer ─────────────────────
 
@@ -68,18 +69,18 @@ typedef struct
       az_span data,
       int32_t timeout_ms,
       int32_t* out_sent);
-} _az_mqtt_layer_ops;
+} _az_mqtt_io_layer_ops;
 
-/** @brief Base of the layers below TLS (proxy, socket): a transport with _az_mqtt_layer_ops. */
+/** @brief Base of the layers below TLS (proxy, socket): a transport with _az_mqtt_io_layer_ops. */
 typedef struct
 {
   az_mqtt_transport base; ///< Must be first.
-  _az_mqtt_layer_ops const* ops;
-} _az_mqtt_layer;
+  _az_mqtt_io_layer_ops const* ops;
+} _az_mqtt_io_layer;
 
-/** @brief See _az_mqtt_layer_ops.send_some. */
-AZ_NODISCARD az_result _az_mqtt_layer_send_some(
-    _az_mqtt_layer* layer,
+/** @brief See _az_mqtt_io_layer_ops.send_some. */
+AZ_NODISCARD az_result _az_mqtt_io_layer_send_some(
+    _az_mqtt_io_layer* layer,
     az_span data,
     int32_t timeout_ms,
     int32_t* out_sent);
@@ -90,7 +91,7 @@ AZ_NODISCARD az_result _az_mqtt_layer_send_some(
 AZ_NODISCARD int32_t _az_mqtt_socket_transport_sizeof(void);
 
 /** @brief Initialize the socket layer in @p storage (_az_mqtt_socket_transport_sizeof() bytes). */
-AZ_NODISCARD az_result _az_mqtt_socket_transport_init(_az_mqtt_layer* storage);
+AZ_NODISCARD az_result _az_mqtt_socket_transport_init(_az_mqtt_io_layer* storage);
 
 // ──────────────────────── TLS (platform) ─────────────────────
 
@@ -102,7 +103,7 @@ AZ_NODISCARD int32_t _az_mqtt_tls_transport_sizeof(void);
  * through); @p lower gets none.
  */
 AZ_NODISCARD az_result
-_az_mqtt_tls_transport_init(az_mqtt_transport* transport, _az_mqtt_layer* lower);
+_az_mqtt_tls_transport_init(az_mqtt_transport* transport, _az_mqtt_io_layer* lower);
 
 // ──────────────────────── HTTP CONNECT proxy (portable) ──────
 
@@ -110,9 +111,9 @@ _az_mqtt_tls_transport_init(az_mqtt_transport* transport, _az_mqtt_layer* lower)
 /** @brief HTTP CONNECT proxy layer (az_mqtt_transport_set_proxy()). Fields are internal. */
 typedef struct
 {
-  _az_mqtt_layer layer; ///< Must be first.
-  _az_mqtt_layer* lower;
-  _az_mqtt_layer_errors errors;
+  _az_mqtt_io_layer layer; ///< Must be first.
+  _az_mqtt_io_layer* lower;
+  _az_mqtt_io_layer_errors errors;
   /** @brief Set with set_proxy(); NULL: connect directly. */
   az_mqtt_proxy_options const* proxy;
   /** @brief The current connect's (kept until the next connect_start()). */
@@ -130,7 +131,7 @@ typedef struct
 } _az_mqtt_proxy_transport;
 
 AZ_NODISCARD az_result
-_az_mqtt_proxy_transport_init(_az_mqtt_proxy_transport* proxy, _az_mqtt_layer* lower);
+_az_mqtt_proxy_transport_init(_az_mqtt_proxy_transport* proxy, _az_mqtt_io_layer* lower);
 #endif // AZ_MQTT_NO_PROXY
 
-#endif // AZ_MQTT_LAYERS_INTERNAL_H
+#endif // AZ_MQTT_IO_LAYERS_INTERNAL_H

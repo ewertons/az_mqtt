@@ -10,7 +10,7 @@
 #define _DEFAULT_SOURCE // inet_pton under -std=c99
 #endif
 
-#include "az_mqtt_layers_internal.h"
+#include "az_mqtt_io_layers_internal.h"
 
 #include <az_mqtt/az_mqtt_transport.h>
 #include <az_mqtt/az_mqtt_types.h>
@@ -42,8 +42,8 @@ enum
 typedef struct
 {
   az_mqtt_transport base; ///< Must be first.
-  _az_mqtt_layer* lower;
-  _az_mqtt_layer_errors errors;
+  _az_mqtt_io_layer* lower;
+  _az_mqtt_io_layer_errors errors;
   SSL_CTX* ssl_ctx;
   SSL* ssl; ///< NULL: no TLS for this connect.
   /** @brief Until when the BIO waits on the layer below (0 or past: does not wait). */
@@ -68,10 +68,10 @@ static int _bio_write(BIO* bio, char const* data, int size)
   _tls_transport* const transport = (_tls_transport*)BIO_get_data(bio);
   BIO_clear_retry_flags(bio);
   int32_t sent = 0;
-  az_result const rc = _az_mqtt_layer_send_some(
+  az_result const rc = _az_mqtt_io_layer_send_some(
       transport->lower,
       az_span_create((uint8_t*)(uintptr_t)data, size),
-      _az_mqtt_layer_remaining(transport->deadline),
+      _az_mqtt_io_layer_remaining(transport->deadline),
       &sent);
   if (az_result_failed(rc))
   {
@@ -94,7 +94,7 @@ static int _bio_read(BIO* bio, char* buffer, int size)
   az_result const rc = az_mqtt_transport_receive(
       _LOWER_T(transport),
       az_span_create((uint8_t*)buffer, size),
-      _az_mqtt_layer_remaining(transport->deadline),
+      _az_mqtt_io_layer_remaining(transport->deadline),
       &received);
   if (az_result_failed(rc))
   {
@@ -410,7 +410,7 @@ static void _report_tls_queue(_tls_transport* transport, az_result result)
   unsigned long e;
   while ((e = ERR_get_error()) != 0)
   {
-    _az_mqtt_layer_report(&transport->errors, AZ_MQTT_NATIVE_ERROR_TLS, (int32_t)e, result);
+    _az_mqtt_io_layer_report(&transport->errors, AZ_MQTT_NATIVE_ERROR_TLS, (int32_t)e, result);
   }
 }
 
@@ -425,7 +425,7 @@ static az_result _tls_failure(_tls_transport* transport, int ssl_error, bool han
   if (handshake && SSL_get_verify_result(transport->ssl) != X509_V_OK)
   {
     rc = AZ_MQTT_ERROR_TLS_VERIFY;
-    _az_mqtt_layer_report(
+    _az_mqtt_io_layer_report(
         &transport->errors,
         AZ_MQTT_NATIVE_ERROR_TLS_VERIFY,
         (int32_t)SSL_get_verify_result(transport->ssl),
@@ -482,7 +482,7 @@ static az_result _tls_handshake(_tls_transport* transport, int64_t deadline)
       }
       if (verify != X509_V_OK)
       {
-        _az_mqtt_layer_report(
+        _az_mqtt_io_layer_report(
             &transport->errors,
             AZ_MQTT_NATIVE_ERROR_TLS_VERIFY,
             (int32_t)verify,
@@ -494,7 +494,7 @@ static az_result _tls_handshake(_tls_transport* transport, int64_t deadline)
     {
       return _tls_failure(transport, SSL_get_error(transport->ssl, ret), true);
     }
-    if (_az_mqtt_layer_remaining(deadline) == 0)
+    if (_az_mqtt_io_layer_remaining(deadline) == 0)
     {
       return AZ_MQTT_ERROR_TIMEOUT;
     }
@@ -593,7 +593,7 @@ static az_result _connect_start(
 static az_result _connect_poll(az_mqtt_transport* t, int32_t timeout_ms)
 {
   _tls_transport* const transport = _T(t);
-  int64_t const deadline = _az_mqtt_layer_deadline(timeout_ms);
+  int64_t const deadline = _az_mqtt_io_layer_deadline(timeout_ms);
   if (transport->stage == _OPEN || transport->stage == _IDLE)
   {
     return transport->stage == _OPEN ? AZ_OK : AZ_MQTT_ERROR_INVALID_STATE;
@@ -640,7 +640,7 @@ static az_result _send(az_mqtt_transport* t, az_span data)
   {
     return az_mqtt_transport_send(_LOWER_T(transport), data);
   }
-  transport->deadline = _az_mqtt_layer_deadline(AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS);
+  transport->deadline = _az_mqtt_io_layer_deadline(AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS);
   uint8_t const* ptr = az_span_ptr(data);
   int32_t remaining = az_span_size(data);
   while (remaining > 0)
@@ -655,7 +655,7 @@ static az_result _send(az_mqtt_transport* t, az_span data)
       continue;
     }
     bool const waiting = _waiting(transport, n);
-    if (waiting && _az_mqtt_layer_remaining(transport->deadline) > 0)
+    if (waiting && _az_mqtt_io_layer_remaining(transport->deadline) > 0)
     {
       continue;
     }
@@ -680,7 +680,7 @@ _receive(az_mqtt_transport* t, az_span buffer, int32_t timeout_ms, az_span* out_
   {
     return az_mqtt_transport_receive(_LOWER_T(transport), buffer, timeout_ms, out_received);
   }
-  transport->deadline = _az_mqtt_layer_deadline(timeout_ms);
+  transport->deadline = _az_mqtt_io_layer_deadline(timeout_ms);
   for (;;)
   {
     // Read first: decrypted bytes may already be buffered inside OpenSSL.
@@ -697,7 +697,7 @@ _receive(az_mqtt_transport* t, az_span buffer, int32_t timeout_ms, az_span* out_
       transport->stage = _IDLE;
       return _tls_failure(transport, SSL_get_error(transport->ssl, n), false);
     }
-    if (_az_mqtt_layer_remaining(transport->deadline) == 0)
+    if (_az_mqtt_io_layer_remaining(transport->deadline) == 0)
     {
       return AZ_OK; // Timed out (a partial record waits for the next call).
     }
@@ -729,7 +729,7 @@ static az_mqtt_transport_vtable const _vtable = {
 
 int32_t _az_mqtt_tls_transport_sizeof(void) { return (int32_t)sizeof(_tls_transport); }
 
-az_result _az_mqtt_tls_transport_init(az_mqtt_transport* transport, _az_mqtt_layer* lower)
+az_result _az_mqtt_tls_transport_init(az_mqtt_transport* transport, _az_mqtt_io_layer* lower)
 {
   _az_PRECONDITION_NOT_NULL(transport);
   _az_PRECONDITION_NOT_NULL(lower);
@@ -737,6 +737,6 @@ az_result _az_mqtt_tls_transport_init(az_mqtt_transport* transport, _az_mqtt_lay
   memset(tls, 0, sizeof(*tls));
   tls->base.vtable = &_vtable;
   tls->lower = lower;
-  _az_mqtt_layer_errors_attach(&tls->errors, &lower->base);
+  _az_mqtt_io_layer_errors_attach(&tls->errors, &lower->base);
   return AZ_OK;
 }
