@@ -42,7 +42,7 @@ typedef void (*az_mqtt5_on_publish_received_fn)(
     az_mqtt5_publish_data const* publish);
 
 /**
- * @brief Called when a CONNACK is received.
+ * @brief Called when a CONNACK is received; after any resends of a resumed session.
  */
 typedef void (*az_mqtt5_on_connack_fn)(az_mqtt5_client* client, az_mqtt5_connack_data const* connack);
 
@@ -83,6 +83,27 @@ typedef void (*az_mqtt5_on_disconnect_fn)(az_mqtt5_client* client, az_mqtt5_disc
  * az_mqtt5_client_connect() to reconnect.
  */
 typedef void (*az_mqtt5_on_connection_closed_fn)(az_mqtt5_client* client, az_result reason);
+
+/**
+ * @brief Supplies a QoS 1/2 PUBLISH to resend: one an earlier connection left unacknowledged,
+ * after the server resumed the session. MQTT requires resending each, in the original order, with
+ * its original packet identifier; the client does so (DUP set) as soon as it may, oldest first,
+ * calling this for the message. It must not call into the client, except
+ * az_mqtt5_client_disconnect().
+ *
+ * @param[out] out_message Preset by az_mqtt5_publish_options_default() with @p qos: fill in the
+ * original message, at @p qos. It need only stay valid until this returns.
+ * The message must carry its topic (a Topic Alias set on an earlier connection does not apply)
+ * and fit the server's current limits.
+ * @return false if the message is no longer available. The exchange is then abandoned (its
+ * in-flight entry freed), contrary to the protocol, as is one with an invalid message. For QoS 2
+ * the server may then take a later PUBLISH that reuses @p packet_id for a duplicate.
+ */
+typedef bool (*az_mqtt5_get_resend_message_fn)(
+    az_mqtt5_client* client,
+    uint16_t packet_id,
+    az_mqtt_qos qos,
+    az_mqtt5_publish_options* out_message);
 
 /**
  * @brief Called for each native transport error (see az_mqtt_transport_error_fn), before the
@@ -154,8 +175,11 @@ typedef struct
    * inbound QoS 2 PUBLISH until its PUBREL. A request with no free entry fails with
    * AZ_MQTT_ERROR_FLOW_CONTROL; an inbound QoS 2 PUBLISH with none is delivered without duplicate
    * detection. May be empty if only QoS 0 is published and nothing is subscribed.
-   * Acknowledgements for packet identifiers not in flight are ignored. Whatever is in flight when
-   * the session ends is abandoned: nothing is resent on resume.
+   * Acknowledgements for packet identifiers not in flight are ignored.
+   *
+   * When a session ends, SUBSCRIBE and UNSUBSCRIBE in flight are abandoned; PUBLISH exchanges are
+   * kept. If the next accepted CONNACK has Session Present, each PUBREL is resent, then each
+   * PUBLISH (see get_resend_message); otherwise all are abandoned.
    */
   az_span inflight_control_buffer;
 
@@ -177,6 +201,8 @@ typedef struct
   az_mqtt5_on_connection_closed_fn on_connection_closed;
   /** @brief Optional. See az_mqtt5_on_transport_error_fn. */
   az_mqtt5_on_transport_error_fn on_transport_error;
+  /** @brief Needed to resend unacknowledged PUBLISH. See az_mqtt5_get_resend_message_fn. */
+  az_mqtt5_get_resend_message_fn get_resend_message;
 } az_mqtt5_client_options;
 
 // ──────────────────────── Client ─────────────────────────────
@@ -199,6 +225,7 @@ struct az_mqtt5_client
     az_mqtt5_on_disconnect_fn on_disconnect;
     az_mqtt5_on_connection_closed_fn on_connection_closed;
     az_mqtt5_on_transport_error_fn on_transport_error;
+    az_mqtt5_get_resend_message_fn get_resend_message;
     void* user_context;
     /** @brief From the accepted CONNACK (MQTT 5.0 defaults when absent); see also the core. */
     uint16_t server_receive_maximum;

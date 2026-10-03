@@ -18,6 +18,7 @@
 #include <azure/core/az_result.h>
 #include <azure/core/az_span.h>
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /**
@@ -116,7 +117,10 @@ typedef enum
   _AZ_MQTT_INFLIGHT_INBOUND_QOS2,
 } _az_mqtt_inflight_kind;
 
-/** @brief Use @p buffer (az_mqtt_inflight_entry[]; at most UINT16_MAX used); all entries free. */
+/**
+ * @brief Use @p buffer (az_mqtt_inflight_entry[]; at most UINT16_MAX used); all entries free.
+ * Entries in use stay first, in the order they were reserved.
+ */
 void _az_mqtt_core_inflight_init(az_mqtt_core* core, az_span buffer);
 
 /**
@@ -124,7 +128,7 @@ void _az_mqtt_core_inflight_init(az_mqtt_core* core, az_span buffer);
  * other outgoing request holds.
  *
  * @param publish_limit Fail if this many outgoing QoS 1/2 PUBLISH exchanges are
- * incomplete (the server's Receive Maximum); UINT16_MAX for none.
+ * incomplete on this connection (the server's Receive Maximum); UINT16_MAX for none.
  * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free entry, or @p publish_limit reached.
  */
 AZ_NODISCARD az_result _az_mqtt_core_inflight_reserve_entry(
@@ -157,18 +161,60 @@ void _az_mqtt_core_inflight_track_inbound_qos2(
     uint16_t packet_id,
     bool* out_is_duplicate);
 
+/** @brief Encode a PUBREL (success) for @p packet_id at the start of @p dest. */
+typedef az_result (*_az_mqtt_core_encode_pubrel_fn)(az_span* dest, uint16_t packet_id);
+
+/**
+ * @brief Resend the outgoing QoS 1/2 PUBLISH of @p entry (DUP set, its packet identifier);
+ * _az_mqtt_core_send_tracked_request() with @p entry.
+ * @return A failure abandons the exchange (its entry is freed if still held).
+ */
+typedef az_result (*_az_mqtt_core_resend_fn)(az_mqtt_core* core, az_mqtt_inflight_entry* entry);
+
+/**
+ * @brief Resume or discard the exchanges of earlier connections, on an accepted CONNACK.
+ *
+ * Without @p session_present every entry is freed. With it, each PUBREL is resent, then each
+ * outgoing QoS 1/2 PUBLISH, oldest first (_az_mqtt_core_inflight_resend_due()).
+ *
+ * @return A send failure (the session is closed); AZ_OK otherwise.
+ */
+AZ_NODISCARD az_result _az_mqtt_core_inflight_resume(
+    az_mqtt_core* core,
+    bool session_present,
+    _az_mqtt_core_encode_pubrel_fn encode_pubrel,
+    uint16_t publish_limit,
+    _az_mqtt_core_resend_fn resend);
+
+/**
+ * @brief Resend the PUBLISH still awaiting it, oldest first, while fewer than @p publish_limit
+ * exchanges are incomplete on this connection; the rest wait for the next call (after an
+ * acknowledgement frees one). Stops if the session ends.
+ *
+ * @return A send failure (the session is closed); AZ_OK otherwise.
+ */
+AZ_NODISCARD az_result _az_mqtt_core_inflight_resend_due(
+    az_mqtt_core* core,
+    uint16_t publish_limit,
+    _az_mqtt_core_resend_fn resend);
+
+/** @brief Free @p entry (keeping the others in the order they were reserved). */
+void _az_mqtt_core_inflight_free_entry(az_mqtt_core* core, az_mqtt_inflight_entry* entry);
+
 /**
  * @brief Send a request encoded into the send buffer (@p encode_result: the
  * encoder's result; @p remaining: what it left of the buffer).
  *
  * On an encoding failure, or a packet over the server's Maximum Packet Size
  * (AZ_MQTT_ERROR_PACKET_TOO_LARGE), frees @p entry (may be NULL) and sends
- * nothing. A send failure closes the session, as _az_mqtt_core_send_request().
+ * nothing. A send failure closes the session, as _az_mqtt_core_send_request(); @p entry is
+ * kept (resent if the session resumes). @p dup sets DUP in the first byte.
  */
 AZ_NODISCARD az_result _az_mqtt_core_send_tracked_request(
     az_mqtt_core* core,
     az_mqtt_inflight_entry* entry,
     az_result encode_result,
-    az_span remaining);
+    az_span remaining,
+    bool dup);
 
 #endif // AZ_MQTT_CORE_INTERNAL_H

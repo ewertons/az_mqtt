@@ -46,6 +46,8 @@ struct test_server
   int last_pubrel_reason;
   int pubcomps;
   int last_pubcomp_reason;
+  bool session_present;
+  char log[1024];
   bool client_closed;
   int close_notifies;
   int last_tls13;
@@ -561,17 +563,43 @@ static int _read_packet(test_server* s, conn* c, uint8_t* body, int cap, int* ou
   return type;
 }
 
+static bool _get_present(test_server* s)
+{
+  pthread_mutex_lock(&s->lock);
+  bool const present = s->session_present;
+  pthread_mutex_unlock(&s->lock);
+  return present;
+}
+
+/** @brief Append one entry to the log (dropped if full). */
+static void _log(test_server* s, char kind, int qos, int id, bool dup)
+{
+  char entry[32];
+  int const n = kind == 'P' ? snprintf(entry, sizeof(entry), "P%d:%d%s ", qos, id, dup ? "d" : "")
+                            : snprintf(entry, sizeof(entry), "R:%d ", id);
+  pthread_mutex_lock(&s->lock);
+  size_t const used = strlen(s->log);
+  if (n > 0 && used + (size_t)n < sizeof(s->log))
+  {
+    memcpy(s->log + used, entry, (size_t)n + 1);
+  }
+  pthread_mutex_unlock(&s->lock);
+}
+
 static void _serve(test_server* s, conn* c)
 {
   uint8_t body[512];
   int len = 0;
-  if (_read_packet(s, c, body, (int)sizeof(body), &len) != 1 || len < 7)
+  if (_read_packet(s, c, body, (int)sizeof(body), &len) != 1 || len < 8)
   {
     return;
   }
   // CONNECT variable header: 00 04 'M' 'Q' 'T' 'T' <level>
   bool const v5 = body[6] == 5;
-  uint8_t const connack_v3[] = { 0x20, 0x02, 0x00, s->options.connack_code };
+  bool const keep_session = (body[7] & 0x02) == 0; // Clean Session / Clean Start 0.
+  uint8_t const present
+      = s->options.connack_code == 0 && keep_session && _get_present(s) ? 0x01 : 0x00;
+  uint8_t const connack_v3[] = { 0x20, 0x02, present, s->options.connack_code };
   uint8_t props[24];
   int p = 0;
   if (s->options.server_keep_alive != 0 || s->options.server_keep_alive_present)
@@ -580,11 +608,14 @@ static void _serve(test_server* s, conn* c)
     props[p++] = (uint8_t)(s->options.server_keep_alive >> 8);
     props[p++] = (uint8_t)(s->options.server_keep_alive & 0xFF);
   }
-  if (s->options.receive_maximum != 0)
+  pthread_mutex_lock(&s->lock);
+  uint16_t const receive_maximum = s->options.receive_maximum;
+  pthread_mutex_unlock(&s->lock);
+  if (receive_maximum != 0)
   {
     props[p++] = 0x21;
-    props[p++] = (uint8_t)(s->options.receive_maximum >> 8);
-    props[p++] = (uint8_t)(s->options.receive_maximum & 0xFF);
+    props[p++] = (uint8_t)(receive_maximum >> 8);
+    props[p++] = (uint8_t)(receive_maximum & 0xFF);
   }
   if (s->options.maximum_qos_present)
   {
@@ -604,7 +635,8 @@ static void _serve(test_server* s, conn* c)
       props[p++] = (uint8_t)(s->options.maximum_packet_size >> shift);
     }
   }
-  uint8_t connack_v5[5 + sizeof(props)] = { 0x20, (uint8_t)(3 + p), 0x00, s->options.connack_code, (uint8_t)p };
+  uint8_t connack_v5[5 + sizeof(props)]
+      = { 0x20, (uint8_t)(3 + p), present, s->options.connack_code, (uint8_t)p };
   memcpy(&connack_v5[5], props, (size_t)p);
   bool ok = v5 ? _write(c, connack_v5, 5 + p) : _write(c, connack_v3, (int)sizeof(connack_v3));
   if (!ok || s->options.connack_code != 0 || s->options.close_after_connack)
@@ -846,7 +878,19 @@ static void _serve(test_server* s, conn* c)
       int const qos = (c->flags >> 1) & 0x03;
       int const id_at = len >= 2 ? 2 + ((body[0] << 8) | body[1]) : len;
       bool const held = s->options.hold_first_publish && test_server_publishes(s) == 1;
-      if (s->options.ack_publishes && !held && qos > 0 && id_at + 2 <= len)
+      if (qos > 0 && id_at + 2 <= len)
+      {
+        _log(s, 'P', qos, (body[id_at] << 8) | body[id_at + 1], (c->flags & 0x08) != 0);
+        if (s->options.pubrec_only && qos == 2)
+        {
+          uint8_t const pubrec[] = { 0x50, 0x02, body[id_at], body[id_at + 1] };
+          (void)_write(c, pubrec, (int)sizeof(pubrec));
+        }
+      }
+      pthread_mutex_lock(&s->lock);
+      bool const ack_publishes = s->options.ack_publishes;
+      pthread_mutex_unlock(&s->lock);
+      if (ack_publishes && !held && qos > 0 && id_at + 2 <= len)
       {
         bool const reason = v5 && qos == 2 && s->options.pubrec_reason != 0;
         uint8_t const ack[] = { (uint8_t)(qos == 1 ? 0x40 : 0x50), (uint8_t)(reason ? 3 : 2),
@@ -860,7 +904,11 @@ static void _serve(test_server* s, conn* c)
       s->pubrels++;
       s->last_pubrel_reason = len >= 3 ? body[2] : 0;
       pthread_mutex_unlock(&s->lock);
-      if (s->options.ack_publishes)
+      _log(s, 'R', 0, (body[0] << 8) | body[1], false);
+      pthread_mutex_lock(&s->lock);
+      bool const ack_publishes = s->options.ack_publishes;
+      pthread_mutex_unlock(&s->lock);
+      if (ack_publishes)
       {
         uint8_t const pubcomp[] = { 0x70, 0x02, body[0], body[1] };
         (void)_write(c, pubcomp, (int)sizeof(pubcomp));
@@ -1085,6 +1133,35 @@ bool test_server_saw_client_cert(test_server* s)
 }
 int test_server_pingreqs(test_server* s) { return _get(s, &s->pingreqs); }
 int test_server_publishes(test_server* s) { return _get(s, &s->publishes); }
+
+void test_server_set_session_present(test_server* s, bool present)
+{
+  pthread_mutex_lock(&s->lock);
+  s->session_present = present;
+  pthread_mutex_unlock(&s->lock);
+}
+
+void test_server_set_ack_publishes(test_server* s, bool ack)
+{
+  pthread_mutex_lock(&s->lock);
+  s->options.ack_publishes = ack;
+  pthread_mutex_unlock(&s->lock);
+}
+
+void test_server_set_receive_maximum(test_server* s, uint16_t receive_maximum)
+{
+  pthread_mutex_lock(&s->lock);
+  s->options.receive_maximum = receive_maximum;
+  pthread_mutex_unlock(&s->lock);
+}
+
+void test_server_take_log(test_server* s, char* out, int size)
+{
+  pthread_mutex_lock(&s->lock);
+  (void)snprintf(out, (size_t)size, "%s", s->log);
+  s->log[0] = '\0';
+  pthread_mutex_unlock(&s->lock);
+}
 int test_server_pubrels(test_server* s) { return _get(s, &s->pubrels); }
 int test_server_last_pubrel_reason(test_server* s) { return _get(s, &s->last_pubrel_reason); }
 int test_server_pubcomps(test_server* s) { return _get(s, &s->pubcomps); }
