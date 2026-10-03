@@ -6,6 +6,9 @@ add_az_mqtt_local_test(az_mqtt_test_transport_robustness test_transport_robustne
 add_az_mqtt_local_test(az_mqtt_test_transport_timeouts test_transport_timeouts.c
   LIBRARY az_mqtt_short_timeouts)
 add_az_mqtt_local_test(az_mqtt_test_transport_credentials test_transport_credentials.c)
+# Drives the internal TLS and socket layers directly.
+add_az_mqtt_local_test(az_mqtt_test_transport_close_notify test_transport_close_notify.c)
+target_include_directories(az_mqtt_test_transport_close_notify PRIVATE ${PROJECT_SOURCE_DIR}/src/core)
 # The test drives the backend directly (configure hook, PSA import).
 if(TARGET MbedTLS::mbedtls)
   target_link_libraries(az_mqtt_test_transport_credentials PRIVATE MbedTLS::mbedtls)
