@@ -58,7 +58,7 @@ static void _init(fixture* f, az_mqtt_websocket_options const* options)
   memset(&s_native, 0, sizeof(s_native));
   test_fake_transport_init(
       &f->fake, AZ_SPAN_FROM_BUFFER(s_input), az_span_create(s_sent, (int32_t)sizeof(s_sent) - 1));
-  assert_int_equal(az_mqtt_websocket_init(&f->ws, &f->fake.base, options), AZ_OK);
+  assert_int_equal(az_mqtt_websocket_init(&f->ws, &f->fake.layer.base, options), AZ_OK);
   f->t = az_mqtt_websocket_get_transport(&f->ws);
   az_mqtt_transport_set_error_callback(f->t, _on_native, NULL);
 }
@@ -498,7 +498,7 @@ static void settings_reach_the_lower_transport(void** state)
   az_mqtt_websocket ws;
   az_mqtt_websocket_options options = az_mqtt_websocket_options_default();
   options.path = AZ_SPAN_FROM_STR("mqtt");
-  assert_int_equal(az_mqtt_websocket_init(&ws, &f.fake.base, &options), AZ_MQTT_ERROR_INVALID_CONFIG);
+  assert_int_equal(az_mqtt_websocket_init(&ws, &f.fake.layer.base, &options), AZ_MQTT_ERROR_INVALID_CONFIG);
 }
 
 int main(void)

@@ -20,11 +20,13 @@ enum
 {
   _IDLE, ///< Not connecting.
   _LOWER, ///< The lower transport connects (to the proxy, or directly).
+  _REQUEST, ///< Sending the CONNECT request (resumable).
   _REPLY, ///< CONNECT sent; reading the reply.
   _OPEN, ///< Tunnel (or direct connection) up.
 };
 
 #define _P(t) ((_az_mqtt_proxy_transport*)(t))
+#define _LOWER_T(p) (&(p)->lower->base)
 
 static az_result _connect_start(
     az_mqtt_transport* t,
@@ -50,33 +52,49 @@ static az_result _connect_start(
     az_span_fill(AZ_SPAN_FROM_BUFFER(request), 0); // It holds the credentials.
     if (az_result_failed(rc))
     {
-      az_mqtt_transport_close(p->lower);
+      az_mqtt_transport_close(_LOWER_T(p));
       return rc;
     }
     host = p->active->host;
     port = p->active->port;
   }
   // TLS options pass down: a layer below that cannot honour them refuses them.
-  _az_RETURN_IF_FAILED(az_mqtt_transport_connect_start(p->lower, host, port, tls_options));
+  _az_RETURN_IF_FAILED(az_mqtt_transport_connect_start(_LOWER_T(p), host, port, tls_options));
+  p->sent = 0;
   p->stage = _LOWER;
   return AZ_OK;
 }
 
-/** @brief Send the CONNECT request (stage _REPLY); failures below are AZ_MQTT_ERROR_PROXY. */
-static az_result _send_request(_az_mqtt_proxy_transport* p)
+/** @brief _az_mqtt_http_connect_send_request()'s context: where, and until when. */
+typedef struct
 {
-  uint8_t request[_AZ_MQTT_HTTP_CONNECT_REQUEST_MAX];
-  int32_t size = 0;
-  az_result rc = _az_mqtt_http_connect_request(
-      p->active, p->host, p->port, AZ_SPAN_FROM_BUFFER(request), &size);
-  if (az_result_succeeded(rc))
-  {
-    _az_mqtt_http_reply_init(&p->reply);
-    rc = az_mqtt_transport_send(p->lower, az_span_create(request, size));
-    rc = az_result_failed(rc) ? AZ_MQTT_ERROR_PROXY : rc;
-  }
-  az_span_fill(AZ_SPAN_FROM_BUFFER(request), 0); // It holds the credentials.
-  return rc;
+  _az_mqtt_layer* lower;
+  int64_t deadline_ms;
+} _request_sink;
+
+/** @brief _az_mqtt_http_connect_send_fn over the layer below, within the deadline. */
+static int32_t _send_request_part(void* context, uint8_t const* data, int32_t size)
+{
+  _request_sink const* const sink = (_request_sink const*)context;
+  int32_t sent = 0;
+  az_result const rc = _az_mqtt_layer_send_some(
+      sink->lower,
+      az_span_create((uint8_t*)(uintptr_t)data, size),
+      _az_mqtt_layer_remaining(sink->deadline_ms),
+      &sent);
+  return az_result_failed(rc) ? -1 : sent;
+}
+
+/**
+ * @brief Send the rest of the CONNECT request until @p deadline_ms; resumable.
+ * @retval AZ_MQTT_ERROR_TIMEOUT Not all sent yet.
+ * @retval AZ_MQTT_ERROR_PROXY Failed below.
+ */
+static az_result _send_request(_az_mqtt_proxy_transport* p, int64_t deadline_ms)
+{
+  _request_sink sink = { p->lower, deadline_ms };
+  return _az_mqtt_http_connect_send_request(
+      p->active, p->host, p->port, &p->sent, _send_request_part, &sink);
 }
 
 /** @brief Read the reply until @p deadline_ms; what follows it is stashed for receive(). */
@@ -87,7 +105,7 @@ static az_result _read_reply(_az_mqtt_proxy_transport* p, int64_t deadline_ms)
     int32_t const wait_ms = _az_mqtt_layer_remaining(deadline_ms);
     az_span received;
     az_result rc = az_mqtt_transport_receive(
-        p->lower, AZ_SPAN_FROM_BUFFER(p->stash), wait_ms, &received);
+        _LOWER_T(p), AZ_SPAN_FROM_BUFFER(p->stash), wait_ms, &received);
     if (az_result_failed(rc))
     {
       return AZ_MQTT_ERROR_PROXY; // Closed or failed before the reply.
@@ -128,7 +146,7 @@ static az_result _connect_poll(az_mqtt_transport* t, int32_t timeout_ms)
   az_result rc = AZ_OK;
   if (p->stage == _LOWER)
   {
-    rc = az_mqtt_transport_connect_poll(p->lower, timeout_ms);
+    rc = az_mqtt_transport_connect_poll(_LOWER_T(p), timeout_ms);
     if (az_result_failed(rc))
     {
       return rc; // Not yet, or failed (and closed).
@@ -138,13 +156,20 @@ static az_result _connect_poll(az_mqtt_transport* t, int32_t timeout_ms)
       p->stage = _OPEN;
       return AZ_OK;
     }
-    p->errors.phase_result = AZ_MQTT_ERROR_PROXY; // The tunnel's socket errors are the proxy's.
-    rc = _send_request(p);
-    p->stage = _REPLY;
+    _az_mqtt_http_reply_init(&p->reply);
+    p->stage = _REQUEST;
+  }
+  p->errors.phase_result = AZ_MQTT_ERROR_PROXY; // The tunnel's socket errors are the proxy's.
+  if (p->stage == _REQUEST)
+  {
+    rc = _send_request(p, deadline);
+    if (az_result_succeeded(rc))
+    {
+      p->stage = _REPLY;
+    }
   }
   if (az_result_succeeded(rc) && p->stage == _REPLY)
   {
-    p->errors.phase_result = AZ_MQTT_ERROR_PROXY;
     rc = _read_reply(p, deadline);
   }
   p->errors.phase_result = AZ_OK;
@@ -155,7 +180,7 @@ static az_result _connect_poll(az_mqtt_transport* t, int32_t timeout_ms)
   if (az_result_failed(rc))
   {
     p->stage = _IDLE;
-    az_mqtt_transport_close(p->lower);
+    az_mqtt_transport_close(_LOWER_T(p));
     return rc;
   }
   p->stage = _OPEN;
@@ -164,7 +189,14 @@ static az_result _connect_poll(az_mqtt_transport* t, int32_t timeout_ms)
 
 static az_result _send(az_mqtt_transport* t, az_span data)
 {
-  return _P(t)->stage == _OPEN ? az_mqtt_transport_send(_P(t)->lower, data)
+  return _P(t)->stage == _OPEN ? az_mqtt_transport_send(_LOWER_T(_P(t)), data)
+                               : AZ_MQTT_ERROR_TRANSPORT;
+}
+
+static az_result _send_some(az_mqtt_transport* t, az_span data, int32_t timeout_ms, int32_t* out_sent)
+{
+  *out_sent = 0;
+  return _P(t)->stage == _OPEN ? _az_mqtt_layer_send_some(_P(t)->lower, data, timeout_ms, out_sent)
                                : AZ_MQTT_ERROR_TRANSPORT;
 }
 
@@ -186,10 +218,10 @@ _receive(az_mqtt_transport* t, az_span buffer, int32_t timeout_ms, az_span* out_
     *out_received = az_span_slice(buffer, 0, n);
     return AZ_OK;
   }
-  return az_mqtt_transport_receive(p->lower, buffer, timeout_ms, out_received);
+  return az_mqtt_transport_receive(_LOWER_T(p), buffer, timeout_ms, out_received);
 }
 
-static void _shutdown(az_mqtt_transport* t) { az_mqtt_transport_shutdown(_P(t)->lower); }
+static void _shutdown(az_mqtt_transport* t) { az_mqtt_transport_shutdown(_LOWER_T(_P(t))); }
 
 static void _close(az_mqtt_transport* t)
 {
@@ -197,7 +229,7 @@ static void _close(az_mqtt_transport* t)
   p->stage = _IDLE;
   p->stash_start = 0;
   p->stash_end = 0;
-  az_mqtt_transport_close(p->lower);
+  az_mqtt_transport_close(_LOWER_T(p));
 }
 
 static az_result _set_proxy(az_mqtt_transport* t, az_mqtt_proxy_options const* proxy)
@@ -219,14 +251,17 @@ static az_mqtt_transport_vtable const _vtable = {
   _shutdown,      _close,        _set_proxy, _set_error_callback,
 };
 
-az_result _az_mqtt_proxy_transport_init(_az_mqtt_proxy_transport* proxy, az_mqtt_transport* lower)
+static _az_mqtt_layer_ops const _ops = { _send_some };
+
+az_result _az_mqtt_proxy_transport_init(_az_mqtt_proxy_transport* proxy, _az_mqtt_layer* lower)
 {
   _az_PRECONDITION_NOT_NULL(proxy);
   _az_PRECONDITION_NOT_NULL(lower);
   memset(proxy, 0, sizeof(*proxy));
-  proxy->base.vtable = &_vtable;
+  proxy->layer.base.vtable = &_vtable;
+  proxy->layer.ops = &_ops;
   proxy->lower = lower;
-  _az_mqtt_layer_errors_attach(&proxy->errors, lower);
+  _az_mqtt_layer_errors_attach(&proxy->errors, &lower->base);
   return AZ_OK;
 }
 

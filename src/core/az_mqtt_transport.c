@@ -137,6 +137,15 @@ void _az_mqtt_layer_report(
   }
 }
 
+az_result _az_mqtt_layer_send_some(
+    _az_mqtt_layer* layer,
+    az_span data,
+    int32_t timeout_ms,
+    int32_t* out_sent)
+{
+  return layer->ops->send_some(&layer->base, data, timeout_ms, out_sent);
+}
+
 int64_t _az_mqtt_layer_deadline(int32_t timeout_ms)
 {
   return timeout_ms < 0 ? -1 : az_mqtt_transport_clock_ms() + timeout_ms;

@@ -79,6 +79,26 @@ _receive(az_mqtt_transport* t, az_span buffer, int32_t timeout_ms, az_span* out_
   return AZ_OK;
 }
 
+static az_result _send_some(az_mqtt_transport* t, az_span data, int32_t timeout_ms, int32_t* out_sent)
+{
+  (void)timeout_ms;
+  test_fake_transport* const f = _FAKE(t);
+  int32_t const budget = f->send_some_budget;
+  int32_t const n = budget < 0 || budget > az_span_size(data) ? az_span_size(data) : budget;
+  *out_sent = 0;
+  if (n == 0)
+  {
+    return AZ_OK;
+  }
+  az_result const rc = _send(t, az_span_slice(data, 0, n));
+  *out_sent = az_result_succeeded(rc) ? n : 0;
+  if (budget >= 0)
+  {
+    f->send_some_budget -= *out_sent;
+  }
+  return rc;
+}
+
 static void _shutdown(az_mqtt_transport* t) { _FAKE(t)->shutdowns++; }
 
 static void _close(az_mqtt_transport* t)
@@ -105,10 +125,14 @@ static az_mqtt_transport_vtable const _vtable = {
   _shutdown,      _close,        _set_proxy, _set_error_callback,
 };
 
+static _az_mqtt_layer_ops const _ops = { _send_some };
+
 void test_fake_transport_init(test_fake_transport* fake, az_span input, az_span sent)
 {
   memset(fake, 0, sizeof(*fake));
-  fake->base.vtable = &_vtable;
+  fake->layer.base.vtable = &_vtable;
+  fake->layer.ops = &_ops;
+  fake->send_some_budget = -1;
   fake->input = input;
   fake->sent = sent;
   fake->chunk = INT32_MAX;

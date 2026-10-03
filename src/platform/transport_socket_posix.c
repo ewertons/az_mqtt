@@ -21,7 +21,7 @@
 
 typedef struct
 {
-  az_mqtt_transport base; ///< Must be first.
+  _az_mqtt_layer layer; ///< Must be first.
   int fd;
   _az_mqtt_tcp_connect tcp;
   _az_mqtt_error_sink errors;
@@ -91,33 +91,59 @@ static az_result _connect_poll(az_mqtt_transport* t, int32_t timeout_ms)
   return AZ_OK;
 }
 
-static az_result _send(az_mqtt_transport* t, az_span data)
+static az_result _send_some(az_mqtt_transport* t, az_span data, int32_t timeout_ms, int32_t* out_sent)
 {
   _socket_transport* const s = _S(t);
+  *out_sent = 0;
   if (!s->connected)
   {
     return AZ_MQTT_ERROR_TRANSPORT;
   }
-  int64_t const deadline = _az_mqtt_deadline(AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS);
-  uint8_t const* ptr = az_span_ptr(data);
-  int32_t remaining = az_span_size(data);
-  while (remaining > 0)
+  if (az_span_size(data) == 0)
   {
-    int32_t const n = _az_mqtt_send_nosignal(s->fd, ptr, remaining);
+    return AZ_OK;
+  }
+  int64_t const deadline = _az_mqtt_deadline(timeout_ms);
+  for (;;)
+  {
+    int32_t const n = _az_mqtt_send_nosignal(s->fd, az_span_ptr(data), az_span_size(data));
     if (n > 0)
     {
-      ptr += n;
-      remaining -= n;
-      continue;
+      *out_sent = n;
+      return AZ_OK;
     }
-    int const w = n < 0 ? -1
-                        : _az_mqtt_wait_fd(s->fd, _AZ_MQTT_WAIT_WRITE, _az_mqtt_remaining_ms(deadline));
-    if (w <= 0)
+    int const w = n < 0
+        ? -1
+        : _az_mqtt_wait_fd(s->fd, _AZ_MQTT_WAIT_WRITE, _az_mqtt_remaining_ms(deadline));
+    if (w == 0)
     {
-      // A partial packet may be on the wire: the connection is unusable.
-      s->connected = false;
-      return w == 0 ? AZ_MQTT_ERROR_TIMEOUT : _az_mqtt_socket_error(errno, &s->errors);
+      return AZ_OK; // Nothing could be sent in time.
     }
+    if (w < 0)
+    {
+      s->connected = false;
+      return _az_mqtt_socket_error(errno, &s->errors);
+    }
+  }
+}
+
+static az_result _send(az_mqtt_transport* t, az_span data)
+{
+  int64_t const deadline = _az_mqtt_deadline(AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS);
+  while (az_span_size(data) > 0)
+  {
+    int32_t sent = 0;
+    az_result const rc = _send_some(t, data, _az_mqtt_remaining_ms(deadline), &sent);
+    if (az_result_failed(rc))
+    {
+      return rc;
+    }
+    if (sent == 0)
+    {
+      _S(t)->connected = false; // A partial packet may be on the wire: unusable.
+      return AZ_MQTT_ERROR_TIMEOUT;
+    }
+    data = az_span_slice_to_end(data, sent);
   }
   return AZ_OK;
 }
@@ -168,14 +194,17 @@ static az_mqtt_transport_vtable const _vtable = {
   _connect_start, _connect_poll, _send, _receive, NULL, _close, NULL, _set_error_callback,
 };
 
+static _az_mqtt_layer_ops const _ops = { _send_some };
+
 int32_t _az_mqtt_socket_transport_sizeof(void) { return (int32_t)sizeof(_socket_transport); }
 
-az_result _az_mqtt_socket_transport_init(az_mqtt_transport* transport)
+az_result _az_mqtt_socket_transport_init(_az_mqtt_layer* storage)
 {
-  _az_PRECONDITION_NOT_NULL(transport);
-  _socket_transport* const s = _S(transport);
+  _az_PRECONDITION_NOT_NULL(storage);
+  _socket_transport* const s = (_socket_transport*)storage;
   memset(s, 0, sizeof(*s));
-  s->base.vtable = &_vtable;
+  s->layer.base.vtable = &_vtable;
+  s->layer.ops = &_ops;
   s->fd = -1;
   _az_mqtt_tcp_connect_init(&s->tcp);
   return AZ_OK;

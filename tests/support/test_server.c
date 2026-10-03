@@ -46,6 +46,7 @@ struct test_server
   int pubcomps;
   int last_pubcomp_reason;
   bool client_closed;
+  int close_notifies;
   int ws_pongs;
   int ws_unmasked;
   int ws_client_close_code;
@@ -935,6 +936,22 @@ static void* _run(void* arg)
         pthread_mutex_unlock(&s->lock);
         X509_free(peer);
         _serve_maybe_ws(s, &c);
+        // Read what the client sends after its last packet (e.g. DISCONNECT): its close_notify.
+        uint8_t rest[64];
+        struct pollfd readable = { fd, POLLIN, 0 };
+        for (int i = 0; i < 4 && (SSL_get_shutdown(c.ssl) & SSL_RECEIVED_SHUTDOWN) == 0
+             && (SSL_pending(c.ssl) > 0 || poll(&readable, 1, 250) > 0);
+             i++)
+        {
+          if (SSL_read(c.ssl, rest, (int)sizeof(rest)) <= 0)
+          {
+            break;
+          }
+        }
+        if ((SSL_get_shutdown(c.ssl) & SSL_RECEIVED_SHUTDOWN) != 0)
+        {
+          _add(s, &s->close_notifies, 1);
+        }
       }
       SSL_free(c.ssl);
     }
@@ -1055,6 +1072,7 @@ bool test_server_ws_request_has(test_server* s, char const* text)
   pthread_mutex_unlock(&s->lock);
   return v;
 }
+int test_server_close_notifies(test_server* s) { return _get(s, &s->close_notifies); }
 bool test_server_client_closed(test_server* s)
 {
   pthread_mutex_lock(&s->lock);

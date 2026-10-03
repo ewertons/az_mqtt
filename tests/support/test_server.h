@@ -165,6 +165,8 @@ int test_server_ws_unmasked(test_server* server);
 int test_server_ws_client_close_code(test_server* server);
 /** @brief Whether the last upgrade request contains @p text. */
 bool test_server_ws_request_has(test_server* server, char const* text);
+/** @brief TLS connections the client ended with close_notify. */
+int test_server_close_notifies(test_server* server);
 /** @brief Whether the client closed the last connection (orderly or not). */
 bool test_server_client_closed(test_server* server);
 

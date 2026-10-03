@@ -48,7 +48,7 @@ enum
 typedef struct
 {
   az_mqtt_transport base; ///< Must be first.
-  az_mqtt_transport* lower;
+  _az_mqtt_layer* lower;
   _az_mqtt_layer_errors errors;
   mbedtls_ssl_context ssl;
   mbedtls_ssl_config conf;
@@ -59,7 +59,7 @@ typedef struct
   mbedtls_x509_crt ca_chain;
   mbedtls_x509_crt client_cert;
   mbedtls_pk_context client_key;
-  /** @brief Until when reads wait for bytes from below. */
+  /** @brief Until when I/O waits on the layer below (0 or past: does not wait). */
   int64_t deadline;
   /** @brief Why the transport below failed during the last mbedTLS call (AZ_OK: it did not). */
   az_result lower_failure;
@@ -67,9 +67,12 @@ typedef struct
   /** @brief Contexts are initialized (and own resources, e.g. mutexes) until freed. */
   bool tls_contexts_ready;
   uint8_t stage;
+  /** @brief close_notify sent (or tried) on this connection. */
+  bool closing;
 } _tls_transport;
 
 #define _T(t) ((_tls_transport*)(t))
+#define _LOWER_T(transport) (&(transport)->lower->base)
 
 // ──────────────────────── I/O over the transport below ───────
 
@@ -77,14 +80,18 @@ static int _tls_send(void* ctx, unsigned char const* data, size_t size)
 {
   _tls_transport* const transport = (_tls_transport*)ctx;
   int32_t const chunk = size > (size_t)INT32_MAX ? INT32_MAX : (int32_t)size;
-  az_result const rc
-      = az_mqtt_transport_send(transport->lower, az_span_create((uint8_t*)(uintptr_t)data, chunk));
+  int32_t sent = 0;
+  az_result const rc = _az_mqtt_layer_send_some(
+      transport->lower,
+      az_span_create((uint8_t*)(uintptr_t)data, chunk),
+      _az_mqtt_layer_remaining(transport->deadline),
+      &sent);
   if (az_result_failed(rc))
   {
     transport->lower_failure = rc;
     return MBEDTLS_ERR_NET_SEND_FAILED;
   }
-  return (int)chunk;
+  return sent > 0 ? (int)sent : MBEDTLS_ERR_SSL_WANT_WRITE; // None before the deadline.
 }
 
 static int _tls_recv(void* ctx, unsigned char* buffer, size_t size)
@@ -93,7 +100,7 @@ static int _tls_recv(void* ctx, unsigned char* buffer, size_t size)
   int32_t const chunk = size > (size_t)INT32_MAX ? INT32_MAX : (int32_t)size;
   az_span received;
   az_result const rc = az_mqtt_transport_receive(
-      transport->lower,
+      _LOWER_T(transport),
       az_span_create(buffer, chunk),
       _az_mqtt_layer_remaining(transport->deadline),
       &received);
@@ -477,11 +484,38 @@ static az_result _tls_handshake(_tls_transport* transport, int64_t deadline)
 
 // ──────────────────────── Transport ──────────────────────────
 
+/**
+ * @brief Send close_notify, once per connection, if the session is up: without waiting on the
+ * layer below. Native errors it meets are reported (from below, with their result; mbedTLS's,
+ * with the failure below or AZ_MQTT_ERROR_TRANSPORT).
+ */
+static void _send_close_notify(_tls_transport* transport)
+{
+  if (transport->stage != _OPEN || !transport->use_tls || transport->closing)
+  {
+    return;
+  }
+  transport->closing = true;
+  transport->deadline = 0; // Never wait.
+  transport->lower_failure = AZ_OK;
+  int const ret = mbedtls_ssl_close_notify(&transport->ssl);
+  if (ret != 0 && !_retry(transport, ret))
+  {
+    _az_mqtt_layer_report(
+        &transport->errors,
+        AZ_MQTT_NATIVE_ERROR_TLS,
+        ret,
+        az_result_failed(transport->lower_failure) ? transport->lower_failure
+                                                   : AZ_MQTT_ERROR_TRANSPORT);
+  }
+}
+
 static void _close(az_mqtt_transport* t)
 {
+  _send_close_notify(_T(t));
   _tls_contexts_free(_T(t));
   _T(t)->stage = _IDLE;
-  az_mqtt_transport_close(_T(t)->lower);
+  az_mqtt_transport_close(_LOWER_T(_T(t)));
 }
 
 static az_result _connect_start(
@@ -491,8 +525,8 @@ static az_result _connect_start(
     az_mqtt_tls_options const* tls_options)
 {
   _tls_transport* const transport = _T(t);
-  _tls_contexts_free(transport);
-  transport->stage = _IDLE;
+  _close(t); // A connect replaces the connection.
+  transport->closing = false;
   transport->errors.connect_attempt++;
   if (tls_options != NULL)
   {
@@ -509,7 +543,7 @@ static az_result _connect_start(
     }
     mbedtls_ssl_set_bio(&transport->ssl, transport, _tls_send, _tls_recv, NULL);
   }
-  az_result const rc = az_mqtt_transport_connect_start(transport->lower, host, port, NULL);
+  az_result const rc = az_mqtt_transport_connect_start(_LOWER_T(transport), host, port, NULL);
   if (az_result_failed(rc))
   {
     _tls_contexts_free(transport);
@@ -529,7 +563,7 @@ static az_result _connect_poll(az_mqtt_transport* t, int32_t timeout_ms)
   }
   if (transport->stage == _LOWER)
   {
-    az_result const rc = az_mqtt_transport_connect_poll(transport->lower, timeout_ms);
+    az_result const rc = az_mqtt_transport_connect_poll(_LOWER_T(transport), timeout_ms);
     if (az_result_failed(rc))
     {
       if (rc != AZ_MQTT_ERROR_TIMEOUT)
@@ -567,7 +601,7 @@ static az_result _send(az_mqtt_transport* t, az_span data)
   }
   if (!transport->use_tls)
   {
-    return az_mqtt_transport_send(transport->lower, data);
+    return az_mqtt_transport_send(_LOWER_T(transport), data);
   }
   transport->deadline = _az_mqtt_layer_deadline(AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS);
   uint8_t const* ptr = az_span_ptr(data);
@@ -604,7 +638,7 @@ _receive(az_mqtt_transport* t, az_span buffer, int32_t timeout_ms, az_span* out_
   }
   if (!transport->use_tls)
   {
-    return az_mqtt_transport_receive(transport->lower, buffer, timeout_ms, out_received);
+    return az_mqtt_transport_receive(_LOWER_T(transport), buffer, timeout_ms, out_received);
   }
   transport->deadline = _az_mqtt_layer_deadline(timeout_ms);
   for (;;)
@@ -632,18 +666,13 @@ _receive(az_mqtt_transport* t, az_span buffer, int32_t timeout_ms, az_span* out_
 
 static void _shutdown(az_mqtt_transport* t)
 {
-  _tls_transport* const transport = _T(t);
-  if (transport->stage == _OPEN && transport->use_tls)
-  {
-    transport->deadline = _az_mqtt_layer_deadline(0);
-    (void)mbedtls_ssl_close_notify(&transport->ssl); // Best effort.
-  }
-  az_mqtt_transport_shutdown(transport->lower);
+  _send_close_notify(_T(t));
+  az_mqtt_transport_shutdown(_LOWER_T(_T(t)));
 }
 
 static az_result _set_proxy(az_mqtt_transport* t, az_mqtt_proxy_options const* proxy)
 {
-  return az_mqtt_transport_set_proxy(_T(t)->lower, proxy);
+  return az_mqtt_transport_set_proxy(_LOWER_T(_T(t)), proxy);
 }
 
 static void
@@ -660,7 +689,7 @@ static az_mqtt_transport_vtable const _vtable = {
 
 int32_t _az_mqtt_tls_transport_sizeof(void) { return (int32_t)sizeof(_tls_transport); }
 
-az_result _az_mqtt_tls_transport_init(az_mqtt_transport* transport, az_mqtt_transport* lower)
+az_result _az_mqtt_tls_transport_init(az_mqtt_transport* transport, _az_mqtt_layer* lower)
 {
   _az_PRECONDITION_NOT_NULL(transport);
   _az_PRECONDITION_NOT_NULL(lower);
@@ -668,6 +697,6 @@ az_result _az_mqtt_tls_transport_init(az_mqtt_transport* transport, az_mqtt_tran
   memset(tls, 0, sizeof(*tls));
   tls->base.vtable = &_vtable;
   tls->lower = lower;
-  _az_mqtt_layer_errors_attach(&tls->errors, lower);
+  _az_mqtt_layer_errors_attach(&tls->errors, &lower->base);
   return AZ_OK;
 }

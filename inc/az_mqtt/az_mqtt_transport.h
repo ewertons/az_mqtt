@@ -269,12 +269,16 @@ AZ_NODISCARD az_result az_mqtt_transport_receive(
 
 /**
  * @brief Close the transport connection and release resources.
+ *
+ * POSIX platform transport: a TLS session still usable is ended with close_notify first, without
+ * waiting; native errors met doing so are reported. A connection that failed is closed as is.
  */
 void az_mqtt_transport_close(az_mqtt_transport* transport);
 
 /**
  * @brief End an established connection in an orderly way before az_mqtt_transport_close()
- * (e.g. a WebSocket close frame). Best effort; nothing for the platform transport.
+ * (e.g. a WebSocket close frame, then TLS close_notify on POSIX). Best effort; nothing for the
+ * Windows platform transport.
  */
 void az_mqtt_transport_shutdown(az_mqtt_transport* transport);
 
@@ -313,7 +317,8 @@ typedef struct
   /**
    * @brief What the failing call returns (e.g. AZ_MQTT_ERROR_TLS_VERIFY); for an address given up
    * for the next one, what that address alone would have returned. The first error with the
-   * returned result is its cause.
+   * returned result is its cause. While closing (close and shutdown return nothing): what the
+   * failing step below returned, else AZ_MQTT_ERROR_TRANSPORT.
    */
   az_result result;
   /**

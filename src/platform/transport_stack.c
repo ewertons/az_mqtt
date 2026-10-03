@@ -32,13 +32,13 @@ AZ_NODISCARD az_result az_mqtt_transport_init(az_mqtt_transport* transport)
   _az_PRECONDITION_NOT_NULL(transport);
   uint8_t* const storage = (uint8_t*)transport;
   int32_t const tls_size = _ALIGN(_az_mqtt_tls_transport_sizeof());
-  az_mqtt_transport* const socket = (az_mqtt_transport*)(void*)(storage + tls_size + _PROXY_SIZE);
+  _az_mqtt_layer* const socket = (_az_mqtt_layer*)(void*)(storage + tls_size + _PROXY_SIZE);
   _az_RETURN_IF_FAILED(_az_mqtt_socket_transport_init(socket));
-  az_mqtt_transport* lower = socket;
+  _az_mqtt_layer* lower = socket;
 #ifndef AZ_MQTT_NO_PROXY
   _az_mqtt_proxy_transport* const proxy = (_az_mqtt_proxy_transport*)(void*)(storage + tls_size);
   _az_RETURN_IF_FAILED(_az_mqtt_proxy_transport_init(proxy, lower));
-  lower = &proxy->base;
+  lower = &proxy->layer;
 #endif
   if (tls_size > 0)
   {
@@ -51,7 +51,7 @@ AZ_NODISCARD az_result az_mqtt_transport_init(az_mqtt_transport* transport)
 // No TLS backend: no TLS layer; the socket refuses TLS options.
 int32_t _az_mqtt_tls_transport_sizeof(void) { return 0; }
 
-az_result _az_mqtt_tls_transport_init(az_mqtt_transport* transport, az_mqtt_transport* lower)
+az_result _az_mqtt_tls_transport_init(az_mqtt_transport* transport, _az_mqtt_layer* lower)
 {
   (void)transport;
   (void)lower;
