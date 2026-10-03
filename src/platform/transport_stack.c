@@ -47,7 +47,7 @@ AZ_NODISCARD az_result az_mqtt_transport_init(az_mqtt_transport* transport)
   return AZ_OK;
 }
 
-#if !defined(AZ_MQTT_TLS_OPENSSL) && !defined(AZ_MQTT_TLS_MBEDTLS)
+#if !defined(AZ_MQTT_TLS_OPENSSL) && !defined(AZ_MQTT_TLS_MBEDTLS) && !defined(AZ_MQTT_TLS_SCHANNEL)
 // No TLS backend: no TLS layer; the socket refuses TLS options.
 int32_t _az_mqtt_tls_transport_sizeof(void) { return 0; }
 

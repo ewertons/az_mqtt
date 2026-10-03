@@ -270,15 +270,14 @@ AZ_NODISCARD az_result az_mqtt_transport_receive(
 /**
  * @brief Close the transport connection and release resources.
  *
- * POSIX platform transport: a TLS session still usable is ended with close_notify first, without
+ * Platform transport: a TLS session still usable is ended with close_notify first, without
  * waiting; native errors met doing so are reported. A connection that failed is closed as is.
  */
 void az_mqtt_transport_close(az_mqtt_transport* transport);
 
 /**
  * @brief End an established connection in an orderly way before az_mqtt_transport_close()
- * (e.g. a WebSocket close frame, then TLS close_notify on POSIX). Best effort; nothing for the
- * Windows platform transport.
+ * (e.g. a WebSocket close frame, then TLS close_notify). Best effort.
  */
 void az_mqtt_transport_shutdown(az_mqtt_transport* transport);
 
