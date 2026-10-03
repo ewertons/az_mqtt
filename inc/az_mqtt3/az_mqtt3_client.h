@@ -33,7 +33,7 @@
 
 typedef struct az_mqtt3_client az_mqtt3_client;
 
-/** @brief A CONNACK arrived (accepted or not). */
+/** @brief A CONNACK arrived (accepted or not); after any resends of a resumed session. */
 typedef void (*az_mqtt3_on_connack_fn)(az_mqtt3_client* client, az_mqtt3_connack_data const* connack);
 
 /** @brief A PUBLISH arrived; its PUBACK / PUBREC is sent by the client. */
@@ -65,6 +65,17 @@ typedef void (*az_mqtt3_on_pubcomp_fn)(az_mqtt3_client* client, az_mqtt3_ack_dat
  * az_mqtt3_client_connect() to reconnect.
  */
 typedef void (*az_mqtt3_on_connection_closed_fn)(az_mqtt3_client* client, az_result reason);
+
+/**
+ * @brief Offers a QoS 1/2 PUBLISH an earlier connection left unacknowledged, when the server
+ * resumes the session (accepted CONNACK with Session Present): oldest first, before on_connack.
+ * Resend it with az_mqtt3_client_publish_resend() before returning; otherwise it is abandoned
+ * (its in-flight entry freed).
+ */
+typedef void (*az_mqtt3_on_publish_resend_fn)(
+    az_mqtt3_client* client,
+    uint16_t packet_id,
+    az_mqtt_qos qos);
 
 /**
  * @brief Called for each native transport error (see az_mqtt_transport_error_fn), before the
@@ -112,8 +123,11 @@ typedef struct
    * inbound QoS 2 PUBLISH until its PUBREL. A request with no free entry fails with
    * AZ_MQTT_ERROR_FLOW_CONTROL; an inbound QoS 2 PUBLISH with none is delivered without duplicate
    * detection. May be empty if only QoS 0 is published and nothing is subscribed.
-   * Acknowledgements for packet identifiers not in flight are ignored. Whatever is in flight when
-   * the session ends is abandoned: nothing is resent on resume.
+   * Acknowledgements for packet identifiers not in flight are ignored.
+   *
+   * When a session ends, SUBSCRIBE and UNSUBSCRIBE in flight are abandoned; PUBLISH exchanges are
+   * kept. If the next accepted CONNACK has Session Present, each PUBREL is resent and each PUBLISH
+   * offered to on_publish_resend; otherwise all are abandoned.
    */
   az_span inflight_control_buffer;
 
@@ -128,6 +142,8 @@ typedef struct
   az_mqtt3_on_connection_closed_fn on_connection_closed;
   /** @brief Optional. See az_mqtt3_on_transport_error_fn. */
   az_mqtt3_on_transport_error_fn on_transport_error;
+  /** @brief Optional (NULL: no resends). See az_mqtt3_on_publish_resend_fn. */
+  az_mqtt3_on_publish_resend_fn on_publish_resend;
 
   /** @brief User context pointer (passthrough, not used by the library). */
   void* user_context;
@@ -151,6 +167,7 @@ struct az_mqtt3_client
     az_mqtt3_on_pubcomp_fn on_pubcomp;
     az_mqtt3_on_connection_closed_fn on_connection_closed;
     az_mqtt3_on_transport_error_fn on_transport_error;
+    az_mqtt3_on_publish_resend_fn on_publish_resend;
     void* user_context;
   } _internal;
 };
@@ -232,6 +249,19 @@ AZ_NODISCARD az_result az_mqtt3_client_publish(
     az_mqtt3_client* client,
     az_mqtt3_publish_options const* options,
     uint16_t* out_packet_id);
+
+/**
+ * @brief Resend a PUBLISH offered to on_publish_resend, from that callback: DUP set, original
+ * packet identifier. @p options holds the original message, at its QoS.
+ *
+ * @retval AZ_MQTT_ERROR_INVALID_STATE @p packet_id is not awaiting resend.
+ * @retval AZ_ERROR_ARG Not the original QoS.
+ * @retval other As az_mqtt3_client_publish(); not resent.
+ */
+AZ_NODISCARD az_result az_mqtt3_client_publish_resend(
+    az_mqtt3_client* client,
+    uint16_t packet_id,
+    az_mqtt3_publish_options const* options);
 
 /**
  * @brief Subscribe to topic(s). Holds an in-flight entry until SUBACK.

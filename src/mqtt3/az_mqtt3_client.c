@@ -56,6 +56,15 @@ static az_result _send_ack(
 // Packet dispatch
 // ============================================================================
 
+static void _offer_resend(az_mqtt_core* core, uint16_t packet_id, az_mqtt_qos qos)
+{
+  az_mqtt3_client* client = (az_mqtt3_client*)core;
+  if (client->_internal.on_publish_resend != NULL)
+  {
+    client->_internal.on_publish_resend(client, packet_id, qos);
+  }
+}
+
 static az_result _handle_connack(az_mqtt3_client* client, az_span body)
 {
   az_mqtt3_connack_data connack;
@@ -67,6 +76,16 @@ static az_result _handle_connack(az_mqtt3_client* client, az_span body)
   {
     _CORE(client).state = AZ_MQTT_CLIENT_STATE_CONNECTED;
     _CORE(client).keep_alive_seconds = client->_internal.connect_options.keep_alive_seconds;
+    uint32_t const generation = _CORE(client).session_generation;
+    _az_RETURN_IF_FAILED(_az_mqtt_core_inflight_resume(
+        &client->_internal.core,
+        connack.session_present,
+        az_mqtt3_codec_encode_pubrel,
+        _offer_resend));
+    if (_CORE(client).session_generation != generation)
+    {
+      return AZ_OK; // Ended during the resends.
+    }
   }
   if (client->_internal.on_connack != NULL)
   {
@@ -232,6 +251,7 @@ az_mqtt3_client_init(az_mqtt3_client* client, az_mqtt3_client_options const* opt
   client->_internal.on_pubcomp = options->on_pubcomp;
   client->_internal.on_connection_closed = options->on_connection_closed;
   client->_internal.on_transport_error = options->on_transport_error;
+  client->_internal.on_publish_resend = options->on_publish_resend;
   client->_internal.user_context = options->user_context;
   _az_mqtt_core_inflight_init(&client->_internal.core, options->inflight_control_buffer);
   return AZ_OK;
@@ -297,12 +317,32 @@ AZ_NODISCARD az_result az_mqtt3_client_publish(
 
   az_span send_buf = _SEND_BUFFER(client);
   az_result rc = az_mqtt3_codec_encode_publish(&send_buf, options, packet_id);
-  rc = _az_mqtt_core_send_tracked_request(&client->_internal.core, entry, rc, send_buf);
+  rc = _az_mqtt_core_send_tracked_request(&client->_internal.core, entry, rc, send_buf, false);
   if (az_result_succeeded(rc) && out_packet_id != NULL)
   {
     *out_packet_id = packet_id;
   }
   return rc;
+}
+
+AZ_NODISCARD az_result az_mqtt3_client_publish_resend(
+    az_mqtt3_client* client,
+    uint16_t packet_id,
+    az_mqtt3_publish_options const* options)
+{
+  _az_PRECONDITION_NOT_NULL(client);
+  _az_PRECONDITION_NOT_NULL(options);
+
+  if (_CORE(client).state != AZ_MQTT_CLIENT_STATE_CONNECTED)
+  {
+    return AZ_MQTT_ERROR_NOT_CONNECTED;
+  }
+  az_mqtt_inflight_entry* entry = NULL;
+  _az_RETURN_IF_FAILED(_az_mqtt_core_inflight_take_resend(
+      &client->_internal.core, packet_id, options->qos, UINT16_MAX, &entry));
+  az_span send_buf = _SEND_BUFFER(client);
+  az_result const rc = az_mqtt3_codec_encode_publish(&send_buf, options, packet_id);
+  return _az_mqtt_core_send_tracked_request(&client->_internal.core, entry, rc, send_buf, true);
 }
 
 AZ_NODISCARD az_result az_mqtt3_client_subscribe(
@@ -326,7 +366,7 @@ AZ_NODISCARD az_result az_mqtt3_client_subscribe(
   az_span send_buf = _SEND_BUFFER(client);
   az_result rc = az_mqtt3_codec_encode_subscribe(
       &send_buf, subscriptions, subscription_count, packet_id);
-  rc = _az_mqtt_core_send_tracked_request(&client->_internal.core, entry, rc, send_buf);
+  rc = _az_mqtt_core_send_tracked_request(&client->_internal.core, entry, rc, send_buf, false);
   if (az_result_succeeded(rc) && out_packet_id != NULL)
   {
     *out_packet_id = packet_id;
@@ -355,7 +395,7 @@ AZ_NODISCARD az_result az_mqtt3_client_unsubscribe(
   az_span send_buf = _SEND_BUFFER(client);
   az_result rc
       = az_mqtt3_codec_encode_unsubscribe(&send_buf, topic_filters, filter_count, packet_id);
-  rc = _az_mqtt_core_send_tracked_request(&client->_internal.core, entry, rc, send_buf);
+  rc = _az_mqtt_core_send_tracked_request(&client->_internal.core, entry, rc, send_buf, false);
   if (az_result_succeeded(rc) && out_packet_id != NULL)
   {
     *out_packet_id = packet_id;

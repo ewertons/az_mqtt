@@ -21,7 +21,13 @@ the [Azure SDK for C](https://github.com/Azure/azure-sdk-for-c) span and platfor
 - Requests awaiting acknowledgement are tracked in caller storage
   (`options.inflight_control_buffer`, 4 B per `az_mqtt_inflight_entry`): unique packet identifiers,
   QoS 2 duplicate detection, acknowledgements for unknown identifiers ignored. With no free entry a
-  request fails with `AZ_MQTT_ERROR_FLOW_CONTROL`. Nothing is resent after a reconnect.
+  request fails with `AZ_MQTT_ERROR_FLOW_CONTROL`.
+- Session resumption: unacknowledged QoS 1/2 exchanges outlive the connection. If the next
+  accepted CONNACK has Session Present, PUBRELs are resent, then each PUBLISH is offered to
+  `on_publish_resend`, oldest first; it resends it (`az_mqttN_client_publish_resend`, DUP set,
+  same packet identifier) from the caller's own copy, or it is abandoned. Without Session Present
+  all are abandoned. SUBSCRIBE/UNSUBSCRIBE in flight are abandoned when the connection ends.
+  Session state is kept in memory only, not across a restart.
 - mqttv5 enforces the CONNACK Receive Maximum, Maximum QoS, Retain Available, Topic Alias Maximum
   and Maximum Packet Size.
 - Transport failures have distinct results: `AZ_MQTT_ERROR_NAME_RESOLUTION`,

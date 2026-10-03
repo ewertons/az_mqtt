@@ -99,6 +99,8 @@ typedef struct
   bool ack_publishes;
   /** @brief With ack_publishes: never acknowledge the first PUBLISH. */
   bool hold_first_publish;
+  /** @brief Answer only QoS 2 PUBLISH, with PUBREC (no PUBACK, no PUBCOMP). */
+  bool pubrec_only;
   /** @brief MQTT 5: reason code in the PUBRECs sent (0: success). */
   uint8_t pubrec_reason;
   /**
@@ -161,6 +163,18 @@ int test_server_last_pubrel_reason(test_server* server);
 /** @brief PUBCOMP packets received, and the reason code of the last (0 if absent). */
 int test_server_pubcomps(test_server* server);
 int test_server_last_pubcomp_reason(test_server* server);
+
+/** @brief Set Session Present in the CONNACKs that follow (accepted ones). */
+void test_server_set_session_present(test_server* server, bool present);
+
+/** @brief MQTT 5 Receive Maximum of the CONNACKs that follow (0: absent). */
+void test_server_set_receive_maximum(test_server* server, uint16_t receive_maximum);
+
+/**
+ * @brief PUBLISH and PUBREL received since the last call, in order, as "P<qos>:<id>[d] " (d: DUP)
+ * and "R:<id> "; copied to @p out (truncated to @p size) and cleared.
+ */
+void test_server_take_log(test_server* server, char* out, int size);
 
 /** @brief Pongs "hi" received (answers to ws_fragment pings). */
 int test_server_ws_pongs(test_server* server);
