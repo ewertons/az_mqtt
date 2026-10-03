@@ -48,6 +48,7 @@ struct test_server
   int last_pubcomp_reason;
   bool client_closed;
   int close_notifies;
+  int last_tls13;
   int ws_pongs;
   int ws_unmasked;
   int ws_client_close_code;
@@ -648,7 +649,11 @@ static void _serve(test_server* s, conn* c)
       }
       burst[n++] = 'p';
     }
-    if (s->options.ticket_before_burst && c->ssl != NULL)
+    bool const tls13 = c->ssl != NULL && SSL_version(c->ssl) == TLS1_3_VERSION;
+    pthread_mutex_lock(&s->lock);
+    s->last_tls13 = tls13;
+    pthread_mutex_unlock(&s->lock);
+    if (s->options.ticket_before_burst && tls13)
     {
       int const on = 1; // Without Nagle the flight leaves now, not at the client's delayed ACK.
       (void)setsockopt(c->fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
@@ -1095,6 +1100,7 @@ bool test_server_ws_request_has(test_server* s, char const* text)
   return v;
 }
 int test_server_close_notifies(test_server* s) { return _get(s, &s->close_notifies); }
+bool test_server_last_tls13(test_server* s) { return _get(s, &s->last_tls13) != 0; }
 bool test_server_client_closed(test_server* s)
 {
   pthread_mutex_lock(&s->lock);

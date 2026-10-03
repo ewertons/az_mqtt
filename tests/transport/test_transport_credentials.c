@@ -254,7 +254,8 @@ static az_result _hook(void* native, void* context)
   {
     mbedtls_ssl_conf_authmode(conf, MBEDTLS_SSL_VERIFY_NONE);
   }
-#if defined(MBEDTLS_SSL_TLS1_3_SIGNAL_NEW_SESSION_TICKETS_ENABLED) // mbedTLS 3.x client
+#if defined(MBEDTLS_SSL_TLS1_3_SIGNAL_NEW_SESSION_TICKETS_ENABLED) && defined(MBEDTLS_SSL_PROTO_TLS1_3) \
+    && defined(MBEDTLS_SSL_SESSION_TICKETS) && defined(MBEDTLS_SSL_CLI_C) // mbedTLS 3.x client
   if (h->signal_tickets)
   {
     mbedtls_ssl_conf_tls13_enable_signal_new_session_tickets(
@@ -324,6 +325,12 @@ static void data_after_a_session_ticket_is_read_without_waiting(void** state)
   assert_true(_exchange(&f)); // CONNACK; the ticket and the burst follow in one flight.
   struct timespec const pause = { 0, 200 * 1000000L };
   nanosleep(&pause, NULL);
+  if (!test_server_last_tls13(f.server))
+  {
+    _hook_free(&h);
+    _teardown(&f); // No TLS 1.3 in this build: no post-handshake ticket to test.
+    skip();
+  }
   // QoS 0 PUBLISH "t"/"p" (MQTT 5): 30 05 00 01 't' 00 'p' = 7 bytes each, in one TLS record.
   uint8_t buf[256];
   az_span received = AZ_SPAN_EMPTY;

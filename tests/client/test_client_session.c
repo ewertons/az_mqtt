@@ -407,6 +407,11 @@ static void data_after_a_session_ticket_is_read_without_waiting(void** state)
   _setup(&f, &so, 30);
   assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
   _sleep_ms(200); // Ticket and burst have arrived.
+  if (!test_server_last_tls13(f.server))
+  {
+    _teardown(&f); // No TLS 1.3 in this build: no post-handshake ticket to test.
+    skip();
+  }
   assert_int_equal(AZ_MQTT_T(client_process_loop)(&f.client, 0), AZ_OK);
   assert_int_equal(g.publishes, 10);
   _teardown(&f);
