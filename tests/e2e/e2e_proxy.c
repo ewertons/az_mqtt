@@ -55,7 +55,57 @@ struct e2e_proxy
   _mutex_t lock;
   bool stop; ///< Under lock.
   int tunnels; ///< Under lock.
+  int client_alerts; ///< Under lock.
+  bool reset_requested; ///< Under lock.
+  bool reset_done; ///< Under lock.
 };
+
+/** @brief TLS record framing of the client's stream: header bytes seen, body bytes left. */
+typedef struct
+{
+  uint8_t header[5];
+  int header_len;
+  int body_left;
+} _records;
+
+/** @brief Follow the record framing over @p data; count alert records. */
+static void _scan_records(e2e_proxy* p, _records* r, uint8_t const* data, int size)
+{
+  while (size > 0)
+  {
+    if (r->body_left > 0)
+    {
+      int const n = size < r->body_left ? size : r->body_left;
+      r->body_left -= n;
+      data += n;
+      size -= n;
+      continue;
+    }
+    r->header[r->header_len++] = *data++;
+    size--;
+    if (r->header_len == 5)
+    {
+      r->header_len = 0;
+      r->body_left = (r->header[3] << 8) | r->header[4];
+      if (r->header[0] == 21)
+      {
+        _lock(&p->lock);
+        p->client_alerts++;
+        _unlock(&p->lock);
+      }
+    }
+  }
+}
+
+/** @brief Close @p fd with a reset (no FIN). */
+static void _reset(_socket_t fd)
+{
+  struct linger l;
+  l.l_onoff = 1;
+  l.l_linger = 0;
+  (void)setsockopt(fd, SOL_SOCKET, SO_LINGER, (char const*)&l, (int)sizeof(l));
+  _close_socket(fd);
+}
 
 static bool _stopping(e2e_proxy* p)
 {
@@ -169,11 +219,24 @@ static _socket_t _connect_target(char const* authority)
   return fd;
 }
 
-static void _pump(e2e_proxy* p, _socket_t a, _socket_t b)
+/** @brief Relay client @p a and target @p b; false if @p a was reset (and closed). */
+static bool _pump(e2e_proxy* p, _socket_t a, _socket_t b)
 {
   char buf[4096];
+  _records records = { { 0 }, 0, 0 };
   while (!_stopping(p))
   {
+    _lock(&p->lock);
+    bool const reset = p->reset_requested;
+    _unlock(&p->lock);
+    if (reset)
+    {
+      _reset(a);
+      _lock(&p->lock);
+      p->reset_done = true;
+      _unlock(&p->lock);
+      return false;
+    }
     fd_set set;
     FD_ZERO(&set);
     FD_SET(a, &set);
@@ -182,7 +245,7 @@ static void _pump(e2e_proxy* p, _socket_t a, _socket_t b)
     int const r = select((int)(a > b ? a : b) + 1, &set, NULL, NULL, &tv);
     if (r < 0)
     {
-      return;
+      return true;
     }
     _socket_t const ends[2][2] = { { a, b }, { b, a } };
     for (int i = 0; i < 2; i++)
@@ -192,46 +255,56 @@ static void _pump(e2e_proxy* p, _socket_t a, _socket_t b)
         int const n = (int)recv(ends[i][0], buf, (int)sizeof(buf), 0);
         if (n <= 0 || !_send_all(ends[i][1], buf, n))
         {
-          return;
+          return true;
+        }
+        if (i == 0)
+        {
+          _scan_records(p, &records, (uint8_t const*)buf, n);
         }
       }
     }
   }
+  return true;
 }
 
-static void _serve(e2e_proxy* p, _socket_t fd)
+/** @brief Serve one client; false if its connection was reset (and closed). */
+static bool _serve(e2e_proxy* p, _socket_t fd)
 {
   char head[4096];
   char authority[300];
   if (!_read_request(p, fd, head, (int)sizeof(head)) || strncmp(head, "CONNECT ", 8) != 0)
   {
-    return;
+    return true;
   }
   char const* const end = strchr(head + 8, ' ');
   size_t const len = end == NULL ? 0 : (size_t)(end - (head + 8));
   if (len == 0 || len >= sizeof(authority))
   {
-    return;
+    return true;
   }
   memcpy(authority, head + 8, len);
   authority[len] = '\0';
   if (p->options.refuse_auth)
   {
     _reply(p, fd, "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n");
-    return;
+    return true;
   }
   _socket_t const target = _connect_target(authority);
   if (target == _BAD_SOCKET)
   {
     _reply(p, fd, "HTTP/1.1 502 Bad Gateway\r\n\r\n");
-    return;
+    return true;
   }
   _lock(&p->lock);
   p->tunnels++;
+  p->client_alerts = 0;
+  p->reset_requested = false;
+  p->reset_done = false;
   _unlock(&p->lock);
   _reply(p, fd, "HTTP/1.1 200 Connection established\r\nVia: 1.1 e2e-proxy\r\n\r\n");
-  _pump(p, fd, target);
+  bool const open = _pump(p, fd, target);
   _close_socket(target);
+  return open;
 }
 
 static void _run(e2e_proxy* p)
@@ -243,9 +316,8 @@ static void _run(e2e_proxy* p)
       continue;
     }
     _socket_t const fd = accept(p->listener, NULL, NULL);
-    if (fd != _BAD_SOCKET)
+    if (fd != _BAD_SOCKET && _serve(p, fd))
     {
-      _serve(p, fd);
       _close_socket(fd);
     }
   }
@@ -318,6 +390,31 @@ int e2e_proxy_tunnels(e2e_proxy* p)
   int const n = p->tunnels;
   _unlock(&p->lock);
   return n;
+}
+
+int e2e_proxy_client_alerts(e2e_proxy* p)
+{
+  _lock(&p->lock);
+  int const n = p->client_alerts;
+  _unlock(&p->lock);
+  return n;
+}
+
+bool e2e_proxy_reset_client(e2e_proxy* p)
+{
+  for (int i = 0; i < 100; i++)
+  {
+    _lock(&p->lock);
+    p->reset_requested = true;
+    bool const done = p->reset_done;
+    _unlock(&p->lock);
+    if (done)
+    {
+      return true;
+    }
+    _sleep_ms(20);
+  }
+  return false;
 }
 
 void e2e_proxy_stop(e2e_proxy* p)

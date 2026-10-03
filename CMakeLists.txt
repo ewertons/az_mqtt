@@ -92,12 +92,14 @@ if(AZ_MQTT_ENABLE_WEBSOCKETS)
   list(APPEND AZ_MQTT_CORE_SOURCES src/core/az_mqtt_websocket.c)
 endif()
 
+# TLS layer (by backend) over proxy layer over socket transport.
+list(APPEND AZ_MQTT_CORE_SOURCES src/platform/transport_stack.c)
 if(WIN32)
-  list(APPEND AZ_MQTT_CORE_SOURCES src/platform/transport_win32.c)
-else()
-  # POSIX: TLS layer (by backend) over proxy layer over socket transport.
   list(APPEND AZ_MQTT_CORE_SOURCES
-    src/platform/transport_stack.c src/platform/transport_socket_posix.c src/platform/az_mqtt_socket_posix.c)
+    src/platform/transport_socket_win32.c src/platform/tls_schannel.c)
+else()
+  list(APPEND AZ_MQTT_CORE_SOURCES
+    src/platform/transport_socket_posix.c src/platform/az_mqtt_socket_posix.c)
   if(AZ_MQTT_TLS_BACKEND STREQUAL "mbedtls")
     list(APPEND AZ_MQTT_CORE_SOURCES src/platform/tls_mbedtls.c)
   endif()

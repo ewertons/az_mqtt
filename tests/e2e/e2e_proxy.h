@@ -30,6 +30,13 @@ e2e_proxy* e2e_proxy_start(e2e_proxy_options const* options);
 uint16_t e2e_proxy_port(e2e_proxy const* proxy);
 /** @brief Tunnels opened so far. */
 int e2e_proxy_tunnels(e2e_proxy* proxy);
+/**
+ * @brief TLS alert records (content type 21) the client sent in the current or last tunnel.
+ * Alerts are visible only up to TLS 1.2 (TLS 1.3 encrypts their type).
+ */
+int e2e_proxy_client_alerts(e2e_proxy* proxy);
+/** @brief Reset (RST) the client's connection of the current tunnel; true once done. */
+bool e2e_proxy_reset_client(e2e_proxy* proxy);
 void e2e_proxy_stop(e2e_proxy* proxy);
 
 #endif // AZ_MQTT_E2E_PROXY_H
