@@ -81,6 +81,10 @@ static struct
   int last_drop_reason;
   /** @brief Disconnect at the first drop. */
   bool disconnect_on_drop;
+  /** @brief Publish a QoS 1 message at each drop; the results and packet ids. */
+  bool publish_on_drop;
+  az_result drop_publish_rc[8];
+  uint16_t drop_publish_ids[8];
   /** @brief on_connack publishes a QoS 1 message (the topic "n"). */
   bool publish_on_connack;
   az_result connack_publish_rc;
@@ -144,6 +148,13 @@ static void _record_drop(AZ_MQTT_T(client)* c, AZ_MQTT_T(ack_data) const* a, boo
   {
     g.disconnect_on_drop = false;
     _ignore(AZ_MQTT_TEST_DISCONNECT(c));
+  }
+  if (g.publish_on_drop)
+  {
+    AZ_MQTT_T(publish_options) p = AZ_MQTT_T(publish_options_default)();
+    p.topic = AZ_SPAN_FROM_STR("n");
+    p.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
+    g.drop_publish_rc[n] = AZ_MQTT_T(client_publish)(c, &p, &g.drop_publish_ids[n]);
   }
 }
 
@@ -910,6 +921,75 @@ static void a_session_ended_during_not_resumed_reports_stops_them(void** state)
   assert_int_equal(g.drops, 3);
   assert_int_equal(g.drop_ids[1], ids[1]);
   assert_int_equal(g.drop_ids[2], ids[2]);
+  _teardown(&f);
+}
+
+static void publishing_from_a_drop_report_is_safe(void** state)
+{
+  (void)state;
+  fixture f;
+  uint16_t ids[3];
+  _setup_resume(&f, ids, 6);
+  test_server_set_session_present(f.server, false);
+  g.publish_on_drop = true;
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  g.publish_on_drop = false;
+  assert_int_equal(g.drops, 3); // The old ones only: none published meanwhile.
+  char expected[64] = "";
+  for (int i = 0; i < 3; i++)
+  {
+    assert_int_equal(g.drop_ids[i], ids[i]);
+    assert_int_equal(g.drop_publish_rc[i], AZ_OK);
+    size_t const used = strlen(expected);
+    (void)snprintf(expected + used, sizeof(expected) - used, "P1:%u ", g.drop_publish_ids[i]);
+  }
+  char log[256];
+  _take_log(&f, 3, log, (int)sizeof(log)); // Each sent, and kept: resent on a resume.
+  assert_string_equal(log, expected);
+  assert_int_equal(AZ_MQTT_TEST_DISCONNECT(&f.client), AZ_OK);
+  test_server_set_session_present(f.server, true);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  _take_log(&f, 3, log, (int)sizeof(log));
+  (void)snprintf(
+      expected,
+      sizeof(expected),
+      "P1:%ud P1:%ud P1:%ud ",
+      g.drop_publish_ids[0],
+      g.drop_publish_ids[1],
+      g.drop_publish_ids[2]);
+  assert_string_equal(log, expected);
+  _teardown(&f);
+}
+
+static void no_publish_overtakes_a_pending_resend(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  s_persistent = true;
+  fixture f;
+  _setup(&f, &so, 30); // Never acknowledges.
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  AZ_MQTT_T(publish_options) p = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE);
+  p.message_expiry_interval = 1;
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &p, NULL), AZ_OK);
+  p.message_expiry_interval = 0;
+  uint16_t kept;
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &p, &kept), AZ_OK);
+  PUMP_UNTIL(&f, test_server_publishes(f.server) == 2);
+  assert_int_equal(AZ_MQTT_TEST_DISCONNECT(&f.client), AZ_OK);
+  char log[256];
+  test_server_take_log(f.server, log, (int)sizeof(log));
+  _sleep_ms(1100);
+  test_server_set_session_present(f.server, true);
+  g.publish_on_drop = true; // At the expired one's drop, the kept one still awaits its resend.
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  g.publish_on_drop = false;
+  assert_int_equal(g.drops, 1);
+  assert_int_equal(g.drop_publish_rc[0], AZ_MQTT_ERROR_FLOW_CONTROL);
+  char expected[32];
+  (void)snprintf(expected, sizeof(expected), "P1:%ud ", kept);
+  _take_log(&f, 1, log, (int)sizeof(log));
+  assert_string_equal(log, expected);
   _teardown(&f);
 }
 
@@ -2057,6 +2137,8 @@ int main(void)
     cmocka_unit_test(a_resumed_session_resends_pubrel_then_publishes_oldest_first),
     cmocka_unit_test(without_session_present_each_exchange_is_reported_dropped),
     cmocka_unit_test(a_session_ended_during_not_resumed_reports_stops_them),
+    cmocka_unit_test(publishing_from_a_drop_report_is_safe),
+    cmocka_unit_test(no_publish_overtakes_a_pending_resend),
     cmocka_unit_test(a_clean_session_needs_no_message_storage),
     cmocka_unit_test(a_kept_session_needs_message_storage_for_qos_1_and_2),
     cmocka_unit_test(message_storage_below_its_minimum_is_refused),

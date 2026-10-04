@@ -253,10 +253,13 @@ AZ_NODISCARD az_result az_mqtt3_client_process_loop(az_mqtt3_client* client, int
 /**
  * @brief Publish a message.
  *
- * QoS 1/2 holds an in-flight entry until PUBACK / PUBCOMP (see options.inflight_control_buffer).
+ * QoS 1/2 holds an in-flight entry until PUBACK / PUBCOMP (see options.inflight_control_buffer),
+ * and a stored copy until PUBACK / PUBREC (see options.inflight_message_buffer).
  *
  * @param[out] out_packet_id  Packet ID assigned (for QoS > 0). Can be NULL.
- * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free in-flight entry.
+ * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free in-flight entry, or (QoS 1/2) an earlier PUBLISH
+ *         still awaits its resend after a resume.
+ * @retval AZ_MQTT_ERROR_OUT_OF_STORAGE, AZ_MQTT_ERROR_INVALID_CONFIG See inflight_message_buffer.
  */
 AZ_NODISCARD az_result az_mqtt3_client_publish(
     az_mqtt3_client* client,

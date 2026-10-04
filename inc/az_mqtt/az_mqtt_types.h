@@ -42,8 +42,8 @@ enum az_mqtt_result
   /** @brief The server ended the session with a DISCONNECT packet. */
   AZ_MQTT_ERROR_SERVER_DISCONNECTED = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 20),
   /**
-   * @brief No in-flight entry is free, or the MQTT 5.0 server's Receive Maximum is reached.
-   * Nothing was sent; retry after an acknowledgement.
+   * @brief No in-flight entry is free, the MQTT 5.0 server's Receive Maximum is reached, or an
+   * earlier PUBLISH still awaits its resend. Nothing was sent; retry after an acknowledgement.
    */
   AZ_MQTT_ERROR_FLOW_CONTROL = _az_RESULT_MAKE_ERROR(_az_FACILITY_IOT_MQTT, 21),
   /**

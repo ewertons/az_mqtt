@@ -36,8 +36,8 @@ typedef struct
   {
     uint16_t packet_id;
     uint8_t kind;
-    /** @brief Unacknowledged from an earlier connection: to be resent on this one. */
-    bool resend;
+    /** @brief From an earlier connection: 0, or a _az_mqtt_inflight_mark (resend or drop). */
+    uint8_t mark;
   } _internal;
 } az_mqtt_inflight_entry;
 

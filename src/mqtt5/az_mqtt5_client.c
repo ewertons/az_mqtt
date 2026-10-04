@@ -221,7 +221,6 @@ static az_result _handle_ack(az_mqtt5_client* client, az_mqtt_packet_type type, 
       client->_internal.buffers.ack_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
 
   az_result rc = az_mqtt5_codec_decode_ack(body, &ack);
-  ack.status = AZ_OK;
   if (az_result_failed(rc))
     return rc;
 

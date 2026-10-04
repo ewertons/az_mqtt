@@ -411,6 +411,7 @@ AZ_NODISCARD az_result az_mqtt3_codec_decode_ack(az_span body, az_mqtt3_ack_data
 {
   _az_PRECONDITION_NOT_NULL(out);
 
+  out->status = AZ_OK;
   az_result rc = _az_mqtt_read_uint16(&body, &out->packet_id);
   if (az_result_failed(rc))
     return rc;

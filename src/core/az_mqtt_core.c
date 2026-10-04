@@ -300,7 +300,7 @@ static void _keep_resumable_inflight_entries(az_mqtt_core* core)
     {
       entries[i]._internal.kind = _AZ_MQTT_INFLIGHT_FREE;
     }
-    entries[i]._internal.resend = false; // Marked again if the next session resumes.
+    entries[i]._internal.mark = _AZ_MQTT_INFLIGHT_MARK_NONE; // Set again by the next CONNACK.
   }
   _compact_inflight_entries(core);
 }
@@ -411,7 +411,7 @@ static bool _is_publish_exchange(az_mqtt_inflight_entry const* entry)
   return k != _AZ_MQTT_INFLIGHT_FREE && k <= _AZ_MQTT_INFLIGHT_PUBREL;
 }
 
-/** @brief Outgoing QoS 1/2 PUBLISH exchanges incomplete on this connection (not resends pending). */
+/** @brief Outgoing QoS 1/2 PUBLISH exchanges incomplete on this connection (none marked). */
 static uint16_t _publishes_in_flight(az_mqtt_core* core)
 {
   int32_t count;
@@ -419,7 +419,8 @@ static uint16_t _publishes_in_flight(az_mqtt_core* core)
   uint16_t publishes = 0;
   for (int32_t i = 0; i < count; i++)
   {
-    if (_is_publish_exchange(&entries[i]) && !entries[i]._internal.resend)
+    if (_is_publish_exchange(&entries[i])
+        && entries[i]._internal.mark == _AZ_MQTT_INFLIGHT_MARK_NONE)
     {
       publishes++;
     }
@@ -443,10 +444,14 @@ az_result _az_mqtt_core_inflight_reserve_entry(
       entry = &entries[i]; // After every entry in use: the newest.
     }
   }
-  // Resends wait only while publish_limit is reached: no new PUBLISH overtakes them.
-  if (entry == NULL || _publishes_in_flight(core) >= publish_limit)
+  bool resend_pending = false;
+  for (int32_t i = 0; i < count && kind <= _AZ_MQTT_INFLIGHT_PUBLISH_QOS2; i++)
   {
-    return AZ_MQTT_ERROR_FLOW_CONTROL;
+    resend_pending = resend_pending || entries[i]._internal.mark == _AZ_MQTT_INFLIGHT_MARK_RESEND;
+  }
+  if (entry == NULL || resend_pending || _publishes_in_flight(core) >= publish_limit)
+  {
+    return AZ_MQTT_ERROR_FLOW_CONTROL; // A new PUBLISH never overtakes a resend.
   }
   // A free entry leaves at most 65534 identifiers in use, so this ends.
   do
@@ -458,7 +463,7 @@ az_result _az_mqtt_core_inflight_reserve_entry(
   } while (_is_outgoing_packet_id_in_use(core, _S(core).next_packet_id));
   entry->_internal.packet_id = _S(core).next_packet_id;
   entry->_internal.kind = (uint8_t)kind;
-  entry->_internal.resend = false;
+  entry->_internal.mark = _AZ_MQTT_INFLIGHT_MARK_NONE;
   *out_entry = entry;
   return AZ_OK;
 }
@@ -544,6 +549,7 @@ az_result _az_mqtt_core_send_publish(
   return rc;
 }
 
+#ifndef AZ_NO_LOGGING
 /** @brief "dropped <packet id> <result>". */
 static void _log_dropped(uint16_t packet_id, az_result status)
 {
@@ -559,6 +565,9 @@ static void _log_dropped(uint16_t packet_id, az_result status)
   _log_append_hex(&out, (uint32_t)status);
   _log_write(AZ_LOG_MQTT_CONNECTION, AZ_SPAN_FROM_BUFFER(buffer), out);
 }
+#else
+#define _log_dropped(packet_id, status)
+#endif // AZ_NO_LOGGING
 
 /**
  * @brief Free @p entry and report it to @p dropped with @p status.
@@ -591,25 +600,39 @@ az_result _az_mqtt_core_inflight_resume(
   az_mqtt_inflight_entry* entries = _get_inflight_entries(core, &count);
   if (!session_present)
   {
+    // The server kept none of it. Mark first: callbacks may publish anew into the same table.
     for (int32_t i = 0; i < count; i++)
     {
-      if (_is_publish_exchange(&entries[i]))
+      if (entries[i]._internal.kind == _AZ_MQTT_INFLIGHT_INBOUND_QOS2)
+      {
+        entries[i]._internal.kind = _AZ_MQTT_INFLIGHT_FREE;
+      }
+      else if (_is_publish_exchange(&entries[i]))
+      {
+        entries[i]._internal.mark = _AZ_MQTT_INFLIGHT_MARK_STALE;
+      }
+    }
+    _compact_inflight_entries(core);
+    for (int32_t i = 0; i < count; i++)
+    {
+      if (entries[i]._internal.mark == _AZ_MQTT_INFLIGHT_MARK_STALE)
       {
         if (!_drop(core, &entries[i], AZ_MQTT_ERROR_SESSION_NOT_RESUMED, dropped, generation))
         {
           return AZ_OK;
         }
-        i--; // The next one moved into entries[i].
+        i = -1; // Entries moved, and new ones may follow: from the start.
       }
     }
-    _clear_inflight_entries(core); // Inbound QoS 2 too: the server kept none of it.
     return AZ_OK;
   }
   for (int32_t i = 0; i < count; i++)
   {
     uint8_t const k = entries[i]._internal.kind;
-    entries[i]._internal.resend
-        = k == _AZ_MQTT_INFLIGHT_PUBLISH_QOS1 || k == _AZ_MQTT_INFLIGHT_PUBLISH_QOS2;
+    if (k == _AZ_MQTT_INFLIGHT_PUBLISH_QOS1 || k == _AZ_MQTT_INFLIGHT_PUBLISH_QOS2)
+    {
+      entries[i]._internal.mark = _AZ_MQTT_INFLIGHT_MARK_RESEND;
+    }
     if (k == _AZ_MQTT_INFLIGHT_PUBREL) // Oldest first: entries are in reservation order.
     {
       az_span send_buf = _S(core).send_buffer;
@@ -637,7 +660,8 @@ az_result _az_mqtt_core_inflight_resend_due(
     az_mqtt_inflight_entry* entry = NULL;
     for (int32_t i = 0; i < count && entry == NULL; i++)
     {
-      entry = entries[i]._internal.resend ? &entries[i] : NULL; // The oldest.
+      // The oldest: entries are in reservation order.
+      entry = entries[i]._internal.mark == _AZ_MQTT_INFLIGHT_MARK_RESEND ? &entries[i] : NULL;
     }
     if (entry == NULL)
     {
@@ -672,7 +696,7 @@ az_result _az_mqtt_core_inflight_resend_due(
     {
       return AZ_OK; // Resent once an acknowledgement makes room.
     }
-    entry->_internal.resend = false;
+    entry->_internal.mark = _AZ_MQTT_INFLIGHT_MARK_NONE;
     uint8_t* const packet
         = az_span_ptr(_S(core).inflight_message_buffer) + at + AZ_MQTT_INFLIGHT_MESSAGE_OVERHEAD;
     packet[0] |= 0x08; // DUP
@@ -749,7 +773,7 @@ void _az_mqtt_core_inflight_track_inbound_qos2(
   {
     free_entry->_internal.packet_id = packet_id;
     free_entry->_internal.kind = _AZ_MQTT_INFLIGHT_INBOUND_QOS2;
-    free_entry->_internal.resend = false;
+    free_entry->_internal.mark = _AZ_MQTT_INFLIGHT_MARK_NONE;
   }
   *out_is_duplicate = false;
 }

@@ -136,7 +136,6 @@ static az_result _handle_ack(az_mqtt3_client* client, az_mqtt_packet_type type, 
 {
   az_mqtt3_ack_data ack;
   az_result rc = az_mqtt3_codec_decode_ack(body, &ack);
-  ack.status = AZ_OK;
   if (az_result_failed(rc))
     return rc;
 

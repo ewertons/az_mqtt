@@ -25,9 +25,7 @@ set(BUILD_SHARED_LIBS ${_saved_BUILD_SHARED_LIBS} CACHE BOOL "" FORCE)
 
 # ── Test subdirectories ──────────────────────────────────────
 
-if(AZ_MQTT_ENABLE_PROXY OR AZ_MQTT_ENABLE_WEBSOCKETS)
-  add_subdirectory(unit)
-endif()
+add_subdirectory(unit)
 add_subdirectory(e2e)
 
 # Tests against an in-process peer (POSIX + OpenSSL 3.0+); no broker needed.

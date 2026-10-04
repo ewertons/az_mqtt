@@ -306,12 +306,16 @@ AZ_NODISCARD az_result az_mqtt5_client_process_loop(az_mqtt5_client* client, int
 /**
  * @brief Publish a message.
  *
- * QoS 1/2 holds an in-flight entry until PUBACK / PUBCOMP (see options.inflight_control_buffer).
+ * QoS 1/2 holds an in-flight entry until PUBACK / PUBCOMP (see options.inflight_control_buffer),
+ * and a stored copy until PUBACK / PUBREC (see options.inflight_message_buffer).
  *
  * @param[out] out_packet_id  Packet ID assigned (for QoS > 0). Can be NULL.
- * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free entry, or the server's Receive Maximum is reached.
+ * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free entry, the server's Receive Maximum is reached, or
+ *         (QoS 1/2) an earlier PUBLISH still awaits its resend after a resume.
+ * @retval AZ_MQTT_ERROR_OUT_OF_STORAGE, AZ_MQTT_ERROR_INVALID_CONFIG See inflight_message_buffer.
  * @retval AZ_MQTT_ERROR_NOT_SUPPORTED QoS above the server's Maximum QoS, retain without
- *         Retain Available, or a Topic Alias above its Topic Alias Maximum.
+ *         Retain Available, a Topic Alias above its Topic Alias Maximum, or (QoS 1/2) one on a
+ *         session that outlives the connection.
  * @retval AZ_MQTT_ERROR_PACKET_TOO_LARGE Over the server's Maximum Packet Size.
  */
 AZ_NODISCARD az_result az_mqtt5_client_publish(

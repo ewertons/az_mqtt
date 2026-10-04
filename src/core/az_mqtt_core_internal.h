@@ -117,6 +117,16 @@ typedef enum
   _AZ_MQTT_INFLIGHT_INBOUND_QOS2,
 } _az_mqtt_inflight_kind;
 
+/** @brief az_mqtt_inflight_entry mark of an outgoing QoS 1/2 exchange of an earlier connection. */
+typedef enum
+{
+  _AZ_MQTT_INFLIGHT_MARK_NONE = 0,
+  /** @brief The session resumed: to be resent. */
+  _AZ_MQTT_INFLIGHT_MARK_RESEND,
+  /** @brief The session did not resume: to be reported dropped. */
+  _AZ_MQTT_INFLIGHT_MARK_STALE,
+} _az_mqtt_inflight_mark;
+
 /**
  * @brief Use @p entries (az_mqtt_inflight_entry[]; at most UINT16_MAX used) and @p messages
  * (stored PUBLISH packets); all free. Entries in use stay first, in reservation order. Call
@@ -138,7 +148,8 @@ AZ_NODISCARD az_result _az_mqtt_core_inflight_init(
  *
  * @param publish_limit Fail if this many outgoing QoS 1/2 PUBLISH exchanges are
  * incomplete on this connection (the server's Receive Maximum); UINT16_MAX for none.
- * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free entry, or @p publish_limit reached.
+ * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free entry, @p publish_limit reached, or (for a PUBLISH)
+ * an earlier one still awaits its resend: none overtakes it.
  */
 AZ_NODISCARD az_result _az_mqtt_core_inflight_reserve_entry(
     az_mqtt_core* core,
