@@ -33,6 +33,7 @@ static az_mqtt_sample_transport_storage s_transport_storage;
 static az_mqtt_inflight_entry s_inflight[8];
 static az_mqtt5_user_property s_publish_user_properties[8];
 static az_mqtt5_reason_code s_suback_reason_codes[8];
+static az_mqtt5_user_property s_ack_user_properties[8];
 
 // RESPONSE_TOPIC_PREFIX + client id: only this client's responses arrive there.
 static char s_response_topic_buffer[128];
@@ -41,6 +42,10 @@ static az_span s_response_topic;
 static bool s_subscribed;
 static bool s_request_sent;
 static bool s_response_received;
+static uint16_t s_request_packet_id;
+static uint16_t s_response_packet_id;
+static bool s_request_acknowledged;
+static bool s_response_acknowledged;
 
 static void on_suback(az_mqtt5_client* client, az_mqtt5_suback_data const* suback)
 {
@@ -51,6 +56,22 @@ static void on_suback(az_mqtt5_client* client, az_mqtt5_suback_data const* subac
   {
     // Reason codes 0x80 and above refuse the subscription.
     s_subscribed = s_subscribed && suback->reason_codes[i] < AZ_MQTT5_REASON_UNSPECIFIED_ERROR;
+  }
+}
+
+static void on_puback(az_mqtt5_client* client, az_mqtt5_ack_data const* ack)
+{
+  (void)client;
+  printf("[PUBACK] packet_id=%u reason=0x%02X\n", ack->packet_id, (unsigned)ack->reason_code);
+  bool const ok
+      = az_result_succeeded(ack->status) && ack->reason_code < AZ_MQTT5_REASON_UNSPECIFIED_ERROR;
+  if (ack->packet_id == s_request_packet_id)
+  {
+    s_request_acknowledged = ok;
+  }
+  else if (ack->packet_id == s_response_packet_id)
+  {
+    s_response_acknowledged = ok;
   }
 }
 
@@ -85,7 +106,7 @@ static void on_publish(az_mqtt5_client* client, az_mqtt5_publish_data const* pub
     response.payload = AZ_SPAN_FROM_STR("{\"status\":\"ok\"}");
     response.content_type = AZ_SPAN_FROM_STR("application/json");
     response.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
-    az_result const rc = az_mqtt5_client_publish(client, &response, NULL);
+    az_result const rc = az_mqtt5_client_publish(client, &response, &s_response_packet_id);
     printf("Response sent: 0x%08X\n", (unsigned)rc);
   }
   else if (s_request_sent && az_span_is_content_equal(publish->topic, s_response_topic))
@@ -137,7 +158,9 @@ int main(void)
   // Received User Properties are decoded into this caller storage (extras are dropped).
   options.buffers.publish_user_properties = SPAN_FROM_ARRAY(s_publish_user_properties);
   options.buffers.suback_reason_codes = SPAN_FROM_ARRAY(s_suback_reason_codes);
+  options.buffers.ack_user_properties = SPAN_FROM_ARRAY(s_ack_user_properties);
   options.on_suback = on_suback;
+  options.on_puback = on_puback;
   options.on_publish = on_publish;
 
   az_mqtt5_client client;
@@ -194,15 +217,17 @@ int main(void)
     request.user_property_count = 1;
     request.payload = AZ_SPAN_FROM_STR("{}");
     request.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
-    rc = az_mqtt5_client_publish(&client, &request, NULL);
+    rc = az_mqtt5_client_publish(&client, &request, &s_request_packet_id);
     printf("Request sent: 0x%08X\n", (unsigned)rc);
     s_request_sent = az_result_succeeded(rc);
   }
 
   // Each process_loop() returns once it has handled what arrived: PUBACKs, request, response.
-  for (int i = 0; i < 10 && az_result_succeeded(rc) && !s_response_received; i++)
+  bool done = false;
+  for (int i = 0; i < 10 && az_result_succeeded(rc) && s_request_sent && !done; i++)
   {
     rc = az_mqtt5_client_process_loop(&client, 1000);
+    done = s_response_received && s_request_acknowledged && s_response_acknowledged;
   }
   if (az_result_failed(rc))
   {
@@ -212,13 +237,21 @@ int main(void)
   {
     printf("ERROR: not subscribed\n");
   }
+  else if (!done)
+  {
+    printf(
+        "ERROR: response=%d request_puback=%d response_puback=%d\n",
+        s_response_received,
+        s_request_acknowledged,
+        s_response_acknowledged);
+  }
   else
   {
-    printf(s_response_received ? "Response received\n" : "ERROR: no response\n");
+    printf("Response received\n");
   }
 
   az_result const disconnect_rc
       = az_mqtt5_client_disconnect(&client, AZ_MQTT5_REASON_NORMAL_DISCONNECTION);
-  bool const ok = az_result_succeeded(rc) && s_response_received;
+  bool const ok = az_result_succeeded(rc) && done;
   return ok && az_result_succeeded(disconnect_rc) ? 0 : 1;
 }

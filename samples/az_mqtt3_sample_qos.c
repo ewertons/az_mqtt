@@ -35,7 +35,9 @@ static bool s_subscribed;
 static uint16_t s_qos1_packet_id;
 static uint16_t s_qos2_packet_id;
 static bool s_qos1_acknowledged;
+static uint16_t s_incoming_qos2_packet_id;
 static bool s_qos2_completed;
+static bool s_qos2_done;
 static bool s_incoming_qos2_completed;
 static bool s_received[3]; // By QoS.
 
@@ -55,17 +57,20 @@ static void on_puback(az_mqtt3_client* client, az_mqtt3_ack_data const* ack)
 }
 
 // Outgoing QoS 2: PUBCOMP received. Incoming QoS 2: PUBREL received and PUBCOMP sent.
+// Packet identifiers are per direction and may be equal: the first match is the outgoing one.
 static void on_pubcomp(az_mqtt3_client* client, az_mqtt3_ack_data const* ack)
 {
   (void)client;
   printf("[PUBCOMP] packet_id=%u status=0x%08X\n", ack->packet_id, (unsigned)ack->status);
-  if (ack->packet_id == s_qos2_packet_id)
+  bool const ok = az_result_succeeded(ack->status);
+  if (ack->packet_id == s_qos2_packet_id && !s_qos2_done)
   {
-    s_qos2_completed = az_result_succeeded(ack->status);
+    s_qos2_done = true;
+    s_qos2_completed = ok;
   }
-  else
+  else if (ack->packet_id == s_incoming_qos2_packet_id)
   {
-    s_incoming_qos2_completed = true;
+    s_incoming_qos2_completed = ok;
   }
 }
 
@@ -79,6 +84,10 @@ static void on_publish(az_mqtt3_client* client, az_mqtt3_publish_data const* pub
       (int)publish->qos,
       publish->packet_id);
   s_received[publish->qos] = true;
+  if (publish->qos == AZ_MQTT_QOS_EXACTLY_ONCE)
+  {
+    s_incoming_qos2_packet_id = publish->packet_id;
+  }
 }
 
 int main(void)

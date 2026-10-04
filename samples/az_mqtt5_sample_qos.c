@@ -39,7 +39,9 @@ static bool s_subscribed;
 static uint16_t s_qos1_packet_id;
 static uint16_t s_qos2_packet_id;
 static bool s_qos1_acknowledged;
+static uint16_t s_incoming_qos2_packet_id;
 static bool s_qos2_completed;
+static bool s_qos2_done;
 static bool s_incoming_qos2_completed;
 static bool s_received[3]; // By QoS.
 
@@ -66,6 +68,7 @@ static void on_puback(az_mqtt5_client* client, az_mqtt5_ack_data const* ack)
 
 // Outgoing QoS 2: PUBCOMP received, or a PUBREC with a reason code of 0x80 or more (rejected).
 // Incoming QoS 2: PUBREL received and PUBCOMP sent.
+// Packet identifiers are per direction and may be equal: the first match is the outgoing one.
 static void on_pubcomp(az_mqtt5_client* client, az_mqtt5_ack_data const* ack)
 {
   (void)client;
@@ -74,14 +77,16 @@ static void on_pubcomp(az_mqtt5_client* client, az_mqtt5_ack_data const* ack)
       ack->packet_id,
       (unsigned)ack->reason_code,
       (unsigned)ack->status);
-  if (ack->packet_id == s_qos2_packet_id)
+  bool const ok
+      = az_result_succeeded(ack->status) && ack->reason_code < AZ_MQTT5_REASON_UNSPECIFIED_ERROR;
+  if (ack->packet_id == s_qos2_packet_id && !s_qos2_done)
   {
-    s_qos2_completed
-        = az_result_succeeded(ack->status) && ack->reason_code < AZ_MQTT5_REASON_UNSPECIFIED_ERROR;
+    s_qos2_done = true;
+    s_qos2_completed = ok;
   }
-  else
+  else if (ack->packet_id == s_incoming_qos2_packet_id)
   {
-    s_incoming_qos2_completed = true;
+    s_incoming_qos2_completed = ok;
   }
 }
 
@@ -95,6 +100,10 @@ static void on_publish(az_mqtt5_client* client, az_mqtt5_publish_data const* pub
       (int)publish->qos,
       publish->packet_id);
   s_received[publish->qos] = true;
+  if (publish->qos == AZ_MQTT_QOS_EXACTLY_ONCE)
+  {
+    s_incoming_qos2_packet_id = publish->packet_id;
+  }
 }
 
 int main(void)
