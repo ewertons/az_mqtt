@@ -10,7 +10,7 @@
  * - bits 0-1: receive chunk size (1, 7, 64, unlimited);
  * - bit 2: WebSocket layer (upgrade reply, then frames); else HTTP CONNECT proxy layer (CONNECT
  *   reply, then tunnelled bytes).
- * After a completed handshake, the rest is received until the input ends or the layer fails.
+ * After a completed handshake, the rest is received until the layer fails (at the input's end).
  */
 
 #include "az_mqtt_io_layers_internal.h"
@@ -86,7 +86,9 @@ int LLVMFuzzerTestOneInput(uint8_t const* data, size_t size)
       break;
     }
   }
-  for (int i = 0; i < 100000 && rc == AZ_OK && fake.input_read < fake.input_size; i++)
+  // Until the layer fails: the input ends with AZ_MQTT_ERROR_CONNECTION_CLOSED once the bytes a
+  // handshake read ahead have been received too.
+  for (int i = 0; i < 100000 && rc == AZ_OK; i++)
   {
     az_span received;
     rc = az_mqtt_transport_receive(t, AZ_SPAN_FROM_BUFFER(s_receive), 0, &received);
