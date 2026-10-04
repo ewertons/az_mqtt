@@ -414,6 +414,7 @@ az_result _az_mqtt_websocket_reply_parse(
       case _AZ_MQTT_HTTP_MALFORMED:
         rc = AZ_MQTT_ERROR_WEBSOCKET;
         break;
+      case _AZ_MQTT_HTTP_MORE:
       default:
         break;
     }

@@ -168,9 +168,21 @@ static az_result _handle_ack(az_mqtt3_client* client, az_mqtt_packet_type type, 
       callback = client->_internal.on_pubcomp;
       kind = _AZ_MQTT_INFLIGHT_PUBREL;
       break;
-    default: // UNSUBACK
+    case AZ_MQTT_PACKET_TYPE_UNSUBACK:
       callback = client->_internal.on_unsuback;
       break;
+    case AZ_MQTT_PACKET_TYPE_CONNECT: // Not acknowledgements: _dispatch_packet never passes these.
+    case AZ_MQTT_PACKET_TYPE_CONNACK:
+    case AZ_MQTT_PACKET_TYPE_PUBLISH:
+    case AZ_MQTT_PACKET_TYPE_SUBSCRIBE:
+    case AZ_MQTT_PACKET_TYPE_SUBACK:
+    case AZ_MQTT_PACKET_TYPE_UNSUBSCRIBE:
+    case AZ_MQTT_PACKET_TYPE_PINGREQ:
+    case AZ_MQTT_PACKET_TYPE_PINGRESP:
+    case AZ_MQTT_PACKET_TYPE_DISCONNECT:
+    case AZ_MQTT_PACKET_TYPE_AUTH:
+    default:
+      return AZ_MQTT_ERROR_PROTOCOL;
   }
   if (!_az_mqtt_core_inflight_release_entry(core, kind, ack.packet_id))
   {
@@ -222,7 +234,13 @@ static az_result _dispatch_packet(
       return _handle_suback(client, body);
     case AZ_MQTT_PACKET_TYPE_PINGRESP:
       return AZ_OK;
-    default: // Including DISCONNECT (client-to-server only) and AUTH (reserved) in 3.1.1.
+    case AZ_MQTT_PACKET_TYPE_CONNECT: // Client to server only.
+    case AZ_MQTT_PACKET_TYPE_SUBSCRIBE:
+    case AZ_MQTT_PACKET_TYPE_UNSUBSCRIBE:
+    case AZ_MQTT_PACKET_TYPE_PINGREQ:
+    case AZ_MQTT_PACKET_TYPE_DISCONNECT: // Client to server only in 3.1.1.
+    case AZ_MQTT_PACKET_TYPE_AUTH: // Reserved in 3.1.1.
+    default:
       return AZ_MQTT_ERROR_PROTOCOL;
   }
 }

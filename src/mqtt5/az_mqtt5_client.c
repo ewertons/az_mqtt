@@ -396,6 +396,10 @@ static az_result _dispatch_packet(
       return _handle_disconnect(client, body);
     case AZ_MQTT_PACKET_TYPE_AUTH:
       return AZ_OK; // Enhanced authentication is not implemented.
+    case AZ_MQTT_PACKET_TYPE_CONNECT: // Client to server only.
+    case AZ_MQTT_PACKET_TYPE_SUBSCRIBE:
+    case AZ_MQTT_PACKET_TYPE_UNSUBSCRIBE:
+    case AZ_MQTT_PACKET_TYPE_PINGREQ:
     default:
       return AZ_MQTT_ERROR_PROTOCOL;
   }
