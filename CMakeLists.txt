@@ -15,6 +15,7 @@ option(AZ_MQTT_ENABLE_WEBSOCKETS "MQTT over WebSockets (websocket_options)" ON)
 option(AZ_MQTT_BUILD_SAMPLES "Build sample applications" ON)
 option(AZ_MQTT_BUILD_TESTS "Build tests" ON)
 option(AZ_MQTT_WARNINGS_AS_ERRORS "Treat warnings in az_mqtt code (libraries, samples, tests) as errors" OFF)
+option(AZ_MQTT_BUILD_FUZZERS "Build libFuzzer targets (clang; instruments everything with ASan + UBSan)" OFF)
 
 # TLS backend. auto (default): OpenSSL 3.0+ if found, otherwise none.
 #   openssl: require OpenSSL 3.0+.  mbedtls: require mbedTLS.  none: no TLS.
@@ -23,6 +24,14 @@ set(AZ_MQTT_TLS_BACKEND "auto" CACHE STRING "TLS backend: auto | openssl | mbedt
 set_property(CACHE AZ_MQTT_TLS_BACKEND PROPERTY STRINGS auto openssl mbedtls none)
 if(NOT AZ_MQTT_TLS_BACKEND MATCHES "^(auto|openssl|mbedtls|none)$")
   message(FATAL_ERROR "AZ_MQTT_TLS_BACKEND must be auto, openssl, mbedtls or none (got '${AZ_MQTT_TLS_BACKEND}')")
+endif()
+
+if(AZ_MQTT_BUILD_FUZZERS)
+  if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "AZ_MQTT_BUILD_FUZZERS needs clang (libFuzzer)")
+  endif()
+  add_compile_options(-fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=all)
+  add_link_options(-fsanitize=address,undefined)
 endif()
 
 if(NOT AZ_MQTT_ENABLE_MQTTV3 AND NOT AZ_MQTT_ENABLE_MQTTV5)
@@ -213,4 +222,8 @@ endif()
 if(AZ_MQTT_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
+endif()
+
+if(AZ_MQTT_BUILD_FUZZERS)
+  add_subdirectory(tests/fuzz)
 endif()

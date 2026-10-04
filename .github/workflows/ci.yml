@@ -111,6 +111,31 @@ jobs:
           UBSAN_OPTIONS: print_stacktrace=1
         run: eng/ci/build-and-test.sh openssl asan
 
+  fuzz:
+    name: fuzz (60 s per target)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Install packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build clang-18 libclang-rt-18-dev
+      # ASan cannot map its shadow memory with the runner kernel's default ASLR entropy.
+      - name: Reduce mmap ASLR entropy for ASan
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+      - name: Build and fuzz
+        env:
+          CC: clang-18
+        run: eng/ci/fuzz.sh
+      - name: Upload crash inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: build/fuzz/artifacts/
+
   hardened:
     name: hardened release
     runs-on: ubuntu-24.04

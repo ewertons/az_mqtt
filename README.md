@@ -152,6 +152,7 @@ Warnings in our code are errors in every job.
 | Linux | {OpenSSL, mbedTLS 3.6.7 / 4.1.1 / 4.2.0, no TLS} × {gcc, clang}: build, link-isolation check, all tests (mqttv3, mqttv5, and both linked together), including e2e against a local Mosquitto (plain and TLS) |
 | Single version | Builds and tests with only mqttv3 or only mqttv5 enabled |
 | Sanitizers | ASan + UBSan (+ leak check) over all tests |
+| Fuzz | libFuzzer + ASan + UBSan, 60 s per target: client receive path (mqttv3, mqttv5, optionally over WebSockets), proxy and WebSocket handshakes; see [tests/fuzz](tests/fuzz/README.md) |
 | Hardened | Release build with `_FORTIFY_SOURCE=3`, stack protector, CET, full RELRO and PIE, verified on every executable, then all tests |
 | Windows | MSVC `/W4 /WX`, Schannel, all tests |
 
@@ -161,6 +162,7 @@ The Linux steps are scripts, so the same run works locally:
 eng/ci/start-broker.sh                                   # Mosquitto on 1883 (plain) and 8883 (TLS)
 eng/ci/install-mbedtls.sh 3.6.7 "$PWD/build/mbedtls"     # only for the mbedTLS backend
 MBEDTLS_PREFIX="$PWD/build/mbedtls" eng/ci/build-and-test.sh mbedtls   # [debug|asan|hardened]
+CC=clang FUZZ_SECONDS=600 eng/ci/fuzz.sh                    # libFuzzer targets
 ```
 
 ## License
