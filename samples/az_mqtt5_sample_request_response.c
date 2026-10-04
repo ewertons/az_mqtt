@@ -106,8 +106,16 @@ static void on_publish(az_mqtt5_client* client, az_mqtt5_publish_data const* pub
     response.payload = AZ_SPAN_FROM_STR("{\"status\":\"ok\"}");
     response.content_type = AZ_SPAN_FROM_STR("application/json");
     response.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
-    az_result const rc = az_mqtt5_client_publish(client, &response, &s_response_packet_id);
+    uint16_t packet_id = 0;
+    az_result const rc = az_mqtt5_client_publish(client, &response, &packet_id);
     printf("Response sent: 0x%08X\n", (unsigned)rc);
+    // Others may send requests too: only the response to this sample's request is tracked.
+    if (az_result_succeeded(rc) && s_request_sent && s_response_packet_id == 0
+        && az_span_is_content_equal(publish->response_topic, s_response_topic)
+        && az_span_is_content_equal(publish->correlation_data, AZ_SPAN_FROM_STR(CORRELATION_DATA)))
+    {
+      s_response_packet_id = packet_id;
+    }
   }
   else if (s_request_sent && az_span_is_content_equal(publish->topic, s_response_topic))
   {
