@@ -7,7 +7,7 @@ target_include_directories(az_mqtt_sample_common PUBLIC ${CMAKE_CURRENT_SOURCE_D
 target_link_libraries(az_mqtt_sample_common PUBLIC az::core)
 az_mqtt_apply_warnings(az_mqtt_sample_common)
 
-set(_samples connect tls nonblocking)
+set(_samples connect qos tls nonblocking)
 if(AZ_MQTT_ENABLE_WEBSOCKETS)
   list(APPEND _samples websocket)
 endif()

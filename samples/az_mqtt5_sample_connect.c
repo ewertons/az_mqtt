@@ -16,6 +16,7 @@
 
 #include <azure/core/az_span.h>
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -37,6 +38,12 @@ static az_mqtt5_user_property s_suback_user_properties[8];
 static az_mqtt5_user_property s_ack_user_properties[8];
 static az_mqtt5_user_property s_disconnect_user_properties[8];
 
+#define TOPIC "az-mqtt-sample/mqtt5/hello"
+
+static bool s_subscribed;
+static bool s_acknowledged;
+static bool s_received;
+
 // ──────────────────────── Callbacks ──────────────────────────
 
 static void on_connack(az_mqtt5_client* client, az_mqtt5_connack_data const* connack)
@@ -55,6 +62,8 @@ static void on_suback(az_mqtt5_client* client, az_mqtt5_suback_data const* subac
   for (int32_t i = 0; i < suback->reason_code_count; i++)
   {
     printf("%s0x%02X", i > 0 ? ", " : "", (unsigned)suback->reason_codes[i]);
+    // Reason codes 0x80 and above refuse the subscription.
+    s_subscribed = suback->reason_codes[i] < AZ_MQTT5_REASON_UNSPECIFIED_ERROR;
   }
   printf("]\n");
 }
@@ -63,6 +72,8 @@ static void on_puback(az_mqtt5_client* client, az_mqtt5_ack_data const* ack)
 {
   (void)client;
   printf("[PUBACK] packet_id=%u reason=0x%02X\n", ack->packet_id, (unsigned)ack->reason_code);
+  s_acknowledged
+      = az_result_succeeded(ack->status) && ack->reason_code < AZ_MQTT5_REASON_UNSPECIFIED_ERROR;
 }
 
 static void on_publish(az_mqtt5_client* client, az_mqtt5_publish_data const* publish)
@@ -75,6 +86,7 @@ static void on_publish(az_mqtt5_client* client, az_mqtt5_publish_data const* pub
       (int)publish->qos,
       az_span_size(publish->payload),
       (char const*)az_span_ptr(publish->payload));
+  s_received = s_received || az_span_is_content_equal(publish->topic, AZ_SPAN_FROM_STR(TOPIC));
 }
 
 static void on_disconnect(az_mqtt5_client* client, az_mqtt5_disconnect_data const* disconnect)
@@ -163,7 +175,7 @@ int main(void)
   printf("Subscribe sent (packet_id=%u): 0x%08X\n", packet_id, (unsigned)rc);
 
   az_mqtt5_publish_options message = az_mqtt5_publish_options_default();
-  message.topic = AZ_SPAN_FROM_STR("az-mqtt-sample/mqtt5/hello");
+  message.topic = AZ_SPAN_FROM_STR(TOPIC);
   message.payload = AZ_SPAN_FROM_STR("Hello from az_mqtt5_client");
   message.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
   message.payload_format_indicator = 1; // UTF-8 text.
@@ -174,7 +186,9 @@ int main(void)
   }
 
   // SUBACK, PUBACK and the message echoed back by the broker arrive here.
-  for (int i = 0; i < 5 && az_result_succeeded(rc); i++)
+  for (int i = 0;
+       i < 5 && az_result_succeeded(rc) && !(s_subscribed && s_acknowledged && s_received);
+       i++)
   {
     rc = az_mqtt5_client_process_loop(&client, 1000);
   }
@@ -182,9 +196,20 @@ int main(void)
   {
     printf("ERROR: 0x%08X\n", (unsigned)rc);
   }
+  else if (!(s_subscribed && s_acknowledged && s_received))
+  {
+    printf(
+        "ERROR: subscribed=%d acknowledged=%d received=%d\n",
+        s_subscribed,
+        s_acknowledged,
+        s_received);
+  }
 
   az_result const disconnect_rc
       = az_mqtt5_client_disconnect(&client, AZ_MQTT5_REASON_NORMAL_DISCONNECTION);
   printf("Disconnected: 0x%08X\n", (unsigned)disconnect_rc);
-  return az_result_succeeded(rc) && az_result_succeeded(disconnect_rc) ? 0 : 1;
+  return az_result_succeeded(rc) && s_subscribed && s_acknowledged && s_received
+          && az_result_succeeded(disconnect_rc)
+      ? 0
+      : 1;
 }

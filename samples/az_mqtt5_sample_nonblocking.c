@@ -3,9 +3,11 @@
 
 /**
  * @file az_mqtt5_sample_nonblocking.c
- * @brief Sample: drive an MQTT 5.0 client from an application loop that never blocks for long:
- * connect with connect_start(), then let process_loop() progress the connect, sends and receives
- * while the loop does its own work. Publishes three QoS 1 messages and waits for their PUBACKs.
+ * @brief Sample: drive an MQTT 5.0 client from an application loop: connect_start() does not
+ * wait for the connection, and process_loop() progresses it and receives, waiting at most 100 ms
+ * per call, while the loop does its own work. Publishes three QoS 1 messages and waits for their
+ * PUBACKs. Sends (e.g. publish()) are synchronous: bounded by AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS,
+ * they wait only when the socket send buffer is full.
  *
  * Settings: see az_mqtt_sample_common.h (default port 1883).
  */
@@ -30,6 +32,7 @@ static az_mqtt_sample_transport_storage s_transport_storage;
 static az_mqtt_inflight_entry s_inflight[8];
 static az_mqtt5_user_property s_ack_user_properties[8];
 
+static int s_pubacks;
 static int s_acknowledged;
 
 static void on_connack(az_mqtt5_client* client, az_mqtt5_connack_data const* connack)
@@ -42,7 +45,12 @@ static void on_puback(az_mqtt5_client* client, az_mqtt5_ack_data const* ack)
 {
   (void)client;
   printf("[PUBACK] packet_id=%u reason=0x%02X\n", ack->packet_id, (unsigned)ack->reason_code);
-  s_acknowledged++;
+  s_pubacks++;
+  // Reason codes 0x80 and above reject the PUBLISH.
+  if (az_result_succeeded(ack->status) && ack->reason_code < AZ_MQTT5_REASON_UNSPECIFIED_ERROR)
+  {
+    s_acknowledged++;
+  }
 }
 
 // Called whenever the session ends: after disconnect() (AZ_OK) or on a failure.
@@ -113,18 +121,19 @@ int main(void)
     return 1;
   }
 
-  // The application loop: each iteration waits at most 100 ms in process_loop().
+  // The application loop. Connecting is bounded by connect_start() (10 s); once connected, the
+  // PUBACKs get at most 50 iterations.
   int published = 0;
   int iterations = 0;
-  while (az_result_succeeded(rc) && s_acknowledged < MESSAGE_COUNT && iterations < 100)
+  while (az_result_succeeded(rc) && s_pubacks < MESSAGE_COUNT && iterations < 50)
   {
-    iterations++;
     rc = az_mqtt5_client_process_loop(&client, 100);
     if (az_result_failed(rc)
         || az_mqtt5_client_get_state(&client) != AZ_MQTT_CLIENT_STATE_CONNECTED)
     {
       continue; // Failed (on_connection_closed reported it), or still connecting.
     }
+    iterations++;
 
     if (published < MESSAGE_COUNT)
     {
@@ -142,9 +151,16 @@ int main(void)
     }
     // ... the application's own work goes here ...
   }
-  printf("%d iterations, %d PUBACK(s)\n", iterations, s_acknowledged);
+  printf("%d of %d PUBLISH acknowledged\n", s_acknowledged, MESSAGE_COUNT);
+  if (az_result_failed(rc))
+  {
+    printf("ERROR: 0x%08X\n", (unsigned)rc);
+  }
 
   az_result const disconnect_rc
       = az_mqtt5_client_disconnect(&client, AZ_MQTT5_REASON_NORMAL_DISCONNECTION);
-  return s_acknowledged == MESSAGE_COUNT && az_result_succeeded(disconnect_rc) ? 0 : 1;
+  return az_result_succeeded(rc) && s_acknowledged == MESSAGE_COUNT
+          && az_result_succeeded(disconnect_rc)
+      ? 0
+      : 1;
 }

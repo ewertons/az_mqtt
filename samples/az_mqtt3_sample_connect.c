@@ -16,6 +16,7 @@
 
 #include <azure/core/az_span.h>
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -24,6 +25,12 @@ static uint8_t s_send_buffer[AZ_MQTT_SAMPLE_BUFFER_SIZE];
 static uint8_t s_receive_buffer[AZ_MQTT_SAMPLE_BUFFER_SIZE];
 static az_mqtt_sample_transport_storage s_transport_storage;
 static az_mqtt_inflight_entry s_inflight[8];
+
+#define TOPIC "az-mqtt-sample/mqtt3/hello"
+
+static bool s_subscribed;
+static bool s_acknowledged;
+static bool s_received;
 
 // ──────────────────────── Callbacks ──────────────────────────
 
@@ -42,7 +49,9 @@ static void on_suback(az_mqtt3_client* client, az_mqtt3_suback_data const* subac
   printf("[SUBACK] packet_id=%u return_codes=[", suback->packet_id);
   for (int32_t i = 0; i < az_span_size(suback->return_codes); i++)
   {
-    printf("%s0x%02X", i > 0 ? ", " : "", (unsigned)az_span_ptr(suback->return_codes)[i]);
+    uint8_t const code = az_span_ptr(suback->return_codes)[i];
+    printf("%s0x%02X", i > 0 ? ", " : "", (unsigned)code);
+    s_subscribed = code != AZ_MQTT3_SUBACK_FAILURE;
   }
   printf("]\n");
 }
@@ -50,7 +59,8 @@ static void on_suback(az_mqtt3_client* client, az_mqtt3_suback_data const* subac
 static void on_puback(az_mqtt3_client* client, az_mqtt3_ack_data const* ack)
 {
   (void)client;
-  printf("[PUBACK] packet_id=%u\n", ack->packet_id);
+  printf("[PUBACK] packet_id=%u status=0x%08X\n", ack->packet_id, (unsigned)ack->status);
+  s_acknowledged = az_result_succeeded(ack->status);
 }
 
 static void on_publish(az_mqtt3_client* client, az_mqtt3_publish_data const* publish)
@@ -63,6 +73,7 @@ static void on_publish(az_mqtt3_client* client, az_mqtt3_publish_data const* pub
       (int)publish->qos,
       az_span_size(publish->payload),
       (char const*)az_span_ptr(publish->payload));
+  s_received = s_received || az_span_is_content_equal(publish->topic, AZ_SPAN_FROM_STR(TOPIC));
 }
 
 // ──────────────────────── Main ───────────────────────────────
@@ -137,7 +148,7 @@ int main(void)
   printf("Subscribe sent (packet_id=%u): 0x%08X\n", packet_id, (unsigned)rc);
 
   az_mqtt3_publish_options message = az_mqtt3_publish_options_default();
-  message.topic = AZ_SPAN_FROM_STR("az-mqtt-sample/mqtt3/hello");
+  message.topic = AZ_SPAN_FROM_STR(TOPIC);
   message.payload = AZ_SPAN_FROM_STR("Hello from az_mqtt3_client");
   message.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
   if (az_result_succeeded(rc))
@@ -147,7 +158,9 @@ int main(void)
   }
 
   // SUBACK, PUBACK and the message echoed back by the broker arrive here.
-  for (int i = 0; i < 5 && az_result_succeeded(rc); i++)
+  for (int i = 0;
+       i < 5 && az_result_succeeded(rc) && !(s_subscribed && s_acknowledged && s_received);
+       i++)
   {
     rc = az_mqtt3_client_process_loop(&client, 1000);
   }
@@ -155,8 +168,19 @@ int main(void)
   {
     printf("ERROR: 0x%08X\n", (unsigned)rc);
   }
+  else if (!(s_subscribed && s_acknowledged && s_received))
+  {
+    printf(
+        "ERROR: subscribed=%d acknowledged=%d received=%d\n",
+        s_subscribed,
+        s_acknowledged,
+        s_received);
+  }
 
   az_result const disconnect_rc = az_mqtt3_client_disconnect(&client);
   printf("Disconnected: 0x%08X\n", (unsigned)disconnect_rc);
-  return az_result_succeeded(rc) && az_result_succeeded(disconnect_rc) ? 0 : 1;
+  return az_result_succeeded(rc) && s_subscribed && s_acknowledged && s_received
+          && az_result_succeeded(disconnect_rc)
+      ? 0
+      : 1;
 }

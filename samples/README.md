@@ -1,11 +1,14 @@
 # Samples
 
-Each sample is one short C file using the public API directly. All memory is caller storage: no
-allocation. `az_mqtt_sample_common.h/.c` only reads the settings from environment variables.
+Each sample is one short C file using the public API directly. The samples and the MQTT clients
+allocate nothing: all their memory is caller storage. The TLS libraries may allocate internally
+(OpenSSL, mbedTLS, Schannel). `az_mqtt_sample_common.h/.c` only reads the settings from environment
+variables.
 
 | Sample | mqttv3 | mqttv5 | Shows |
 |---|---|---|---|
 | connect | [az_mqtt3_sample_connect.c](az_mqtt3_sample_connect.c) | [az_mqtt5_sample_connect.c](az_mqtt5_sample_connect.c) | TCP; subscribe, publish, receive the message back, disconnect |
+| qos | [az_mqtt3_sample_qos.c](az_mqtt3_sample_qos.c) | [az_mqtt5_sample_qos.c](az_mqtt5_sample_qos.c) | QoS 0, 1 and 2 publish and receive; PUBACK, PUBREC/PUBREL/PUBCOMP |
 | tls | [az_mqtt3_sample_tls.c](az_mqtt3_sample_tls.c) | [az_mqtt5_sample_tls.c](az_mqtt5_sample_tls.c) | TLS; optional client certificate (mutual TLS) and HTTP CONNECT proxy; native errors |
 | websocket | [az_mqtt3_sample_websocket.c](az_mqtt3_sample_websocket.c) | [az_mqtt5_sample_websocket.c](az_mqtt5_sample_websocket.c) | MQTT over WebSockets (ws, or wss); optional proxy |
 | nonblocking | [az_mqtt3_sample_nonblocking.c](az_mqtt3_sample_nonblocking.c) | [az_mqtt5_sample_nonblocking.c](az_mqtt5_sample_nonblocking.c) | `connect_start` and `process_loop` in an application loop; QoS 1 acknowledgements |
@@ -18,7 +21,7 @@ The websocket samples are built only with `AZ_MQTT_ENABLE_WEBSOCKETS=ON` (the de
 | Variable | Meaning | Default |
 |---|---|---|
 | `AZ_MQTT_SAMPLE_HOST` | Broker host name or IP address | `localhost` |
-| `AZ_MQTT_SAMPLE_PORT` | Broker port | connect, nonblocking, request_response: 1883; tls: 8883; websocket: 80 |
+| `AZ_MQTT_SAMPLE_PORT` | Broker port | connect, qos, nonblocking, request_response: 1883; tls: 8883; websocket: 80 |
 | `AZ_MQTT_SAMPLE_CLIENT_ID` | MQTT client identifier | per sample |
 | `AZ_MQTT_SAMPLE_USERNAME`, `AZ_MQTT_SAMPLE_PASSWORD` | MQTT credentials | none |
 | `AZ_MQTT_SAMPLE_TLS` | `1`: TLS for the websocket samples (wss) | `0` |
@@ -50,6 +53,7 @@ The websocket samples are built only with `AZ_MQTT_ENABLE_WEBSOCKETS=ON` (the de
 
    ```bash
    build/samples/az_mqtt5_sample_connect
+   build/samples/az_mqtt5_sample_qos
    build/samples/az_mqtt5_sample_nonblocking
    build/samples/az_mqtt5_sample_request_response
    AZ_MQTT_SAMPLE_CA_CERT=tests/broker/certs/ca.crt build/samples/az_mqtt5_sample_tls

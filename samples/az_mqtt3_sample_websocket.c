@@ -28,6 +28,7 @@ static az_mqtt_sample_transport_storage s_transport_storage;
 static az_mqtt_websocket s_websocket;
 static az_mqtt_inflight_entry s_inflight[8];
 
+static bool s_puback_received;
 static bool s_acknowledged;
 
 static void on_connack(az_mqtt3_client* client, az_mqtt3_connack_data const* connack)
@@ -39,8 +40,9 @@ static void on_connack(az_mqtt3_client* client, az_mqtt3_connack_data const* con
 static void on_puback(az_mqtt3_client* client, az_mqtt3_ack_data const* ack)
 {
   (void)client;
-  printf("[PUBACK] packet_id=%u\n", ack->packet_id);
-  s_acknowledged = true;
+  printf("[PUBACK] packet_id=%u status=0x%08X\n", ack->packet_id, (unsigned)ack->status);
+  s_puback_received = true;
+  s_acknowledged = az_result_succeeded(ack->status);
 }
 
 // Each platform error behind a failure, e.g. an X.509 verification error or a proxy's HTTP status.
@@ -148,17 +150,21 @@ int main(void)
   rc = az_mqtt3_client_publish(&client, &message, &packet_id);
   printf("Publish sent (packet_id=%u): 0x%08X\n", packet_id, (unsigned)rc);
 
-  for (int i = 0; i < 5 && az_result_succeeded(rc) && !s_acknowledged; i++)
+  for (int i = 0; i < 5 && az_result_succeeded(rc) && !s_puback_received; i++)
   {
     rc = az_mqtt3_client_process_loop(&client, 1000);
   }
-  if (az_result_succeeded(rc) && !s_acknowledged)
+  if (az_result_failed(rc))
   {
-    printf("ERROR: no PUBACK\n");
+    printf("ERROR: 0x%08X\n", (unsigned)rc);
+  }
+  else if (!s_acknowledged)
+  {
+    printf("ERROR: PUBLISH not acknowledged\n");
   }
 
   // Ends the WebSocket with a close frame (and TLS with close_notify).
   az_result const disconnect_rc = az_mqtt3_client_disconnect(&client);
   printf("Disconnected: 0x%08X\n", (unsigned)disconnect_rc);
-  return s_acknowledged && az_result_succeeded(disconnect_rc) ? 0 : 1;
+  return az_result_succeeded(rc) && s_acknowledged && az_result_succeeded(disconnect_rc) ? 0 : 1;
 }

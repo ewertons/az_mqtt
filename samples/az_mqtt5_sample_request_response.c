@@ -24,7 +24,8 @@
 #define SPAN_FROM_ARRAY(ARRAY) AZ_SPAN_FROM_BUFFER(*(uint8_t(*)[sizeof(ARRAY)])(ARRAY))
 
 #define REQUEST_TOPIC "az-mqtt-sample/mqtt5/request"
-#define RESPONSE_TOPIC "az-mqtt-sample/mqtt5/response"
+#define RESPONSE_TOPIC_PREFIX "az-mqtt-sample/mqtt5/response/"
+#define CORRELATION_DATA "request-1"
 
 static uint8_t s_send_buffer[AZ_MQTT_SAMPLE_BUFFER_SIZE];
 static uint8_t s_receive_buffer[AZ_MQTT_SAMPLE_BUFFER_SIZE];
@@ -33,14 +34,24 @@ static az_mqtt_inflight_entry s_inflight[8];
 static az_mqtt5_user_property s_publish_user_properties[8];
 static az_mqtt5_reason_code s_suback_reason_codes[8];
 
+// RESPONSE_TOPIC_PREFIX + client id: only this client's responses arrive there.
+static char s_response_topic_buffer[128];
+static az_span s_response_topic;
+
 static bool s_subscribed;
+static bool s_request_sent;
 static bool s_response_received;
 
 static void on_suback(az_mqtt5_client* client, az_mqtt5_suback_data const* suback)
 {
   (void)client;
   printf("[SUBACK] packet_id=%u\n", suback->packet_id);
-  s_subscribed = true;
+  s_subscribed = suback->reason_code_count == 2;
+  for (int32_t i = 0; i < suback->reason_code_count; i++)
+  {
+    // Reason codes 0x80 and above refuse the subscription.
+    s_subscribed = s_subscribed && suback->reason_codes[i] < AZ_MQTT5_REASON_UNSPECIFIED_ERROR;
+  }
 }
 
 static void on_publish(az_mqtt5_client* client, az_mqtt5_publish_data const* publish)
@@ -77,11 +88,11 @@ static void on_publish(az_mqtt5_client* client, az_mqtt5_publish_data const* pub
     az_result const rc = az_mqtt5_client_publish(client, &response, NULL);
     printf("Response sent: 0x%08X\n", (unsigned)rc);
   }
-  else if (az_span_is_content_equal(publish->topic, AZ_SPAN_FROM_STR(RESPONSE_TOPIC)))
+  else if (s_request_sent && az_span_is_content_equal(publish->topic, s_response_topic))
   {
     // Requester: the Correlation Data tells which request this answers.
-    s_response_received
-        = az_span_is_content_equal(publish->correlation_data, AZ_SPAN_FROM_STR("request-1"));
+    s_response_received = s_response_received
+        || az_span_is_content_equal(publish->correlation_data, AZ_SPAN_FROM_STR(CORRELATION_DATA));
   }
 }
 
@@ -143,12 +154,25 @@ int main(void)
     return 1;
   }
 
+  int const size = snprintf(
+      s_response_topic_buffer,
+      sizeof(s_response_topic_buffer),
+      RESPONSE_TOPIC_PREFIX "%.*s",
+      az_span_size(settings.client_id),
+      (char const*)az_span_ptr(settings.client_id));
+  if (size < 0 || size >= (int)sizeof(s_response_topic_buffer))
+  {
+    printf("ERROR: client id too long\n");
+    return 1;
+  }
+  s_response_topic = az_span_create((uint8_t*)s_response_topic_buffer, size);
+
   // The responder listens for requests, the requester for responses.
   az_mqtt5_subscription subscriptions[2];
   memset(subscriptions, 0, sizeof(subscriptions));
   subscriptions[0].topic_filter = AZ_SPAN_FROM_STR(REQUEST_TOPIC);
   subscriptions[0].qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
-  subscriptions[1].topic_filter = AZ_SPAN_FROM_STR(RESPONSE_TOPIC);
+  subscriptions[1].topic_filter = s_response_topic;
   subscriptions[1].qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
   rc = az_mqtt5_client_subscribe(&client, subscriptions, 2, NULL);
   for (int i = 0; i < 5 && az_result_succeeded(rc) && !s_subscribed; i++)
@@ -164,23 +188,37 @@ int main(void)
 
     az_mqtt5_publish_options request = az_mqtt5_publish_options_default();
     request.topic = AZ_SPAN_FROM_STR(REQUEST_TOPIC);
-    request.response_topic = AZ_SPAN_FROM_STR(RESPONSE_TOPIC);
-    request.correlation_data = AZ_SPAN_FROM_STR("request-1");
+    request.response_topic = s_response_topic;
+    request.correlation_data = AZ_SPAN_FROM_STR(CORRELATION_DATA);
     request.user_properties = properties;
     request.user_property_count = 1;
     request.payload = AZ_SPAN_FROM_STR("{}");
     request.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
     rc = az_mqtt5_client_publish(&client, &request, NULL);
     printf("Request sent: 0x%08X\n", (unsigned)rc);
+    s_request_sent = az_result_succeeded(rc);
   }
 
-  for (int i = 0; i < 5 && az_result_succeeded(rc) && !s_response_received; i++)
+  // Each process_loop() returns once it has handled what arrived: PUBACKs, request, response.
+  for (int i = 0; i < 10 && az_result_succeeded(rc) && !s_response_received; i++)
   {
     rc = az_mqtt5_client_process_loop(&client, 1000);
   }
-  printf(s_response_received ? "Response received\n" : "ERROR: no response\n");
+  if (az_result_failed(rc))
+  {
+    printf("ERROR: 0x%08X\n", (unsigned)rc);
+  }
+  else if (!s_subscribed)
+  {
+    printf("ERROR: not subscribed\n");
+  }
+  else
+  {
+    printf(s_response_received ? "Response received\n" : "ERROR: no response\n");
+  }
 
   az_result const disconnect_rc
       = az_mqtt5_client_disconnect(&client, AZ_MQTT5_REASON_NORMAL_DISCONNECTION);
-  return s_response_received && az_result_succeeded(disconnect_rc) ? 0 : 1;
+  bool const ok = az_result_succeeded(rc) && s_response_received;
+  return ok && az_result_succeeded(disconnect_rc) ? 0 : 1;
 }

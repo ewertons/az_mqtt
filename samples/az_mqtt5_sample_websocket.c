@@ -31,6 +31,7 @@ static az_mqtt_websocket s_websocket;
 static az_mqtt_inflight_entry s_inflight[8];
 static az_mqtt5_user_property s_ack_user_properties[8];
 
+static bool s_puback_received;
 static bool s_acknowledged;
 
 static void on_connack(az_mqtt5_client* client, az_mqtt5_connack_data const* connack)
@@ -43,7 +44,10 @@ static void on_puback(az_mqtt5_client* client, az_mqtt5_ack_data const* ack)
 {
   (void)client;
   printf("[PUBACK] packet_id=%u reason=0x%02X\n", ack->packet_id, (unsigned)ack->reason_code);
-  s_acknowledged = true;
+  s_puback_received = true;
+  // Reason codes 0x80 and above reject the PUBLISH.
+  s_acknowledged
+      = az_result_succeeded(ack->status) && ack->reason_code < AZ_MQTT5_REASON_UNSPECIFIED_ERROR;
 }
 
 // Each platform error behind a failure, e.g. an X.509 verification error or a proxy's HTTP status.
@@ -151,18 +155,22 @@ int main(void)
   rc = az_mqtt5_client_publish(&client, &message, &packet_id);
   printf("Publish sent (packet_id=%u): 0x%08X\n", packet_id, (unsigned)rc);
 
-  for (int i = 0; i < 5 && az_result_succeeded(rc) && !s_acknowledged; i++)
+  for (int i = 0; i < 5 && az_result_succeeded(rc) && !s_puback_received; i++)
   {
     rc = az_mqtt5_client_process_loop(&client, 1000);
   }
-  if (az_result_succeeded(rc) && !s_acknowledged)
+  if (az_result_failed(rc))
   {
-    printf("ERROR: no PUBACK\n");
+    printf("ERROR: 0x%08X\n", (unsigned)rc);
+  }
+  else if (!s_acknowledged)
+  {
+    printf("ERROR: PUBLISH not acknowledged\n");
   }
 
   // Ends the WebSocket with a close frame (and TLS with close_notify).
   az_result const disconnect_rc
       = az_mqtt5_client_disconnect(&client, AZ_MQTT5_REASON_NORMAL_DISCONNECTION);
   printf("Disconnected: 0x%08X\n", (unsigned)disconnect_rc);
-  return s_acknowledged && az_result_succeeded(disconnect_rc) ? 0 : 1;
+  return az_result_succeeded(rc) && s_acknowledged && az_result_succeeded(disconnect_rc) ? 0 : 1;
 }
