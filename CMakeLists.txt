@@ -53,14 +53,16 @@ set_property(TARGET az_core APPEND PROPERTY INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
 # own targets only (never to azure-sdk-for-c or cmocka).
 function(az_mqtt_apply_warnings target)
   if(MSVC)
-    target_compile_options(${target} PRIVATE /W4)
+    # C4061: an enumerator without a case label, even with a default (as -Wswitch-enum).
+    target_compile_options(${target} PRIVATE /W4 /w14061)
     if(AZ_MQTT_WARNINGS_AS_ERRORS)
       target_compile_options(${target} PRIVATE /WX)
     endif()
   else()
     target_compile_options(${target} PRIVATE
       -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes
-      -Wformat=2 -Wcast-qual -Wvla -Wundef -Wnull-dereference -Wimplicit-fallthrough)
+      -Wformat=2 -Wcast-qual -Wvla -Wundef -Wnull-dereference -Wimplicit-fallthrough
+      -Wswitch-enum)
     if(AZ_MQTT_WARNINGS_AS_ERRORS)
       target_compile_options(${target} PRIVATE -Werror)
     endif()
