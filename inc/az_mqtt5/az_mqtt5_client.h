@@ -200,8 +200,8 @@ typedef struct
    * - Session Present: each PUBREL is resent, then each stored PUBLISH, oldest first, with DUP, its
    *   packet identifier and the Message Expiry Interval left, within the new Receive Maximum (the
    *   rest as acknowledgements free room). Dropped instead: one whose Message Expiry Interval
-   *   elapsed (AZ_MQTT_ERROR_MESSAGE_EXPIRED; MQTT itself would resend it), or over the new
-   *   Maximum Packet Size (AZ_MQTT_ERROR_PACKET_TOO_LARGE).
+   *   elapsed (AZ_MQTT_ERROR_MESSAGE_EXPIRED; MQTT itself would resend it), or a PUBLISH or PUBREL
+   *   over the new Maximum Packet Size (AZ_MQTT_ERROR_PACKET_TOO_LARGE).
    * - Otherwise each outgoing QoS 1/2 exchange is dropped (AZ_MQTT_ERROR_SESSION_NOT_RESUMED).
    *
    * Each drop is logged and reported to on_puback (QoS 1) or on_pubcomp (QoS 2) with that status.

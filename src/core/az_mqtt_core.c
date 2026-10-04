@@ -631,18 +631,31 @@ az_result _az_mqtt_core_inflight_resume(
     uint8_t const k = entries[i]._internal.kind;
     if (k == _AZ_MQTT_INFLIGHT_PUBLISH_QOS1 || k == _AZ_MQTT_INFLIGHT_PUBLISH_QOS2)
     {
-      entries[i]._internal.mark = _AZ_MQTT_INFLIGHT_MARK_RESEND;
+      entries[i]._internal.mark = _AZ_MQTT_INFLIGHT_MARK_RESEND; // Before any callback.
     }
-    if (k == _AZ_MQTT_INFLIGHT_PUBREL) // Oldest first: entries are in reservation order.
+  }
+  // Callbacks only add PUBLISH entries: the PUBRELs are those of the earlier connection.
+  for (int32_t i = 0; i < count; i++)
+  {
+    if (entries[i]._internal.kind != _AZ_MQTT_INFLIGHT_PUBREL)
     {
-      az_span send_buf = _S(core).send_buffer;
-      az_result rc = encode_pubrel(&send_buf, entries[i]._internal.packet_id);
-      if (az_result_succeeded(rc))
-      {
-        rc = _az_mqtt_core_send_request(core, send_buf);
-      }
-      _az_RETURN_IF_FAILED(rc);
+      continue;
     }
+    az_span send_buf = _S(core).send_buffer;
+    _az_RETURN_IF_FAILED(encode_pubrel(&send_buf, entries[i]._internal.packet_id));
+    int32_t const size = az_span_size(_S(core).send_buffer) - az_span_size(send_buf);
+    if (_S(core).server_maximum_packet_size > 0
+        && (uint32_t)size > _S(core).server_maximum_packet_size)
+    {
+      // [MQTT-3.1.2-25]: not sent. The exchange cannot complete: dropped, the connection kept.
+      if (!_drop(core, &entries[i], AZ_MQTT_ERROR_PACKET_TOO_LARGE, dropped, generation))
+      {
+        return AZ_OK;
+      }
+      i--; // The next one moved into entries[i].
+      continue;
+    }
+    _az_RETURN_IF_FAILED(_az_mqtt_core_send_request(core, send_buf));
   }
   return _az_mqtt_core_inflight_resend_due(core, publish_limit, dropped);
 }

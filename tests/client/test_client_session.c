@@ -1347,6 +1347,70 @@ static void a_resend_over_the_new_maximum_packet_size_is_dropped(void** state)
   _teardown(&f);
 }
 
+static void a_resent_pubrel_over_the_new_maximum_packet_size_is_dropped(void** state)
+{
+  (void)state;
+  fixture f;
+  uint16_t ids[3];
+  _setup_resume(&f, ids, 4);
+  test_server_set_maximum_packet_size(f.server, 3); // A PUBREL is 4 bytes.
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+  assert_int_equal(g.drops, 3); // The PUBREL first, then both PUBLISH: none fits.
+  uint16_t const expected[3] = { ids[1], ids[0], ids[2] };
+  for (int i = 0; i < 3; i++)
+  {
+    assert_int_equal(g.drop_ids[i], expected[i]);
+    assert_int_equal(g.drop_status[i], AZ_MQTT_ERROR_PACKET_TOO_LARGE);
+  }
+  assert_int_equal(g.drop_qos1, 2);
+  char log[256];
+  _take_log(&f, 0, log, (int)sizeof(log));
+  assert_string_equal(log, "");
+  // Nothing left to fail the next resume.
+  assert_int_equal(AZ_MQTT_TEST_DISCONNECT(&f.client), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  assert_int_equal(g.drops, 3);
+  _teardown(&f);
+}
+
+static void an_acknowledgement_is_reported_before_a_resend_it_makes_room_for(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.pubrec_only = true;
+  so.pubcomp_delay_ms = 1500; // The PUBLISH below expires meanwhile.
+  s_persistent = true;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  AZ_MQTT_T(publish_options) p = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE);
+  p.message_expiry_interval = 1;
+  uint16_t expiring;
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &p, &expiring), AZ_OK); // Not acknowledged.
+  p = _publish_options(AZ_MQTT_QOS_EXACTLY_ONCE);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &p, NULL), AZ_OK);
+  PUMP_UNTIL(&f, test_server_pubrels(f.server) == 1); // At PUBREL.
+  assert_int_equal(AZ_MQTT_TEST_DISCONNECT(&f.client), AZ_OK);
+  test_server_set_session_present(f.server, true);
+  test_server_set_receive_maximum(f.server, 1); // The PUBREL takes it: the PUBLISH waits.
+  test_server_set_ack_publishes(f.server, true);
+  g.disconnect_on_drop = true;
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  assert_int_equal(g.drops, 0);
+  // PUBCOMP (late): on_pubcomp, then the now expired PUBLISH is dropped; that report disconnects.
+  int64_t const end = _now_ms() + 3000;
+  while (AZ_MQTT_T(client_get_state)(&f.client) == AZ_MQTT_CLIENT_STATE_CONNECTED && _now_ms() < end)
+  {
+    _ignore(AZ_MQTT_T(client_process_loop)(&f.client, 20));
+  }
+  assert_int_equal(g.pubcomps, 1);
+  assert_int_equal(g.drops, 1);
+  assert_int_equal(g.drop_ids[0], expiring);
+  assert_int_equal(g.drop_status[0], AZ_MQTT_ERROR_MESSAGE_EXPIRED);
+  _teardown(&f);
+}
+
 static void a_topic_alias_is_refused_on_a_kept_session(void** state)
 {
   (void)state;
@@ -2153,6 +2217,8 @@ int main(void)
     cmocka_unit_test(resends_wait_for_room_under_the_new_receive_maximum),
     cmocka_unit_test(a_resend_carries_the_expiry_interval_left),
     cmocka_unit_test(a_resend_over_the_new_maximum_packet_size_is_dropped),
+    cmocka_unit_test(a_resent_pubrel_over_the_new_maximum_packet_size_is_dropped),
+    cmocka_unit_test(an_acknowledgement_is_reported_before_a_resend_it_makes_room_for),
     cmocka_unit_test(a_topic_alias_is_refused_on_a_kept_session),
 #endif
     cmocka_unit_test(inbound_qos2_duplicates_are_delivered_once),

@@ -230,7 +230,8 @@ void _az_mqtt_core_inflight_to_pubrel(az_mqtt_core* core, az_mqtt_inflight_entry
  * @brief Resume or discard the exchanges of earlier connections, on an accepted CONNACK.
  *
  * Without @p session_present each outgoing QoS 1/2 exchange is reported to @p dropped
- * (AZ_MQTT_ERROR_SESSION_NOT_RESUMED) and every entry freed. With it, each PUBREL is resent, then
+ * (AZ_MQTT_ERROR_SESSION_NOT_RESUMED) and every entry freed. With it, each PUBREL is resent (one
+ * over the server's Maximum Packet Size dropped instead: AZ_MQTT_ERROR_PACKET_TOO_LARGE), then
  * each stored PUBLISH (_az_mqtt_core_inflight_resend_due()). Stops if the session ends.
  *
  * @return A send failure (the session is closed); AZ_OK otherwise.

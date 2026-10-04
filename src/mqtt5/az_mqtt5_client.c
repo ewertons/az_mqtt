@@ -284,21 +284,16 @@ static az_result _handle_ack(az_mqtt5_client* client, az_mqtt_packet_type type, 
       return AZ_OK;
     }
   }
-  if (type != AZ_MQTT_PACKET_TYPE_PUBREL)
-  {
-    // A PUBLISH exchange ended: send what waits for resending within Receive Maximum.
-    uint32_t const generation = _CORE(client).session_generation;
-    _az_RETURN_IF_FAILED(_az_mqtt_core_inflight_resend_due(
-        core, client->_internal.server_receive_maximum, _publish_dropped));
-    if (_CORE(client).session_generation != generation)
-    {
-      return AZ_OK;
-    }
-  }
-
+  uint32_t const generation = _CORE(client).session_generation;
   if (callback != NULL)
   {
-    callback(client, &ack);
+    callback(client, &ack); // First: what follows may end the session.
+  }
+  if (type != AZ_MQTT_PACKET_TYPE_PUBREL && _CORE(client).session_generation == generation)
+  {
+    // A PUBLISH exchange ended: send what waits for resending within Receive Maximum.
+    return _az_mqtt_core_inflight_resend_due(
+        core, client->_internal.server_receive_maximum, _publish_dropped);
   }
   return AZ_OK;
 }

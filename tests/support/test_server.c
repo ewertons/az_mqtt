@@ -971,6 +971,7 @@ static void _serve(test_server* s, conn* c)
       pthread_mutex_unlock(&s->lock);
       if (ack_publishes)
       {
+        usleep((useconds_t)s->options.pubcomp_delay_ms * 1000);
         uint8_t const pubcomp[] = { 0x70, 0x02, body[0], body[1] };
         (void)_write(c, pubcomp, (int)sizeof(pubcomp));
       }

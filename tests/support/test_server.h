@@ -101,6 +101,8 @@ typedef struct
   bool hold_first_publish;
   /** @brief Answer only QoS 2 PUBLISH, with PUBREC (no PUBACK, no PUBCOMP). */
   bool pubrec_only;
+  /** @brief With ack_publishes: wait this long before each PUBCOMP. */
+  int pubcomp_delay_ms;
   /** @brief MQTT 5: reason code in the PUBRECs sent (0: success). */
   uint8_t pubrec_reason;
   /**
