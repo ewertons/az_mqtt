@@ -2,6 +2,18 @@
 # Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 # Tests of internal modules without I/O; every platform.
+
+foreach(version 3 5)
+  if(AZ_MQTT_ENABLE_MQTTV${version})
+    set(target az_mqtt${version}_test_codec_ack)
+    add_executable(${target} test_codec_ack.c)
+    target_include_directories(${target} PRIVATE ${cmocka_SOURCE_DIR}/include)
+    target_compile_definitions(${target} PRIVATE AZ_MQTT_TEST_VERSION=${version})
+    target_link_libraries(${target} PRIVATE az_mqtt::mqttv${version} cmocka)
+    az_mqtt_apply_warnings(${target})
+    add_test(NAME ${target} COMMAND ${target})
+  endif()
+endforeach()
 if(AZ_MQTT_ENABLE_PROXY)
   add_executable(az_mqtt_test_http_connect test_http_connect.c)
   target_include_directories(az_mqtt_test_http_connect PRIVATE

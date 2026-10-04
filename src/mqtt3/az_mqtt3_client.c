@@ -56,6 +56,22 @@ static az_result _send_ack(
 // Packet dispatch
 // ============================================================================
 
+/** @brief _az_mqtt_core_publish_dropped_fn: on_puback / on_pubcomp with @p status. */
+static void _publish_dropped(az_mqtt_core* core, uint16_t packet_id, bool qos1, az_result status)
+{
+  az_mqtt3_client* client = (az_mqtt3_client*)core;
+  az_mqtt3_ack_data ack;
+  memset(&ack, 0, sizeof(ack));
+  ack.packet_id = packet_id;
+  ack.status = status;
+  az_mqtt3_on_puback_fn const callback
+      = qos1 ? client->_internal.on_puback : client->_internal.on_pubcomp;
+  if (callback != NULL)
+  {
+    callback(client, &ack);
+  }
+}
+
 static az_result _handle_connack(az_mqtt3_client* client, az_span body)
 {
   az_mqtt3_connack_data connack;
@@ -67,6 +83,17 @@ static az_result _handle_connack(az_mqtt3_client* client, az_span body)
   {
     _CORE(client).state = AZ_MQTT_CLIENT_STATE_CONNECTED;
     _CORE(client).keep_alive_seconds = client->_internal.connect_options.keep_alive_seconds;
+    uint32_t const generation = _CORE(client).session_generation;
+    _az_RETURN_IF_FAILED(_az_mqtt_core_inflight_resume(
+        &client->_internal.core,
+        connack.session_present,
+        az_mqtt3_codec_encode_pubrel,
+        UINT16_MAX,
+        _publish_dropped));
+    if (_CORE(client).session_generation != generation)
+    {
+      return AZ_OK; // Ended during the resends.
+    }
   }
   if (client->_internal.on_connack != NULL)
   {
@@ -127,7 +154,7 @@ static az_result _handle_ack(az_mqtt3_client* client, az_mqtt_packet_type type, 
           = _az_mqtt_core_inflight_find_entry(core, _AZ_MQTT_INFLIGHT_PUBLISH_QOS2, ack.packet_id);
       if (entry != NULL)
       {
-        entry->_internal.kind = _AZ_MQTT_INFLIGHT_PUBREL;
+        _az_mqtt_core_inflight_to_pubrel(core, entry);
       }
       return _send_ack(client, az_mqtt3_codec_encode_pubrel, ack.packet_id);
     }
@@ -233,8 +260,12 @@ az_mqtt3_client_init(az_mqtt3_client* client, az_mqtt3_client_options const* opt
   client->_internal.on_connection_closed = options->on_connection_closed;
   client->_internal.on_transport_error = options->on_transport_error;
   client->_internal.user_context = options->user_context;
-  _az_mqtt_core_inflight_init(&client->_internal.core, options->inflight_control_buffer);
-  return AZ_OK;
+  // A session outliving the connection resends QoS 1/2 PUBLISH: they must be stored.
+  return _az_mqtt_core_inflight_init(
+      &client->_internal.core,
+      options->inflight_control_buffer,
+      options->inflight_message_buffer,
+      !options->connect_options.clean_session);
 }
 
 AZ_NODISCARD az_result az_mqtt3_client_connect_start(az_mqtt3_client* client, int32_t timeout_ms)
@@ -282,22 +313,34 @@ AZ_NODISCARD az_result az_mqtt3_client_publish(
     return AZ_MQTT_ERROR_NOT_CONNECTED;
   }
 
-  az_mqtt_inflight_entry* entry = NULL;
+  az_mqtt_core* const core = &client->_internal.core;
+  az_result rc;
   uint16_t packet_id = 0;
-  if (options->qos != AZ_MQTT_QOS_AT_MOST_ONCE)
+  if (options->qos == AZ_MQTT_QOS_AT_MOST_ONCE)
   {
+    az_span send_buf = _SEND_BUFFER(client);
+    rc = az_mqtt3_codec_encode_publish(&send_buf, options, 0);
+    rc = _az_mqtt_core_send_tracked_request(core, NULL, rc, send_buf);
+  }
+  else
+  {
+    az_span buffer;
+    _az_RETURN_IF_FAILED(_az_mqtt_core_publish_buffer(core, &buffer));
+    az_mqtt_inflight_entry* entry = NULL;
     _az_RETURN_IF_FAILED(_az_mqtt_core_inflight_reserve_entry(
-        &client->_internal.core,
+        core,
         options->qos == AZ_MQTT_QOS_AT_LEAST_ONCE ? _AZ_MQTT_INFLIGHT_PUBLISH_QOS1
                                                   : _AZ_MQTT_INFLIGHT_PUBLISH_QOS2,
         UINT16_MAX,
         &entry));
     packet_id = entry->_internal.packet_id;
+    az_span remaining = buffer;
+    rc = az_mqtt3_codec_encode_publish(&remaining, options, packet_id);
+    int64_t const deadline = options->message_expiry_interval == 0
+        ? -1
+        : az_mqtt_transport_clock_ms() + (int64_t)options->message_expiry_interval * 1000;
+    rc = _az_mqtt_core_send_publish(core, entry, rc, buffer, remaining, deadline, 0);
   }
-
-  az_span send_buf = _SEND_BUFFER(client);
-  az_result rc = az_mqtt3_codec_encode_publish(&send_buf, options, packet_id);
-  rc = _az_mqtt_core_send_tracked_request(&client->_internal.core, entry, rc, send_buf);
   if (az_result_succeeded(rc) && out_packet_id != NULL)
   {
     *out_packet_id = packet_id;

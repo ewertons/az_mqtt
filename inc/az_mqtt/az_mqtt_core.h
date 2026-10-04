@@ -23,6 +23,9 @@
 
 typedef struct az_mqtt_core az_mqtt_core;
 
+/** @brief Bytes inflight_message_buffer needs per stored PUBLISH, besides the packet. */
+#define AZ_MQTT_INFLIGHT_MESSAGE_OVERHEAD 18
+
 /**
  * @brief One entry of a client's `inflight_control_buffer`: a request awaiting acknowledgement.
  * Fields are internal.
@@ -33,6 +36,8 @@ typedef struct
   {
     uint16_t packet_id;
     uint8_t kind;
+    /** @brief From an earlier connection: 0, or a _az_mqtt_inflight_mark (resend or drop). */
+    uint8_t mark;
   } _internal;
 } az_mqtt_inflight_entry;
 
@@ -60,6 +65,10 @@ struct az_mqtt_core
     _az_mqtt_core_on_transport_error_fn on_transport_error;
     /** @brief In-flight requests: az_mqtt_inflight_entry[] (caller storage), at most UINT16_MAX. */
     az_span inflight_control_buffer;
+    /** @brief Stored PUBLISH packets awaiting acknowledgement (caller storage), oldest first. */
+    az_span inflight_message_buffer;
+    /** @brief Bytes of inflight_message_buffer in use. */
+    int32_t inflight_message_used;
     int64_t last_send_time_ms;
     int64_t last_receive_time_ms;
     /** @brief CONNECTED: when the outstanding PINGREQ was sent. CONNECTING: connect deadline (-1: none). */
@@ -79,6 +88,8 @@ struct az_mqtt_core
     bool ping_outstanding;
     /** @brief CONNECTING: the transport is up and CONNECT was sent. */
     bool connect_sent;
+    /** @brief The session outlives the connection: QoS 1/2 PUBLISH are stored for resending. */
+    bool keep_messages;
   } _internal;
 };
 

@@ -99,6 +99,10 @@ typedef struct
   bool ack_publishes;
   /** @brief With ack_publishes: never acknowledge the first PUBLISH. */
   bool hold_first_publish;
+  /** @brief Answer only QoS 2 PUBLISH, with PUBREC (no PUBACK, no PUBCOMP). */
+  bool pubrec_only;
+  /** @brief With ack_publishes: wait this long before each PUBCOMP. */
+  int pubcomp_delay_ms;
   /** @brief MQTT 5: reason code in the PUBRECs sent (0: success). */
   uint8_t pubrec_reason;
   /**
@@ -106,6 +110,13 @@ typedef struct
    * QoS 2 PUBLISH with packet id 7, PUBREL 7.
    */
   bool send_qos2_sequence;
+  /**
+   * @brief After CONNACK: on the first connection a QoS 2 PUBLISH with packet id 7; on later ones
+   * its DUP resend, then PUBREL 7.
+   */
+  bool resume_inbound_qos2;
+  /** @brief MQTT 5 CONNACK Topic Alias Maximum; 0: absent. */
+  uint16_t topic_alias_maximum;
   /** @brief After CONNACK: PUBACK, PUBCOMP, PUBREC, PUBREL, SUBACK, UNSUBACK for unused packet ids. */
   bool send_unknown_acks;
   /**
@@ -161,6 +172,28 @@ int test_server_last_pubrel_reason(test_server* server);
 /** @brief PUBCOMP packets received, and the reason code of the last (0 if absent). */
 int test_server_pubcomps(test_server* server);
 int test_server_last_pubcomp_reason(test_server* server);
+
+/**
+ * @brief Keep sessions: the CONNACKs that follow (accepted ones) set Session Present when the
+ * CONNECT has Clean Session / Clean Start 0.
+ */
+void test_server_set_session_present(test_server* server, bool present);
+
+/** @brief Change ack_publishes from now on. */
+void test_server_set_ack_publishes(test_server* server, bool ack);
+
+/** @brief MQTT 5 Receive Maximum of the CONNACKs that follow (0: absent). */
+void test_server_set_receive_maximum(test_server* server, uint16_t receive_maximum);
+
+/** @brief MQTT 5 Maximum Packet Size of the CONNACKs that follow (0: absent). */
+void test_server_set_maximum_packet_size(test_server* server, uint32_t maximum_packet_size);
+
+/**
+ * @brief PUBLISH and PUBREL received since the last call, in order, as "P<qos>:<id>[d][x<s>] "
+ * (d: DUP; x: MQTT 5 Message Expiry Interval) and "R:<id> "; copied to @p out (truncated to
+ * @p size) and cleared.
+ */
+void test_server_take_log(test_server* server, char* out, int size);
 
 /** @brief Pongs "hi" received (answers to ws_fragment pings). */
 int test_server_ws_pongs(test_server* server);

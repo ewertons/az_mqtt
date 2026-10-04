@@ -249,6 +249,11 @@ typedef struct
   az_mqtt5_user_property* user_properties;
   int32_t user_property_count;
   int32_t user_property_capacity;
+  /**
+   * @brief AZ_OK: received. Otherwise why an outgoing exchange was dropped unacknowledged
+   * (reason_code then 0x95 for AZ_MQTT_ERROR_PACKET_TOO_LARGE, else 0x80).
+   */
+  az_result status;
 } az_mqtt5_ack_data;
 
 // ──────────────────────── SUBACK / UNSUBACK ──────────────────

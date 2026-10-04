@@ -21,7 +21,20 @@ the [Azure SDK for C](https://github.com/Azure/azure-sdk-for-c) span and platfor
 - Requests awaiting acknowledgement are tracked in caller storage
   (`options.inflight_control_buffer`, 4 B per `az_mqtt_inflight_entry`): unique packet identifiers,
   QoS 2 duplicate detection, acknowledgements for unknown identifiers ignored. With no free entry a
-  request fails with `AZ_MQTT_ERROR_FLOW_CONTROL`. Nothing is resent after a reconnect.
+  request fails with `AZ_MQTT_ERROR_FLOW_CONTROL`.
+- Session resumption: with a session that outlives the connection (mqttv3 Clean Session 0;
+  mqttv5 Clean Start 0 and Session Expiry Interval > 0), each QoS 1/2 PUBLISH is stored in caller
+  storage (`options.inflight_message_buffer`: its size + `AZ_MQTT_INFLIGHT_MESSAGE_OVERHEAD`, until
+  PUBACK or PUBREC; required for QoS 1/2 then, else `AZ_MQTT_ERROR_INVALID_CONFIG`; full:
+  `AZ_MQTT_ERROR_OUT_OF_STORAGE`). Clean sessions need none of it.
+  If the next accepted CONNACK has Session Present, the client resends as MQTT requires: PUBRELs,
+  then each PUBLISH, oldest first, with DUP and its original packet identifier (mqttv5: within the
+  new Receive Maximum, the rest as acknowledgements free room). Dropped instead, and reported to
+  `on_puback` / `on_pubcomp` with `ack->status`: one whose message expiry interval elapsed (opt-in,
+  `AZ_MQTT_ERROR_MESSAGE_EXPIRED`), mqttv5 one over the new Maximum Packet Size
+  (`AZ_MQTT_ERROR_PACKET_TOO_LARGE`), and, without Session Present, every outgoing QoS 1/2 exchange
+  (`AZ_MQTT_ERROR_SESSION_NOT_RESUMED`). SUBSCRIBE/UNSUBSCRIBE in flight are abandoned when the
+  connection ends. Session state is kept in memory only, not across a restart.
 - mqttv5 enforces the CONNACK Receive Maximum, Maximum QoS, Retain Available, Topic Alias Maximum
   and Maximum Packet Size.
 - Transport failures have distinct results: `AZ_MQTT_ERROR_NAME_RESOLUTION`,

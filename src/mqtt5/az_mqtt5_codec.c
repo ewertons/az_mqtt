@@ -1340,6 +1340,7 @@ AZ_NODISCARD az_result az_mqtt5_codec_decode_ack(az_span body, az_mqtt5_ack_data
   memset(out, 0, sizeof(*out));
   out->user_properties = user_properties;
   out->user_property_capacity = user_property_capacity;
+  out->status = AZ_OK; // Not 0.
 
   az_result rc = _az_mqtt_read_uint16(&body, &out->packet_id);
   if (az_result_failed(rc))
