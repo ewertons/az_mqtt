@@ -1526,6 +1526,13 @@ static void a_puback_with_flags_set_ends_the_session(void** state)
   _expect_malformed(puback_flags_2, (int)sizeof(puback_flags_2));
 }
 
+static void wrong_flags_are_rejected_before_the_remaining_length_is_read(void** state)
+{
+  (void)state;
+  static const uint8_t puback_flags_1_alone[] = { 0x41 }; // Nothing follows.
+  _expect_malformed(puback_flags_1_alone, (int)sizeof(puback_flags_1_alone));
+}
+
 static void wrong_flags_are_rejected_before_the_body_is_read(void** state)
 {
   (void)state;
@@ -2274,6 +2281,7 @@ int main(void)
     cmocka_unit_test(a_pubrel_without_its_required_flags_ends_the_session),
     cmocka_unit_test(a_puback_with_flags_set_ends_the_session),
     cmocka_unit_test(wrong_flags_are_rejected_before_the_body_is_read),
+    cmocka_unit_test(wrong_flags_are_rejected_before_the_remaining_length_is_read),
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(the_server_receive_maximum_limits_publishes),
     cmocka_unit_test(the_server_limits_are_enforced),
