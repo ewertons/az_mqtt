@@ -60,6 +60,7 @@ static struct
   int publishes;
   int pubacks;
   int pubcomps;
+  int incoming_pubcomps;
   int last_pubcomp_reason;
   int unsubacks;
   int32_t publish_user_properties;
@@ -176,6 +177,7 @@ static void _on_pubcomp(AZ_MQTT_T(client)* c, AZ_MQTT_T(ack_data) const* a)
     return;
   }
   g.pubcomps++;
+  g.incoming_pubcomps += a->incoming ? 1 : 0;
   g.last_pubcomp_reason = AZ_MQTT_TEST_ACK_REASON(a);
 }
 
@@ -745,6 +747,7 @@ static void acknowledged_requests_free_their_slots(void** state)
     assert_int_equal(g.pubcomps, i);
   }
   assert_int_equal(test_server_pubrels(f.server), 3);
+  assert_int_equal(g.incoming_pubcomps, 0); // All outgoing.
   assert_int_equal(_subscribe(&f), AZ_OK);
   PUMP_UNTIL(&f, g.subacks == 1);
   az_span const filter = AZ_SPAN_FROM_STR("t");
@@ -1441,6 +1444,7 @@ static void inbound_qos2_duplicates_are_delivered_once(void** state)
   assert_int_equal(test_server_pubcomps(f.server), 2);
   assert_int_equal(g.publishes, 2);
   assert_int_equal(g.pubcomps, 2); // Inbound exchanges completed.
+  assert_int_equal(g.incoming_pubcomps, 2);
   assert_int_equal(test_server_last_pubcomp_reason(f.server), 0);
   _teardown(&f);
 }
