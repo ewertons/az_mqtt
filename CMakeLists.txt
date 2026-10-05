@@ -53,15 +53,17 @@ if(NOT TARGET az_core)
   add_subdirectory(deps/azure-sdk-for-c)
 endif()
 
-# azure-sdk-for-c headers are third-party: our warning set must not apply to them.
-get_target_property(_az_core_includes az_core INTERFACE_INCLUDE_DIRECTORIES)
-set_property(TARGET az_core APPEND PROPERTY INTERFACE_SYSTEM_INCLUDE_DIRECTORIES ${_az_core_includes})
-
 # ──────────────────────── Compiler warnings ───────────────────
 
 # az_mqtt_apply_warnings(<target>): the project's warning set, applied to our
 # own targets only (never to azure-sdk-for-c or cmocka).
 function(az_mqtt_apply_warnings target)
+  # azure-sdk-for-c headers are third-party: included as system headers by this target only,
+  # never by changing az_core, which a parent project may own.
+  get_target_property(_az_core_includes az_core INTERFACE_INCLUDE_DIRECTORIES)
+  if(_az_core_includes)
+    target_include_directories(${target} SYSTEM PRIVATE ${_az_core_includes})
+  endif()
   if(MSVC)
     # C4061: an enumerator without a case label, even with a default (as -Wswitch-enum).
     target_compile_options(${target} PRIVATE /W4 /w14061)
