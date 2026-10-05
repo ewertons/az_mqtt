@@ -126,6 +126,7 @@ AZ_NODISCARD az_result az_mqtt5_codec_decode_connack(az_span body, az_mqtt5_conn
  * @param[in] flags  Fixed header flags.
  * @param[in,out] out  In: user_properties / subscription_identifiers (may be NULL) and
  * their capacities. Out: every other field; entries beyond a capacity are dropped.
+ * @retval AZ_MQTT_ERROR_MALFORMED_PACKET QoS 3 (reserved), among others.
  */
 AZ_NODISCARD az_result
 az_mqtt5_codec_decode_publish(az_span body, uint8_t flags, az_mqtt5_publish_data* out);
@@ -137,11 +138,13 @@ AZ_NODISCARD az_result az_mqtt5_codec_decode_ack(az_span body, az_mqtt5_ack_data
 
 /**
  * @brief Decode SUBACK body.
+ * @retval AZ_MQTT_ERROR_MALFORMED_PACKET No reason code, among others.
  */
 AZ_NODISCARD az_result az_mqtt5_codec_decode_suback(az_span body, az_mqtt5_suback_data* out);
 
 /**
  * @brief Decode UNSUBACK body.
+ * @retval AZ_MQTT_ERROR_MALFORMED_PACKET No reason code, among others.
  */
 AZ_NODISCARD az_result az_mqtt5_codec_decode_unsuback(az_span body, az_mqtt5_suback_data* out);
 
