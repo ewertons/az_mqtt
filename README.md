@@ -93,9 +93,13 @@ az_result rc = az_mqtt5_client_init(&client, &options);
 | `AZ_MQTT_TLS_BACKEND` | `auto` | `auto`, `openssl`, `mbedtls` or `none` |
 | `AZ_MQTT_ENABLE_PROXY` | `ON` | HTTP CONNECT proxy support |
 | `AZ_MQTT_ENABLE_WEBSOCKETS` | `ON` | MQTT over WebSockets |
-| `AZ_MQTT_BUILD_SAMPLES` | `ON` | |
-| `AZ_MQTT_BUILD_TESTS` | `ON` | |
+| `AZ_MQTT_BUILD_SAMPLES` | `ON`; `OFF` as a subproject | |
+| `AZ_MQTT_BUILD_TESTS` | `ON`; `OFF` as a subproject | |
 | `AZ_MQTT_WARNINGS_AS_ERRORS` | `OFF` | |
+
+In another CMake project, `add_subdirectory()` this directory and link `az_mqtt::mqttv3` and/or
+`az_mqtt::mqttv5`. If the project already builds azure-sdk-for-c (target `az_core`), az_mqtt uses
+it instead of `deps/azure-sdk-for-c`.
 
 ### Migrating from the previous `az_mqtt5` / `az_mqtt3` trees
 
@@ -154,6 +158,7 @@ Warnings in our code are errors in every job.
 | Linux | {OpenSSL, mbedTLS 3.6.7 / 4.1.1 / 4.2.0, no TLS} × {gcc, clang}: build, link-isolation check, all tests (mqttv3, mqttv5, and both linked together), including e2e against a local Mosquitto (plain and TLS) |
 | Single version | Builds and tests with only mqttv3 or only mqttv5 enabled |
 | Sanitizers | ASan + UBSan (+ leak check) over all tests |
+| Subproject | `add_subdirectory()` from a parent project, with the parent's azure-sdk-for-c and with the bundled one; fails if the parent's cache changes ([tests/subproject](tests/subproject/CMakeLists.txt)) |
 | Hardened | Release build with `_FORTIFY_SOURCE=3`, stack protector, CET, full RELRO and PIE, verified on every executable, then all tests |
 | Windows | MSVC `/W4 /WX`, Schannel, all tests |
 

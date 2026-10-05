@@ -89,6 +89,20 @@ jobs:
       - name: Build and test
         run: eng/ci/build-and-test.sh openssl debug
 
+  subproject:
+    name: subproject
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Install packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build libssl-dev
+      - name: Build as a subproject (parent's and bundled azure-sdk-for-c)
+        run: eng/ci/subproject.sh
+
   sanitizers:
     name: ASan + UBSan
     runs-on: ubuntu-24.04
