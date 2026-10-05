@@ -93,9 +93,13 @@ az_result rc = az_mqtt5_client_init(&client, &options);
 | `AZ_MQTT_TLS_BACKEND` | `auto` | `auto`, `openssl`, `mbedtls` or `none` |
 | `AZ_MQTT_ENABLE_PROXY` | `ON` | HTTP CONNECT proxy support |
 | `AZ_MQTT_ENABLE_WEBSOCKETS` | `ON` | MQTT over WebSockets |
-| `AZ_MQTT_BUILD_SAMPLES` | `ON` | |
-| `AZ_MQTT_BUILD_TESTS` | `ON` | |
+| `AZ_MQTT_BUILD_SAMPLES` | `ON`; `OFF` as a subproject | |
+| `AZ_MQTT_BUILD_TESTS` | `ON`; `OFF` as a subproject | |
 | `AZ_MQTT_WARNINGS_AS_ERRORS` | `OFF` | |
+
+In another CMake project, `add_subdirectory()` this directory and link `az_mqtt::mqttv3` and/or
+`az_mqtt::mqttv5`. If the project already builds azure-sdk-for-c (target `az_core`), az_mqtt uses
+it instead of `deps/azure-sdk-for-c`.
 
 ### Migrating from the previous `az_mqtt5` / `az_mqtt3` trees
 
