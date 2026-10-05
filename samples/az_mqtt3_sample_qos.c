@@ -44,7 +44,11 @@ static bool s_received[3]; // By QoS.
 static void on_suback(az_mqtt3_client* client, az_mqtt3_suback_data const* suback)
 {
   (void)client;
-  uint8_t const code = az_span_ptr(suback->return_codes)[0];
+  uint8_t code = AZ_MQTT3_SUBACK_FAILURE;
+  if (az_span_size(suback->return_codes) > 0)
+  {
+    code = az_span_ptr(suback->return_codes)[0];
+  }
   printf("[SUBACK] granted=0x%02X\n", (unsigned)code);
   s_subscribed = code == AZ_MQTT3_SUBACK_GRANTED_QOS_2;
 }
@@ -83,7 +87,10 @@ static void on_publish(az_mqtt3_client* client, az_mqtt3_publish_data const* pub
       (char const*)az_span_ptr(publish->topic),
       (int)publish->qos,
       publish->packet_id);
-  s_received[publish->qos] = true;
+  if (publish->qos <= AZ_MQTT_QOS_EXACTLY_ONCE)
+  {
+    s_received[publish->qos] = true;
+  }
   if (publish->qos == AZ_MQTT_QOS_EXACTLY_ONCE)
   {
     s_incoming_qos2_packet_id = publish->packet_id;

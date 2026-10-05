@@ -99,7 +99,10 @@ static void on_publish(az_mqtt5_client* client, az_mqtt5_publish_data const* pub
       (char const*)az_span_ptr(publish->topic),
       (int)publish->qos,
       publish->packet_id);
-  s_received[publish->qos] = true;
+  if (publish->qos <= AZ_MQTT_QOS_EXACTLY_ONCE)
+  {
+    s_received[publish->qos] = true;
+  }
   if (publish->qos == AZ_MQTT_QOS_EXACTLY_ONCE)
   {
     s_incoming_qos2_packet_id = publish->packet_id;
