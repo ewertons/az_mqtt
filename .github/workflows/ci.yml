@@ -193,6 +193,8 @@ jobs:
           }
           Step configure { cmake -S . -B build/win -A x64 -DAZ_MQTT_BUILD_TESTS=ON -DAZ_MQTT_BUILD_SAMPLES=ON -DAZ_MQTT_WARNINGS_AS_ERRORS=ON }
           Step build { cmake --build build/win --config Debug }
+          # Optimized: intrinsics (/Oi) are on, so a definition named like one fails here only.
+          Step build-release { cmake --build build/win --config Release --target az_mqttv3 az_mqttv5 }
           $env:AZ_MQTT_RUN_TLS_E2E = '1' # test_ssl_win32 is opt-in
           Step test { ctest --test-dir build/win -C Debug --output-on-failure --timeout 300 }
           $summary = Select-String -Path step.log -Pattern 'tests passed' | Select-Object -First 1
