@@ -128,8 +128,10 @@ az_result rc = az_mqtt5_client_init(&client, &options);
 
 ## Getting started
 
-See [samples/README.md](samples/README.md): start a local broker, build, and run the connect
-samples ([mqttv5](samples/az_mqtt5_sample_connect.c), [mqttv3](samples/az_mqtt3_sample_connect.c)).
+See [samples/README.md](samples/README.md): start a local broker, build, and run the samples
+(TCP, QoS 0/1/2, TLS and mutual TLS, WebSockets, HTTP proxy, non-blocking connect; mqttv5
+request/response), for [mqttv5](samples/az_mqtt5_sample_connect.c) and
+[mqttv3](samples/az_mqtt3_sample_connect.c).
 
 ## Documentation
 

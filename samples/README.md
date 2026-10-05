@@ -1,134 +1,98 @@
-# Connect Samples
+# Samples
 
-This guide is for first-time readers of this repository. It walks you through starting a local broker, building the samples, and running them.
+Each sample is one short C file using the public API directly. The samples and the MQTT clients
+allocate nothing: all their memory is caller storage. The TLS libraries may allocate internally
+(OpenSSL, mbedTLS, Schannel). `az_mqtt_sample_common.h/.c` only reads the settings from environment
+variables.
 
-## What the samples do
+| Sample | mqttv3 | mqttv5 | Shows |
+|---|---|---|---|
+| connect | [az_mqtt3_sample_connect.c](az_mqtt3_sample_connect.c) | [az_mqtt5_sample_connect.c](az_mqtt5_sample_connect.c) | TCP; subscribe, publish, receive the message back, disconnect |
+| qos | [az_mqtt3_sample_qos.c](az_mqtt3_sample_qos.c) | [az_mqtt5_sample_qos.c](az_mqtt5_sample_qos.c) | QoS 0, 1 and 2 publish and receive; PUBACK, PUBREC/PUBREL/PUBCOMP |
+| tls | [az_mqtt3_sample_tls.c](az_mqtt3_sample_tls.c) | [az_mqtt5_sample_tls.c](az_mqtt5_sample_tls.c) | TLS; optional client certificate (mutual TLS) and HTTP CONNECT proxy; native errors |
+| websocket | [az_mqtt3_sample_websocket.c](az_mqtt3_sample_websocket.c) | [az_mqtt5_sample_websocket.c](az_mqtt5_sample_websocket.c) | MQTT over WebSockets (ws, or wss); optional proxy |
+| nonblocking | [az_mqtt3_sample_nonblocking.c](az_mqtt3_sample_nonblocking.c) | [az_mqtt5_sample_nonblocking.c](az_mqtt5_sample_nonblocking.c) | `connect_start` and `process_loop` in an application loop; QoS 1 acknowledgements |
+| request_response | | [az_mqtt5_sample_request_response.c](az_mqtt5_sample_request_response.c) | MQTT 5.0 Response Topic, Correlation Data, User Properties, Content Type |
 
-[az_mqtt5_sample_connect.c](az_mqtt5_sample_connect.c) (mqttv5, `az_mqtt::mqttv5`) and
-[az_mqtt3_sample_connect.c](az_mqtt3_sample_connect.c) (mqttv3, `az_mqtt::mqttv3`) do the same
-thing, each with its own API. Each one:
+The websocket samples are built only with `AZ_MQTT_ENABLE_WEBSOCKETS=ON` (the default).
 
-- Connects to the broker
-- Subscribes to mqtt5/test/# (mqttv3: mqtt3/test/#)
-- Publishes one test message
-- Processes incoming events (SUBACK, PUBACK, echoed PUBLISH)
-- Disconnects cleanly
+## Settings
 
-## Prerequisites
+| Variable | Meaning | Default |
+|---|---|---|
+| `AZ_MQTT_SAMPLE_HOST` | Broker host name or IP address | `localhost` |
+| `AZ_MQTT_SAMPLE_PORT` | Broker port | connect, qos, nonblocking, request_response: 1883; tls: 8883; websocket: 80 |
+| `AZ_MQTT_SAMPLE_CLIENT_ID` | MQTT client identifier | per sample |
+| `AZ_MQTT_SAMPLE_USERNAME`, `AZ_MQTT_SAMPLE_PASSWORD` | MQTT credentials | none |
+| `AZ_MQTT_SAMPLE_TLS` | `1`: TLS for the websocket samples (wss) | `0` |
+| `AZ_MQTT_SAMPLE_CA_CERT` | CA certificate file (PEM) to trust | system store (OpenSSL, Schannel); mbedTLS has none: required |
+| `AZ_MQTT_SAMPLE_CLIENT_CERT`, `AZ_MQTT_SAMPLE_CLIENT_KEY` | Client certificate and key files (PEM): mutual TLS | none (not supported by Schannel) |
+| `AZ_MQTT_SAMPLE_WEBSOCKET_PATH` | WebSocket request path | `/mqtt` |
+| `AZ_MQTT_SAMPLE_PROXY_HOST`, `AZ_MQTT_SAMPLE_PROXY_PORT` | HTTP CONNECT proxy | none (direct); port 3128 |
+| `AZ_MQTT_SAMPLE_PROXY_USERNAME`, `AZ_MQTT_SAMPLE_PROXY_PASSWORD` | Proxy credentials (HTTP Basic) | none |
 
-- CMake 3.14+
-- A C compiler toolchain (MSVC, clang, or gcc)
-- Docker
-- OpenSSL command-line tool (optional, only needed if you want the broker TLS listener/certs from the helper scripts)
+## Run against a local broker
 
-## 1. Start a local broker
+1. Start Mosquitto with plain (1883), TLS (8883), ws (8080) and wss (8081) listeners. Both scripts
+   write the CA certificate to `tests/broker/certs/ca.crt`.
 
-From repo root:
+   ```bash
+   tests/start_broker.sh            # Docker (Windows: tests\start_broker.ps1); "stop" to stop
+   eng/ci/start-broker.sh           # or a local mosquitto, mosquitto_pub and openssl
+   ```
 
-### Windows PowerShell
+2. Build:
 
-```powershell
-.\tests\start_broker.ps1
-```
+   ```bash
+   cmake -S . -B build -DAZ_MQTT_BUILD_SAMPLES=ON
+   cmake --build build
+   ```
 
-### Linux/macOS
+3. Run (Linux/macOS shown; executables are in `build/samples`, or `build/samples/Debug` with
+   Visual Studio):
 
-```bash
-./tests/start_broker.sh
-```
+   ```bash
+   build/samples/az_mqtt5_sample_connect
+   build/samples/az_mqtt5_sample_qos
+   build/samples/az_mqtt5_sample_nonblocking
+   build/samples/az_mqtt5_sample_request_response
+   AZ_MQTT_SAMPLE_CA_CERT=tests/broker/certs/ca.crt build/samples/az_mqtt5_sample_tls
+   AZ_MQTT_SAMPLE_PORT=8080 build/samples/az_mqtt5_sample_websocket
+   AZ_MQTT_SAMPLE_TLS=1 AZ_MQTT_SAMPLE_PORT=8081 AZ_MQTT_SAMPLE_CA_CERT=tests/broker/certs/ca.crt \
+     build/samples/az_mqtt5_sample_websocket
+   ```
 
-When startup succeeds you should see lines similar to:
+   The mqttv3 samples take the same settings. Each prints what it sends and receives, and exits
+   with 0 on success.
 
-```text
-Plain TCP: localhost:1883
-TLS:       localhost:8883
-```
-
-If OpenSSL is not available, the Windows script falls back to plain TCP only and prints:
-
-```text
-Plain TCP: localhost:1883
-TLS:       disabled (OpenSSL not found)
-```
-
-## 2. Configure and build the samples
-
-From repo root:
-
-### Windows (Visual Studio generator)
-
-```powershell
-cmake -S . -B build -DAZ_MQTT_BUILD_SAMPLES=ON
-cmake --build build --config Debug --target az_mqtt5_sample_connect az_mqtt3_sample_connect
-```
-
-### Linux/macOS (Ninja/Unix Makefiles)
-
-```bash
-cmake -S . -B build -DAZ_MQTT_BUILD_SAMPLES=ON
-cmake --build build --target az_mqtt5_sample_connect az_mqtt3_sample_connect
-```
-
-## 3. Run a sample
-
-Defaults are host=localhost and port=1883:
-
-### Windows
-
-```powershell
-.\build\samples\Debug\az_mqtt5_sample_connect.exe
-```
-
-### Linux/macOS
-
-```bash
-./build/samples/az_mqtt5_sample_connect
-```
-
-You can also pass host and port explicitly:
+Expected output of `az_mqtt5_sample_connect` (packet identifiers and reason codes depend on the
+broker):
 
 ```text
-az_mqtt5_sample_connect [host] [port]
-```
-
-Example:
-
-```text
-az_mqtt5_sample_connect localhost 1883
-```
-
-## Expected successful output
-
-A successful mqttv5 run looks similar to this (mqttv3 prints `MQTT3 Sample`, uses `mqtt3/test/...` and shows return codes instead of reason codes):
-
-```text
-MQTT5 Sample: Connecting to localhost:1883
-Connecting...
-[CONNACK] reason=0 session_present=0
-Connected!
-Subscribe sent (packet_id=1)
-Publish sent (packet_id=2)
-Processing events (10 iterations)...
+Connecting to localhost:1883
+[CONNACK] reason=0x00 session_present=0
+Subscribe sent (packet_id=1): 0x00010000
+Publish sent (packet_id=2): 0x00010000
 [SUBACK] packet_id=1 reason_codes=[0x01]
-[PUBACK] packet_id=2 reason=0
-[PUBLISH received] topic="mqtt5/test/hello" qos=1 payload_len=45
-  payload: "Hello from az_mqtt5_client! Zero allocations."
-Disconnecting...
-Done.
+[PUBLISH received] topic="az-mqtt-sample/mqtt5/hello" qos=1 payload="Hello from az_mqtt5_client"
+[PUBACK] packet_id=2 reason=0x00
+Disconnected: 0x00010000
 ```
 
-The exact packet ids and reason codes can vary by broker behavior.
+`0x00010000` is `AZ_OK`. Failures print an `az_result` such as `0x80060018`
+(`AZ_MQTT_ERROR_CONNECTION_REFUSED`; see `inc/az_mqtt/az_mqtt_types.h`). The tls and websocket
+samples also print each native error behind a failure (`[transport] source=... code=...`). One for
+`localhost` resolving first to `::1`, refused, before `127.0.0.1` connects is expected with the local
+broker.
 
-## Stop the broker
+## Other brokers
 
-### Windows PowerShell
-
-```powershell
-.\tests\start_broker.ps1 -Stop
-```
-
-### Linux/macOS
+Set the host, port and credentials, e.g. a TLS broker with a public certificate:
 
 ```bash
-./tests/start_broker.sh stop
+AZ_MQTT_SAMPLE_HOST=broker.example.com AZ_MQTT_SAMPLE_USERNAME=user \
+  AZ_MQTT_SAMPLE_PASSWORD=secret build/samples/az_mqtt5_sample_tls
 ```
+
+Through a proxy, add `AZ_MQTT_SAMPLE_PROXY_HOST` (and its port and credentials): TLS runs inside the
+tunnel, end to end with the broker.

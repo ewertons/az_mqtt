@@ -3,30 +3,34 @@
 
 /**
  * @file az_mqtt3_sample_connect.c
- * @brief Sample: Connect to an MQTT 3.1.1 broker, subscribe, publish, and receive.
+ * @brief Sample: connect to an MQTT 3.1.1 broker over TCP, subscribe, publish, receive, disconnect.
  *
- * Usage:
- *   az_mqtt3_sample_connect [host] [port]
+ * Settings: see az_mqtt_sample_common.h (default port 1883).
  *
- * Defaults: host = "localhost", port = 1883 (plain TCP).
- * Set port to 8883 and define AZ_MQTT_SAMPLE_USE_TLS to enable TLS.
- *
- * This sample demonstrates the zero-allocation client speaking MQTT 3.1.1:
- * - All buffers are stack-allocated
- * - No malloc/free calls anywhere
- * - Deterministic memory footprint
+ * All memory is caller storage: no allocation.
  */
 
 #include <az_mqtt3/az_mqtt3_client.h>
 
-#include "az_mqtt_sample_config.h"
+#include "az_mqtt_sample_common.h"
 
 #include <azure/core/az_span.h>
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+
+static uint8_t s_send_buffer[AZ_MQTT_SAMPLE_BUFFER_SIZE];
+static uint8_t s_receive_buffer[AZ_MQTT_SAMPLE_BUFFER_SIZE];
+static az_mqtt_sample_transport_storage s_transport_storage;
+static az_mqtt_inflight_entry s_inflight[8];
+
+#define TOPIC "az-mqtt-sample/mqtt3/hello"
+
+static bool s_subscribed;
+static bool s_acknowledged;
+static bool s_received;
 
 // ──────────────────────── Callbacks ──────────────────────────
 
@@ -39,32 +43,15 @@ static void on_connack(az_mqtt3_client* client, az_mqtt3_connack_data const* con
       connack->session_present);
 }
 
-static void on_publish(az_mqtt3_client* client, az_mqtt3_publish_data const* publish)
-{
-  (void)client;
-  printf(
-      "[PUBLISH received] topic=\"%.*s\" qos=%d payload_len=%d\n",
-      az_span_size(publish->topic),
-      (char const*)az_span_ptr(publish->topic),
-      (int)publish->qos,
-      az_span_size(publish->payload));
-
-  if (az_span_size(publish->payload) > 0)
-  {
-    printf(
-        "  payload: \"%.*s\"\n",
-        az_span_size(publish->payload),
-        (char const*)az_span_ptr(publish->payload));
-  }
-}
-
 static void on_suback(az_mqtt3_client* client, az_mqtt3_suback_data const* suback)
 {
   (void)client;
-  printf("[SUBACK] packet_id=%d return_codes=[", suback->packet_id);
+  printf("[SUBACK] packet_id=%u return_codes=[", suback->packet_id);
   for (int32_t i = 0; i < az_span_size(suback->return_codes); i++)
   {
-    printf("%s0x%02X", i > 0 ? ", " : "", (unsigned)az_span_ptr(suback->return_codes)[i]);
+    uint8_t const code = az_span_ptr(suback->return_codes)[i];
+    printf("%s0x%02X", i > 0 ? ", " : "", (unsigned)code);
+    s_subscribed = code != AZ_MQTT3_SUBACK_FAILURE;
   }
   printf("]\n");
 }
@@ -72,41 +59,45 @@ static void on_suback(az_mqtt3_client* client, az_mqtt3_suback_data const* subac
 static void on_puback(az_mqtt3_client* client, az_mqtt3_ack_data const* ack)
 {
   (void)client;
-  printf("[PUBACK] packet_id=%d\n", ack->packet_id);
+  printf("[PUBACK] packet_id=%u status=0x%08X\n", ack->packet_id, (unsigned)ack->status);
+  s_acknowledged = az_result_succeeded(ack->status);
+}
+
+static void on_publish(az_mqtt3_client* client, az_mqtt3_publish_data const* publish)
+{
+  (void)client;
+  printf(
+      "[PUBLISH received] topic=\"%.*s\" qos=%d payload=\"%.*s\"\n",
+      az_span_size(publish->topic),
+      (char const*)az_span_ptr(publish->topic),
+      (int)publish->qos,
+      az_span_size(publish->payload),
+      (char const*)az_span_ptr(publish->payload));
+  s_received = s_received || az_span_is_content_equal(publish->topic, AZ_SPAN_FROM_STR(TOPIC));
 }
 
 // ──────────────────────── Main ───────────────────────────────
 
-int main(int argc, char* argv[])
+int main(void)
 {
-  // Parse arguments
-  char const* host = "localhost";
-  uint16_t port = 1883;
-
-  if (argc >= 2)
+  az_mqtt_sample_settings settings;
+  if (!az_mqtt_sample_settings_read(&settings, 1883, "az-mqtt3-sample-connect"))
   {
-    host = argv[1];
-  }
-  if (argc >= 3)
-  {
-    port = (uint16_t)atoi(argv[2]);
-  }
-
-  printf("MQTT3 Sample: Connecting to %s:%d\n", host, port);
-
-  int32_t transport_size = az_mqtt_transport_sizeof();
-  if (transport_size > (int32_t)sizeof(s_transport_buffer.bytes))
-  {
-    printf(
-        "ERROR: transport buffer too small (need=%d, have=%d). "
-        "Increase TRANSPORT_BUFFER_SIZE in az_mqtt_sample_config.h\n",
-        transport_size,
-        (int)sizeof(s_transport_buffer.bytes));
     return 1;
   }
+  printf(
+      "Connecting to %.*s:%u\n",
+      az_span_size(settings.host),
+      (char const*)az_span_ptr(settings.host),
+      settings.port);
 
-  // Initialize transport
-  az_mqtt_transport* transport = (az_mqtt_transport*)s_transport_buffer.bytes;
+  // The platform transport (TCP; TLS and proxies are shown in other samples).
+  az_mqtt_transport* transport = (az_mqtt_transport*)s_transport_storage.bytes;
+  if (az_mqtt_transport_sizeof() > (int32_t)sizeof(s_transport_storage))
+  {
+    printf("ERROR: transport storage too small (need %d bytes)\n", az_mqtt_transport_sizeof());
+    return 1;
+  }
   az_result rc = az_mqtt_transport_init(transport);
   if (az_result_failed(rc))
   {
@@ -114,107 +105,82 @@ int main(int argc, char* argv[])
     return 1;
   }
 
-  // Configure the client for MQTT 3.1.1
-  az_mqtt3_connect_options connect_opts = az_mqtt3_connect_options_default();
-  connect_opts.client_id = AZ_SPAN_FROM_STR("mqtt3-c-sample");
-  connect_opts.keep_alive_seconds = 30;
-  connect_opts.clean_session = true;
+  az_mqtt3_client_options options;
+  memset(&options, 0, sizeof(options));
+  options.transport = transport;
+  options.hostname = settings.host;
+  options.port = settings.port;
+  options.send_buffer = AZ_SPAN_FROM_BUFFER(s_send_buffer);
+  options.receive_buffer = AZ_SPAN_FROM_BUFFER(s_receive_buffer);
+  options.inflight_control_buffer
+      = az_span_create((uint8_t*)s_inflight, (int32_t)sizeof(s_inflight));
+  options.connect_options = az_mqtt3_connect_options_default();
+  options.connect_options.client_id = settings.client_id;
+  options.connect_options.username = settings.username;
+  options.connect_options.password = settings.password;
+  options.connect_options.keep_alive_seconds = 30;
+  options.on_connack = on_connack;
+  options.on_suback = on_suback;
+  options.on_puback = on_puback;
+  options.on_publish = on_publish;
 
-  az_mqtt3_client_options client_opts;
-  memset(&client_opts, 0, sizeof(client_opts));
-  client_opts.transport = transport;
-  client_opts.send_buffer = AZ_SPAN_FROM_BUFFER(s_send_buffer);
-  client_opts.receive_buffer = AZ_SPAN_FROM_BUFFER(s_recv_buffer);
-  client_opts.inflight_control_buffer = az_span_create(
-      (uint8_t*)s_inflight_control_buffer, (int32_t)sizeof(s_inflight_control_buffer));
-  client_opts.connect_options = connect_opts;
-  client_opts.hostname = az_span_create((uint8_t*)(uintptr_t)host, (int32_t)strlen(host));
-  client_opts.port = port;
-  client_opts.tls_options = NULL; // Plain TCP for this sample
-
-  // Callbacks
-  client_opts.on_connack = on_connack;
-  client_opts.on_publish = on_publish;
-  client_opts.on_suback = on_suback;
-  client_opts.on_puback = on_puback;
-
-  // Initialize client
   az_mqtt3_client client;
-  rc = az_mqtt3_client_init(&client, &client_opts);
+  rc = az_mqtt3_client_init(&client, &options);
   if (az_result_failed(rc))
   {
     printf("ERROR: client init failed: 0x%08X\n", (unsigned)rc);
     return 1;
   }
 
-  // Connect (blocks until CONNACK or timeout)
-  printf("Connecting...\n");
-  rc = az_mqtt3_client_connect(&client, 10000 /* 10 second timeout */);
+  // Blocks until the CONNACK, at most 10 s.
+  rc = az_mqtt3_client_connect(&client, 10000);
   if (az_result_failed(rc))
   {
     printf("ERROR: connect failed: 0x%08X\n", (unsigned)rc);
     return 1;
   }
-  printf("Connected!\n");
 
-  // Subscribe to a test topic
-  az_mqtt3_subscription sub;
-  sub.topic_filter = AZ_SPAN_FROM_STR("mqtt3/test/#");
-  sub.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
+  az_mqtt3_subscription subscription;
+  subscription.topic_filter = AZ_SPAN_FROM_STR("az-mqtt-sample/mqtt3/#");
+  subscription.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
+  uint16_t packet_id = 0;
+  rc = az_mqtt3_client_subscribe(&client, &subscription, 1, &packet_id);
+  printf("Subscribe sent (packet_id=%u): 0x%08X\n", packet_id, (unsigned)rc);
 
-  uint16_t sub_packet_id;
-  rc = az_mqtt3_client_subscribe(&client, &sub, 1, &sub_packet_id);
+  az_mqtt3_publish_options message = az_mqtt3_publish_options_default();
+  message.topic = AZ_SPAN_FROM_STR(TOPIC);
+  message.payload = AZ_SPAN_FROM_STR("Hello from az_mqtt3_client");
+  message.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
+  if (az_result_succeeded(rc))
+  {
+    rc = az_mqtt3_client_publish(&client, &message, &packet_id);
+    printf("Publish sent (packet_id=%u): 0x%08X\n", packet_id, (unsigned)rc);
+  }
+
+  // SUBACK, PUBACK and the message echoed back by the broker arrive here.
+  for (int i = 0;
+       i < 5 && az_result_succeeded(rc) && !(s_subscribed && s_acknowledged && s_received);
+       i++)
+  {
+    rc = az_mqtt3_client_process_loop(&client, 1000);
+  }
   if (az_result_failed(rc))
   {
-    printf("ERROR: subscribe failed: 0x%08X\n", (unsigned)rc);
-    if (az_result_failed(az_mqtt3_client_disconnect(&client)))
-    {
-      printf("WARNING: disconnect failed\n");
-    }
-    return 1;
+    printf("ERROR: 0x%08X\n", (unsigned)rc);
   }
-  printf("Subscribe sent (packet_id=%d)\n", sub_packet_id);
-
-  // Publish a test message
-  az_mqtt3_publish_options pub_opts = az_mqtt3_publish_options_default();
-  pub_opts.topic = AZ_SPAN_FROM_STR("mqtt3/test/hello");
-  pub_opts.payload = AZ_SPAN_FROM_STR("Hello from az_mqtt3_client! Zero allocations.");
-  pub_opts.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
-
-  uint16_t pub_packet_id;
-  rc = az_mqtt3_client_publish(&client, &pub_opts, &pub_packet_id);
-  if (az_result_failed(rc))
+  else if (!(s_subscribed && s_acknowledged && s_received))
   {
-    printf("ERROR: publish failed: 0x%08X\n", (unsigned)rc);
-    if (az_result_failed(az_mqtt3_client_disconnect(&client)))
-    {
-      printf("WARNING: disconnect failed\n");
-    }
-    return 1;
-  }
-  printf("Publish sent (packet_id=%d)\n", pub_packet_id);
-
-  // Process loop: handle SUBACK, PUBACK, incoming messages
-  printf("Processing events (10 iterations)...\n");
-  for (int i = 0; i < 10; i++)
-  {
-    rc = az_mqtt3_client_process_loop(&client, 1000 /* 1 second timeout */);
-    if (az_result_failed(rc))
-    {
-      printf("ERROR: process_loop failed: 0x%08X\n", (unsigned)rc);
-      break;
-    }
+    printf(
+        "ERROR: subscribed=%d acknowledged=%d received=%d\n",
+        s_subscribed,
+        s_acknowledged,
+        s_received);
   }
 
-  // Disconnect
-  printf("Disconnecting...\n");
-  rc = az_mqtt3_client_disconnect(&client);
-  if (az_result_failed(rc))
-  {
-    printf("ERROR: disconnect failed: 0x%08X\n", (unsigned)rc);
-    return 1;
-  }
-  printf("Done.\n");
-
-  return 0;
+  az_result const disconnect_rc = az_mqtt3_client_disconnect(&client);
+  printf("Disconnected: 0x%08X\n", (unsigned)disconnect_rc);
+  return az_result_succeeded(rc) && s_subscribed && s_acknowledged && s_received
+          && az_result_succeeded(disconnect_rc)
+      ? 0
+      : 1;
 }
