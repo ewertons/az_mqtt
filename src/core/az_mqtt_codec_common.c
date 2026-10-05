@@ -10,6 +10,7 @@
 
 #include <azure/core/internal/az_precondition_internal.h>
 
+#include <stdbool.h>
 #include <string.h>
 
 AZ_NODISCARD az_result _az_mqtt_write_byte(az_span* dest, uint8_t b)
@@ -159,6 +160,17 @@ AZ_NODISCARD az_result _az_mqtt_read_utf8_string(az_span* src, az_span* out)
 }
 
 
+bool _az_mqtt_fixed_header_flags_valid(uint8_t first_byte)
+{
+  az_mqtt_packet_type const type = (az_mqtt_packet_type)(first_byte >> 4);
+  uint8_t const flags = first_byte & 0x0F;
+  // MQTT 3.1.1 2.2.2, 5.0 2.1.3. PUBLISH flags carry DUP, QoS and RETAIN, checked by its decoder.
+  bool const requires_0010 = type == AZ_MQTT_PACKET_TYPE_PUBREL
+      || type == AZ_MQTT_PACKET_TYPE_SUBSCRIBE || type == AZ_MQTT_PACKET_TYPE_UNSUBSCRIBE;
+  uint8_t const reserved_flags = requires_0010 ? 0x02 : 0x00;
+  return type == AZ_MQTT_PACKET_TYPE_PUBLISH || flags == reserved_flags;
+}
+
 AZ_NODISCARD az_result _az_mqtt_decode_fixed_header(
     az_span* src,
     az_mqtt_packet_type* out_packet_type,
@@ -177,6 +189,11 @@ AZ_NODISCARD az_result _az_mqtt_decode_fixed_header(
 
   *out_packet_type = (az_mqtt_packet_type)(first_byte >> 4);
   *out_flags = first_byte & 0x0F;
+
+  if (!_az_mqtt_fixed_header_flags_valid(first_byte))
+  {
+    return AZ_MQTT_ERROR_MALFORMED_PACKET;
+  }
 
   rc = _az_mqtt_read_vbi(src, out_remaining);
   if (az_result_failed(rc))

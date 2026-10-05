@@ -21,6 +21,7 @@
 #include <azure/core/az_result.h>
 #include <azure/core/az_span.h>
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /** @brief Write one byte; advance @p dest. */
@@ -62,7 +63,16 @@ AZ_NODISCARD AZ_INLINE az_result _az_mqtt_read_binary_data(az_span* src, az_span
   return _az_mqtt_read_utf8_string(src, out);
 }
 
-/** @brief Read a fixed header; advance @p src. */
+/**
+ * @brief Whether the fixed-header flags (low nibble of @p first_byte) are valid for its packet
+ * type: 0b0010 for PUBREL, SUBSCRIBE, UNSUBSCRIBE; 0 for others; any for PUBLISH.
+ */
+bool _az_mqtt_fixed_header_flags_valid(uint8_t first_byte);
+
+/**
+ * @brief Read a fixed header; advance @p src.
+ * @retval AZ_MQTT_ERROR_MALFORMED_PACKET Reserved flags not as MQTT requires for the type.
+ */
 AZ_NODISCARD az_result _az_mqtt_decode_fixed_header(
     az_span* src,
     az_mqtt_packet_type* out_packet_type,

@@ -1491,6 +1491,56 @@ static void unknown_acknowledgements_are_ignored(void** state)
   _teardown(&f);
 }
 
+/** @brief The server sends @p bytes after CONNACK; the session must close as malformed. */
+static void _expect_malformed(uint8_t const* bytes, int size)
+{
+  test_server_options so = _plain();
+  so.raw_after_connack = bytes;
+  so.raw_after_connack_size = size;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  az_result rc = AZ_OK;
+  for (int i = 0; i < 150 && az_result_succeeded(rc); i++)
+  {
+    rc = AZ_MQTT_T(client_process_loop)(&f.client, 20);
+  }
+  assert_int_equal(rc, AZ_MQTT_ERROR_MALFORMED_PACKET);
+  assert_int_equal(g.closed, 1);
+  assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_MALFORMED_PACKET);
+  assert_int_equal(test_server_pubcomps(f.server), 0); // Not answered.
+  _teardown(&f);
+}
+
+static void a_pubrel_without_its_required_flags_ends_the_session(void** state)
+{
+  (void)state;
+  static const uint8_t pubrel_flags_0[] = { 0x60, 0x02, 0x00, 0x07 };
+  _expect_malformed(pubrel_flags_0, (int)sizeof(pubrel_flags_0));
+}
+
+static void a_puback_with_flags_set_ends_the_session(void** state)
+{
+  (void)state;
+  static const uint8_t puback_flags_2[] = { 0x42, 0x02, 0x00, 0x07 };
+  _expect_malformed(puback_flags_2, (int)sizeof(puback_flags_2));
+}
+
+static void wrong_flags_are_rejected_before_the_remaining_length_is_read(void** state)
+{
+  (void)state;
+  static const uint8_t puback_flags_1_alone[] = { 0x41 }; // Nothing follows.
+  _expect_malformed(puback_flags_1_alone, (int)sizeof(puback_flags_1_alone));
+}
+
+static void wrong_flags_are_rejected_before_the_body_is_read(void** state)
+{
+  (void)state;
+  // Remaining Length 268,435,455 (more than the receive buffer); no body follows.
+  static const uint8_t puback_flags_1_huge[] = { 0x41, 0xFF, 0xFF, 0xFF, 0x7F };
+  _expect_malformed(puback_flags_1_huge, (int)sizeof(puback_flags_1_huge));
+}
+
 #if AZ_MQTT_TEST_VERSION == 5
 static void the_server_receive_maximum_limits_publishes(void** state)
 {
@@ -2228,6 +2278,10 @@ int main(void)
     cmocka_unit_test(inbound_qos2_duplicates_are_delivered_once),
     cmocka_unit_test(inbound_qos2_without_a_free_slot_is_still_delivered),
     cmocka_unit_test(unknown_acknowledgements_are_ignored),
+    cmocka_unit_test(a_pubrel_without_its_required_flags_ends_the_session),
+    cmocka_unit_test(a_puback_with_flags_set_ends_the_session),
+    cmocka_unit_test(wrong_flags_are_rejected_before_the_body_is_read),
+    cmocka_unit_test(wrong_flags_are_rejected_before_the_remaining_length_is_read),
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(the_server_receive_maximum_limits_publishes),
     cmocka_unit_test(the_server_limits_are_enforced),

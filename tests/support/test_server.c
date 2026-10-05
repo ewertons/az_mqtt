@@ -850,6 +850,11 @@ static void _serve(test_server* s, conn* c)
       return;
     }
   }
+  if (s->options.raw_after_connack != NULL
+      && !_write(c, s->options.raw_after_connack, s->options.raw_after_connack_size))
+  {
+    return;
+  }
   if (s->options.behavior == TEST_SERVER_DISCONNECT_AFTER_CONNACK)
   {
     static const uint8_t disconnect_v5[] = { 0xE0, 0x01, 0x8B };
