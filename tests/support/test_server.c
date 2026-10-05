@@ -850,13 +850,10 @@ static void _serve(test_server* s, conn* c)
       return;
     }
   }
-  if (s->options.send_bad_flags)
+  if (s->options.raw_after_connack != NULL
+      && !_write(c, s->options.raw_after_connack, s->options.raw_after_connack_size))
   {
-    static const uint8_t pubrel_flags_0[] = { 0x60, 0x02, 0x00, 0x07 };
-    if (!_write(c, pubrel_flags_0, (int)sizeof(pubrel_flags_0)))
-    {
-      return;
-    }
+    return;
   }
   if (s->options.behavior == TEST_SERVER_DISCONNECT_AFTER_CONNACK)
   {
