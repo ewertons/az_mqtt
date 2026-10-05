@@ -126,6 +126,8 @@ typedef struct
   bool ticket_before_burst;
   /** @brief Close the connection right after CONNACK (TLS: without close_notify). */
   bool close_after_connack;
+  /** @brief After CONNACK: a PUBREL with fixed-header flags 0 (MQTT requires 0b0010). */
+  bool send_bad_flags;
 } test_server_options;
 
 typedef struct test_server test_server;

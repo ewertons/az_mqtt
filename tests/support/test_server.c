@@ -850,6 +850,14 @@ static void _serve(test_server* s, conn* c)
       return;
     }
   }
+  if (s->options.send_bad_flags)
+  {
+    static const uint8_t pubrel_flags_0[] = { 0x60, 0x02, 0x00, 0x07 };
+    if (!_write(c, pubrel_flags_0, (int)sizeof(pubrel_flags_0)))
+    {
+      return;
+    }
+  }
   if (s->options.behavior == TEST_SERVER_DISCONNECT_AFTER_CONNACK)
   {
     static const uint8_t disconnect_v5[] = { 0xE0, 0x01, 0x8B };
