@@ -39,16 +39,21 @@ endif()
 
 # A project embedding az_mqtt may provide azure-sdk-for-c (target az_core) itself; else the
 # submodule is built.
+# Its settings are directory-scoped variables, so a parent project's cache is left unchanged.
 if(NOT TARGET az_core)
-  if(WIN32)
-    set(AZ_PLATFORM_IMPL "WIN32" CACHE STRING "Azure SDK platform")
-  else()
-    set(AZ_PLATFORM_IMPL "POSIX" CACHE STRING "Azure SDK platform")
+  if(NOT DEFINED AZ_PLATFORM_IMPL)
+    if(WIN32)
+      set(AZ_PLATFORM_IMPL "WIN32")
+    else()
+      set(AZ_PLATFORM_IMPL "POSIX")
+    endif()
   endif()
 
-  # Don't build Azure SDK tests or samples
-  set(UNIT_TESTING OFF CACHE BOOL "" FORCE)
-  set(TRANSPORT_PAHO OFF CACHE BOOL "" FORCE)
+  # No Azure SDK tests or samples. option() honors these variables only under CMP0077, which
+  # azure-sdk-for-c's cmake_minimum_required(3.10) leaves unset.
+  set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+  set(UNIT_TESTING OFF)
+  set(TRANSPORT_PAHO OFF)
 
   add_subdirectory(deps/azure-sdk-for-c)
 endif()
