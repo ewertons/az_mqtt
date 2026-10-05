@@ -1273,6 +1273,10 @@ az_mqtt5_codec_decode_publish(az_span body, uint8_t flags, az_mqtt5_publish_data
 
   out->dup = (flags & 0x08) != 0;
   out->qos = (az_mqtt_qos)((flags >> 1) & 0x03);
+  if (out->qos > AZ_MQTT_QOS_EXACTLY_ONCE)
+  {
+    return AZ_MQTT_ERROR_MALFORMED_PACKET; // QoS 3 is reserved.
+  }
   out->retain = (flags & 0x01) != 0;
 
   // Topic Name
@@ -1532,8 +1536,12 @@ static az_result _decode_suback_common(az_span body, az_mqtt5_suback_data* out)
   if (az_result_failed(rc))
     return rc;
 
-  // Remaining bytes are reason codes
+  // Remaining bytes are reason codes: one per topic filter, and there is at least one.
   out->reason_code_count = 0;
+  if (az_span_size(body) == 0)
+  {
+    return AZ_MQTT_ERROR_MALFORMED_PACKET;
+  }
   while (az_span_size(body) > 0)
   {
     uint8_t reason;

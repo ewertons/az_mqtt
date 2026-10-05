@@ -39,10 +39,61 @@ static void a_decoded_ack_has_status_ok(void** state)
   assert_int_equal(ack.status, AZ_OK);
 }
 
+static void a_publish_with_qos_3_is_malformed(void** state)
+{
+  (void)state;
+#if AZ_MQTT_TEST_VERSION == 5
+  uint8_t body[] = { 0x00, 0x01, 't', 0x00, 0x09, 0x00 }; // Topic, packet id, no properties.
+  az_mqtt5_publish_data publish;
+  memset(&publish, 0, sizeof(publish));
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(body), 0x06, &publish),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+  assert_int_equal(az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(body), 0x04, &publish), AZ_OK);
+#else
+  uint8_t body[] = { 0x00, 0x01, 't', 0x00, 0x09 }; // Topic, packet id.
+  az_mqtt3_publish_data publish;
+  assert_int_equal(
+      az_mqtt3_codec_decode_publish(AZ_SPAN_FROM_BUFFER(body), 0x06, &publish),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+  assert_int_equal(az_mqtt3_codec_decode_publish(AZ_SPAN_FROM_BUFFER(body), 0x04, &publish), AZ_OK);
+#endif
+  assert_int_equal(publish.qos, AZ_MQTT_QOS_EXACTLY_ONCE);
+}
+
+static void a_suback_without_codes_is_malformed(void** state)
+{
+  (void)state;
+#if AZ_MQTT_TEST_VERSION == 5
+  uint8_t empty[] = { 0x00, 0x01, 0x00 }; // Packet id, no properties, no reason code.
+  uint8_t one[] = { 0x00, 0x01, 0x00, 0x02 };
+  az_mqtt5_suback_data suback;
+  memset(&suback, 0, sizeof(suback));
+  assert_int_equal(
+      az_mqtt5_codec_decode_suback(AZ_SPAN_FROM_BUFFER(empty), &suback),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+  assert_int_equal(
+      az_mqtt5_codec_decode_unsuback(AZ_SPAN_FROM_BUFFER(empty), &suback),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+  assert_int_equal(az_mqtt5_codec_decode_suback(AZ_SPAN_FROM_BUFFER(one), &suback), AZ_OK);
+#else
+  uint8_t empty[] = { 0x00, 0x01 }; // Packet id, no return code.
+  uint8_t one[] = { 0x00, 0x01, 0x02 };
+  az_mqtt3_suback_data suback;
+  assert_int_equal(
+      az_mqtt3_codec_decode_suback(AZ_SPAN_FROM_BUFFER(empty), &suback),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+  assert_int_equal(az_mqtt3_codec_decode_suback(AZ_SPAN_FROM_BUFFER(one), &suback), AZ_OK);
+  assert_int_equal(az_span_size(suback.return_codes), 1);
+#endif
+}
+
 int main(void)
 {
   const struct CMUnitTest tests[] = {
     cmocka_unit_test(a_decoded_ack_has_status_ok),
+    cmocka_unit_test(a_publish_with_qos_3_is_malformed),
+    cmocka_unit_test(a_suback_without_codes_is_malformed),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }

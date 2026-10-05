@@ -79,6 +79,7 @@ AZ_NODISCARD az_result az_mqtt3_codec_decode_connack(az_span body, az_mqtt3_conn
 /**
  * @brief Decode a PUBLISH body.
  * @param[in] flags Fixed header flags.
+ * @retval AZ_MQTT_ERROR_MALFORMED_PACKET QoS 3 (reserved), among others.
  */
 AZ_NODISCARD az_result
 az_mqtt3_codec_decode_publish(az_span body, uint8_t flags, az_mqtt3_publish_data* out);
@@ -89,7 +90,10 @@ az_mqtt3_codec_decode_publish(az_span body, uint8_t flags, az_mqtt3_publish_data
  */
 AZ_NODISCARD az_result az_mqtt3_codec_decode_ack(az_span body, az_mqtt3_ack_data* out);
 
-/** @brief Decode a SUBACK body; out->return_codes points into @p body. */
+/**
+ * @brief Decode a SUBACK body; out->return_codes points into @p body.
+ * @retval AZ_MQTT_ERROR_MALFORMED_PACKET No return code, among others.
+ */
 AZ_NODISCARD az_result az_mqtt3_codec_decode_suback(az_span body, az_mqtt3_suback_data* out);
 
 #include <azure/core/_az_cfg_suffix.h>

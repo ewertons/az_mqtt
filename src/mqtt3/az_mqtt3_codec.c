@@ -389,6 +389,10 @@ az_mqtt3_codec_decode_publish(az_span body, uint8_t flags, az_mqtt3_publish_data
 
   out->dup = (flags & 0x08) != 0;
   out->qos = (az_mqtt_qos)((flags >> 1) & 0x03);
+  if (out->qos > AZ_MQTT_QOS_EXACTLY_ONCE)
+  {
+    return AZ_MQTT_ERROR_MALFORMED_PACKET; // QoS 3 is reserved.
+  }
   out->retain = (flags & 0x01) != 0;
   out->packet_id = 0;
 
@@ -426,5 +430,6 @@ AZ_NODISCARD az_result az_mqtt3_codec_decode_suback(az_span body, az_mqtt3_subac
   if (az_result_failed(rc))
     return rc;
   out->return_codes = body;
-  return AZ_OK;
+  // One return code per topic filter, and a SUBSCRIBE has at least one.
+  return az_span_size(body) > 0 ? AZ_OK : AZ_MQTT_ERROR_MALFORMED_PACKET;
 }
