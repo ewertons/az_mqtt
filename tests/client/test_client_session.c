@@ -2282,6 +2282,49 @@ static void a_refused_connack_code_is_reported_verbatim(void** state)
   _teardown(&f);
 }
 
+static void acknowledgement_codes_must_match_the_filters(void** state)
+{
+  (void)state;
+  AZ_MQTT_T(subscription) subs[2];
+  memset(subs, 0, sizeof(subs));
+  subs[0].topic_filter = AZ_SPAN_FROM_STR("a");
+  subs[1].topic_filter = AZ_SPAN_FROM_STR("b");
+  // SUBACK: 2 codes for 1 filter, then 1 code for 2 filters.
+  for (int run = 0; run < 2; run++)
+  {
+    test_server_options so = _plain();
+    so.suback_codes = 2 - run;
+    fixture f;
+    _setup(&f, &so, 30);
+    assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+    assert_int_equal(AZ_MQTT_T(client_subscribe)(&f.client, subs, 1 + run, NULL), AZ_OK);
+    az_result rc = AZ_OK;
+    for (int i = 0; i < 40 && rc == AZ_OK; i++)
+    {
+      rc = AZ_MQTT_T(client_process_loop)(&f.client, 50);
+    }
+    assert_int_equal(rc, AZ_MQTT_ERROR_PROTOCOL);
+    assert_int_equal(g.subacks, 0);
+    _teardown(&f);
+  }
+#if AZ_MQTT_TEST_VERSION == 5
+  // UNSUBACK: 1 code for 2 filters.
+  test_server_options so = _plain();
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  az_span const filters[] = { AZ_SPAN_FROM_STR("a"), AZ_SPAN_FROM_STR("b") };
+  assert_int_equal(AZ_MQTT_T(client_unsubscribe)(&f.client, filters, 2, NULL), AZ_OK);
+  az_result rc = AZ_OK;
+  for (int i = 0; i < 40 && rc == AZ_OK; i++)
+  {
+    rc = AZ_MQTT_T(client_process_loop)(&f.client, 50);
+  }
+  assert_int_equal(rc, AZ_MQTT_ERROR_PROTOCOL);
+  _teardown(&f);
+#endif
+}
+
 static void suback_reason_codes_never_exceed_the_buffer(void** state)
 {
   (void)state;
@@ -2290,10 +2333,13 @@ static void suback_reason_codes_never_exceed_the_buffer(void** state)
   fixture f;
   _setup(&f, &so, 30);
   assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
-  AZ_MQTT_T(subscription) sub;
-  memset(&sub, 0, sizeof(sub));
-  sub.topic_filter = AZ_SPAN_FROM_STR("t");
-  assert_int_equal(AZ_MQTT_T(client_subscribe)(&f.client, &sub, 1, NULL), AZ_OK);
+  AZ_MQTT_T(subscription) subs[10];
+  memset(subs, 0, sizeof(subs));
+  for (int i = 0; i < 10; i++)
+  {
+    subs[i].topic_filter = AZ_SPAN_FROM_STR("t");
+  }
+  assert_int_equal(AZ_MQTT_T(client_subscribe)(&f.client, subs, 10, NULL), AZ_OK);
   for (int i = 0; i < 20 && g.subacks == 0; i++)
   {
     assert_int_equal(AZ_MQTT_T(client_process_loop)(&f.client, 50), AZ_OK);
@@ -2523,6 +2569,7 @@ int main(void)
     cmocka_unit_test(reconnect_after_a_lost_session_works),
     cmocka_unit_test(a_refused_connack_code_is_reported_verbatim),
     cmocka_unit_test(suback_reason_codes_never_exceed_the_buffer),
+    cmocka_unit_test(acknowledgement_codes_must_match_the_filters),
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(publish_properties_never_exceed_the_buffers),
 #endif

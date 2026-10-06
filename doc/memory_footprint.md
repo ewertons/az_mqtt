@@ -44,7 +44,7 @@ azure-sdk-for-c `LOGGING=OFF` (`AZ_NO_LOGGING`) compiles az_mqtt logging out: az
 9,239 B (.text) and 90 B (.rodata): each application 3,664 B and 292 B smaller.
 
 RAM per client: `az_mqtt3_client` 320 B, `az_mqtt5_client` 512 B (x86-64), plus caller storage:
-4 B per `inflight_control_buffer` entry and, for sessions that outlive the connection,
+6 B per `inflight_control_buffer` entry and, for sessions that outlive the connection,
 `inflight_message_buffer` (each unacknowledged QoS 1/2 PUBLISH: its size +
 `AZ_MQTT_INFLIGHT_MESSAGE_OVERHEAD` = 18 B; at least `send_buffer` + 18 B; none for clean sessions).
 The platform transport (`az_mqtt_transport_sizeof()`, caller storage): 560 B with OpenSSL, 4,176 B with mbedTLS 3.6, 480 B without TLS. An `az_mqtt_websocket` is 416 B (caller storage); its sends use a
