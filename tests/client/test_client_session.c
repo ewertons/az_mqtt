@@ -1719,6 +1719,18 @@ static void a_subscription_to_an_empty_filter_is_refused(void** state)
     assert_int_equal(AZ_MQTT_T(client_subscribe)(&f.client, &sub, count, NULL), AZ_ERROR_ARG);
     assert_int_equal(AZ_MQTT_T(client_unsubscribe)(&f.client, &filter, count, NULL), AZ_ERROR_ARG);
   }
+  // 65,536 valid filters: refused for their count, not their size.
+  static AZ_MQTT_T(subscription) many_subs[UINT16_MAX + 1];
+  static az_span many_filters[UINT16_MAX + 1];
+  for (int32_t i = 0; i <= UINT16_MAX; i++)
+  {
+    many_subs[i].topic_filter = filter;
+    many_filters[i] = filter;
+  }
+  assert_int_equal(
+      AZ_MQTT_T(client_subscribe)(&f.client, many_subs, UINT16_MAX + 1, NULL), AZ_ERROR_ARG);
+  assert_int_equal(
+      AZ_MQTT_T(client_unsubscribe)(&f.client, many_filters, UINT16_MAX + 1, NULL), AZ_ERROR_ARG);
   assert_int_equal(_subscribe(&f), AZ_OK);
   _teardown(&f);
 }
