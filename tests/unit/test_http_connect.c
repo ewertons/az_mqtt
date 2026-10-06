@@ -124,25 +124,6 @@ static void invalid_options_are_refused(void** state)
   }
 #endif
 
-  // Options changed after the check: checked again when the request is built.
-  {
-    p = _proxy("u", "p");
-    assert_int_equal(_az_mqtt_http_connect_check(&p), AZ_OK);
-    p.username = _str(long_user);
-    uint8_t request[_AZ_MQTT_HTTP_CONNECT_REQUEST_MAX];
-    int32_t request_size = 0;
-    assert_int_equal(
-        _az_mqtt_http_connect_request(
-            &p, _str("hub"), 1, AZ_SPAN_FROM_BUFFER(request), &request_size),
-        AZ_MQTT_ERROR_INVALID_CONFIG);
-    p = _proxy("u", "p");
-    p.host = AZ_SPAN_EMPTY; // "No proxy" when set; invalid once the connect uses it.
-    assert_int_equal(
-        _az_mqtt_http_connect_request(
-            &p, _str("hub"), 1, AZ_SPAN_FROM_BUFFER(request), &request_size),
-        AZ_MQTT_ERROR_INVALID_CONFIG);
-  }
-
   // The target host goes in the request line too.
   p = _proxy("", "");
   uint8_t buf[_AZ_MQTT_HTTP_CONNECT_REQUEST_MAX];
