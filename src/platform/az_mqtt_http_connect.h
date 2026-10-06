@@ -69,7 +69,9 @@ AZ_NODISCARD az_result _az_mqtt_http_connect_check(az_mqtt_proxy_options const* 
  *
  * The request holds the credentials: clear @p buffer after use.
  *
- * @retval AZ_MQTT_ERROR_INVALID_CONFIG @p host is empty, too long, or has CR, LF, NUL or a space.
+ * @retval AZ_MQTT_ERROR_INVALID_CONFIG @p host is empty, too long, or has a control character or
+ * space; or @p proxy, checked again as it is used, not copied, is not valid
+ * (_az_mqtt_http_connect_check()) or has an empty host.
  */
 AZ_NODISCARD az_result _az_mqtt_http_connect_request(
     az_mqtt_proxy_options const* proxy,
@@ -77,7 +79,6 @@ AZ_NODISCARD az_result _az_mqtt_http_connect_request(
     uint16_t port,
     az_span buffer,
     int32_t* out_size);
-
 
 /**
  * @brief Send the rest of the CONNECT request (see _az_mqtt_http_connect_request()) with
@@ -87,7 +88,7 @@ AZ_NODISCARD az_result _az_mqtt_http_connect_request(
  * @retval AZ_OK All sent.
  * @retval AZ_MQTT_ERROR_TIMEOUT @p send could send no more now: call again when it can.
  * @retval AZ_MQTT_ERROR_PROXY @p send failed.
- * @retval AZ_MQTT_ERROR_INVALID_CONFIG @p host cannot be put in a request.
+ * @retval AZ_MQTT_ERROR_INVALID_CONFIG As _az_mqtt_http_connect_request().
  */
 AZ_NODISCARD az_result _az_mqtt_http_connect_send_request(
     az_mqtt_proxy_options const* proxy,

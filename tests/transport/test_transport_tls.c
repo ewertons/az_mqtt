@@ -217,6 +217,19 @@ static void expired_certificate_is_rejected(void** state)
   _expect_rejected(&o, "localhost");
 }
 
+static void certificate_without_extended_key_usage_is_accepted(void** state)
+{
+  (void)state;
+  test_server_options o = test_server_options_default();
+  o.no_eku = true;
+  fixture f;
+  assert_int_equal(_setup(&f, &o), 0);
+  az_mqtt_tls_options t = _trusting(&f);
+  assert_int_equal(_connect(&f, "localhost", &t), AZ_OK);
+  assert_true(_mqtt_exchange_works(&f));
+  _teardown(&f);
+}
+
 static void certificate_not_for_server_authentication_is_rejected(void** state)
 {
   (void)state;
@@ -327,6 +340,7 @@ int main(void)
     cmocka_unit_test(host_name_not_in_certificate_is_rejected),
     cmocka_unit_test(ip_address_not_in_certificate_is_rejected),
     cmocka_unit_test(expired_certificate_is_rejected),
+    cmocka_unit_test(certificate_without_extended_key_usage_is_accepted),
     cmocka_unit_test(certificate_not_for_server_authentication_is_rejected),
     cmocka_unit_test(missing_trust_anchor_never_trusts_the_server),
     cmocka_unit_test(half_a_client_identity_is_refused_before_connecting),

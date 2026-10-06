@@ -135,6 +135,12 @@ static void invalid_options_are_refused(void** state)
         _az_mqtt_http_connect_request(
             &p, _str("hub"), 1, AZ_SPAN_FROM_BUFFER(request), &request_size),
         AZ_MQTT_ERROR_INVALID_CONFIG);
+    p = _proxy("u", "p");
+    p.host = AZ_SPAN_EMPTY; // "No proxy" when set; invalid once the connect uses it.
+    assert_int_equal(
+        _az_mqtt_http_connect_request(
+            &p, _str("hub"), 1, AZ_SPAN_FROM_BUFFER(request), &request_size),
+        AZ_MQTT_ERROR_INVALID_CONFIG);
   }
 
   // The target host goes in the request line too.

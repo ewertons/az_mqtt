@@ -111,8 +111,9 @@ az_result _az_mqtt_http_connect_request(
     az_span buffer,
     int32_t* out_size)
 {
-  // Checked again: the options are used, not copied, and the credentials must fit.
-  if (!_is_valid_host(host) || az_result_failed(_az_mqtt_http_connect_check(proxy)))
+  // Checked again: the options are used, not copied. An empty host here is no longer "no proxy".
+  if (!_is_valid_host(host) || proxy == NULL || az_span_size(proxy->host) == 0
+      || az_result_failed(_az_mqtt_http_connect_check(proxy)))
   {
     return AZ_MQTT_ERROR_INVALID_CONFIG;
   }

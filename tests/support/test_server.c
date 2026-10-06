@@ -138,10 +138,10 @@ static X509* _make_cert(
   X509V3_set_ctx(&v3, issuer != NULL ? issuer : cert, cert, NULL, NULL, 0);
   bool ok = _add_ext(cert, &v3, NID_basic_constraints, is_ca ? "critical,CA:TRUE" : "CA:FALSE")
       && _add_ext(
-             cert,
-             &v3,
-             NID_key_usage,
-             is_ca ? "critical,keyCertSign,cRLSign" : "critical,digitalSignature")
+                cert,
+                &v3,
+                NID_key_usage,
+                is_ca ? "critical,keyCertSign,cRLSign" : "critical,digitalSignature")
       && _add_ext(cert, &v3, NID_subject_key_identifier, "hash")
       && (eku == NULL || _add_ext(cert, &v3, NID_ext_key_usage, eku))
       && (san == NULL || _add_ext(cert, &v3, NID_subject_alt_name, san))
@@ -192,12 +192,21 @@ static bool _setup_tls(test_server* s)
       signer,
       signer_key,
       false,
-      s->options.client_auth_only ? "clientAuth" : "serverAuth,clientAuth",
+      s->options.no_eku                 ? NULL
+          : s->options.client_auth_only ? "clientAuth"
+                                        : "serverAuth,clientAuth",
       s->options.san,
       s->options.expired ? -2 * day : -day,
       s->options.expired ? -day : 30 * day);
   X509* cli = _make_cert(
-      cli_key, "az-mqtt-test-client", ca, ca_key, false, "serverAuth,clientAuth", NULL, -day,
+      cli_key,
+      "az-mqtt-test-client",
+      ca,
+      ca_key,
+      false,
+      "serverAuth,clientAuth",
+      NULL,
+      -day,
       30 * day);
 
   bool ok = ca_key && rogue_key && srv_key && cli_key && ca && rogue && srv && cli

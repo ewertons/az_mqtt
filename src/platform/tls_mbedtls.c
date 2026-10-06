@@ -428,10 +428,7 @@ static az_result _tls_failure(_tls_transport* transport, int ret, bool handshake
           || (ret == MBEDTLS_ERR_SSL_BAD_CERTIFICATE && flags != 0 && flags != UINT32_MAX)))
   {
     _az_mqtt_io_layer_report(
-        sink,
-        AZ_MQTT_NATIVE_ERROR_TLS_VERIFY,
-        (int32_t)flags,
-        AZ_MQTT_ERROR_TLS_VERIFY);
+        sink, AZ_MQTT_NATIVE_ERROR_TLS_VERIFY, (int32_t)flags, AZ_MQTT_ERROR_TLS_VERIFY);
     _az_mqtt_io_layer_report(sink, AZ_MQTT_NATIVE_ERROR_TLS, ret, AZ_MQTT_ERROR_TLS_VERIFY);
     return AZ_MQTT_ERROR_TLS_VERIFY;
   }
