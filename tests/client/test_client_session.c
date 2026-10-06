@@ -1620,6 +1620,35 @@ static void a_topic_alias_above_the_advertised_maximum_ends_the_session(void** s
 }
 #endif
 
+static void a_pingresp_with_a_body_ends_the_session(void** state)
+{
+  (void)state;
+  static const uint8_t pingresp[] = { 0xD0, 0x01, 0x00 };
+  _expect_malformed(pingresp, (int)sizeof(pingresp));
+}
+
+#if AZ_MQTT_TEST_VERSION == 5
+static void an_acknowledgement_with_a_disallowed_reason_ends_the_session(void** state)
+{
+  (void)state;
+  static const uint8_t puback_0x01[] = { 0x40, 0x03, 0x00, 0x07, 0x01 }; // 0x01: SUBACK only.
+  test_server_options so = _plain();
+  so.raw_after_connack = puback_0x01;
+  so.raw_after_connack_size = (int)sizeof(puback_0x01);
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  az_result rc = AZ_OK;
+  for (int i = 0; i < 150 && az_result_succeeded(rc); i++)
+  {
+    rc = AZ_MQTT_T(client_process_loop)(&f.client, 20);
+  }
+  assert_int_equal(rc, AZ_MQTT_ERROR_PROTOCOL);
+  assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_PROTOCOL);
+  _teardown(&f);
+}
+#endif
+
 static void a_publish_with_a_malformed_topic_is_refused(void** state)
 {
   (void)state;
@@ -2408,6 +2437,10 @@ int main(void)
     cmocka_unit_test(wrong_flags_are_rejected_before_the_body_is_read),
     cmocka_unit_test(a_topic_with_u0000_ends_the_session),
     cmocka_unit_test(a_publish_with_a_malformed_topic_is_refused),
+    cmocka_unit_test(a_pingresp_with_a_body_ends_the_session),
+#if AZ_MQTT_TEST_VERSION == 5
+    cmocka_unit_test(an_acknowledgement_with_a_disallowed_reason_ends_the_session),
+#endif
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(a_topic_alias_above_the_advertised_maximum_ends_the_session),
 #endif

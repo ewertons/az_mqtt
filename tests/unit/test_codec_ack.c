@@ -284,6 +284,33 @@ static void single_use_properties_must_not_repeat(void** state)
 }
 #endif
 
+static void subscribe_acknowledgement_codes_are_checked(void** state)
+{
+  (void)state;
+#if AZ_MQTT_TEST_VERSION == 5
+  az_mqtt5_suback_data b;
+  memset(&b, 0, sizeof(b));
+  uint8_t granted_1[] = { 0x00, 0x01, 0x00, 0x01 }; // Packet id, no properties, code.
+  uint8_t no_subscription[] = { 0x00, 0x01, 0x00, 0x11 };
+  assert_int_equal(az_mqtt5_codec_decode_suback(AZ_SPAN_FROM_BUFFER(granted_1), &b), AZ_OK);
+  assert_int_equal(
+      az_mqtt5_codec_decode_unsuback(AZ_SPAN_FROM_BUFFER(granted_1), &b), AZ_MQTT_ERROR_PROTOCOL);
+  assert_int_equal(
+      az_mqtt5_codec_decode_unsuback(AZ_SPAN_FROM_BUFFER(no_subscription), &b), AZ_OK);
+  assert_int_equal(
+      az_mqtt5_codec_decode_suback(AZ_SPAN_FROM_BUFFER(no_subscription), &b),
+      AZ_MQTT_ERROR_PROTOCOL);
+#else
+  az_mqtt3_suback_data b;
+  uint8_t ok[] = { 0x00, 0x01, 0x00, 0x01, 0x02, 0x80 };
+  uint8_t reserved[] = { 0x00, 0x01, 0x03 };
+  assert_int_equal(az_mqtt3_codec_decode_suback(AZ_SPAN_FROM_BUFFER(ok), &b), AZ_OK);
+  assert_int_equal(
+      az_mqtt3_codec_decode_suback(AZ_SPAN_FROM_BUFFER(reserved), &b),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+#endif
+}
+
 int main(void)
 {
   const struct CMUnitTest tests[] = {
@@ -292,6 +319,7 @@ int main(void)
     cmocka_unit_test(a_qos1_publish_with_packet_id_0_is_malformed),
     cmocka_unit_test(connack_flags_and_codes_are_checked),
     cmocka_unit_test(acknowledgements_with_packet_id_0_are_malformed),
+    cmocka_unit_test(subscribe_acknowledgement_codes_are_checked),
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(zero_valued_properties_are_protocol_errors),
     cmocka_unit_test(one_byte_flag_properties_must_be_0_or_1),
