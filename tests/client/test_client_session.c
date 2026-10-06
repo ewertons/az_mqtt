@@ -1712,6 +1712,13 @@ static void a_subscription_to_an_empty_filter_is_refused(void** state)
   assert_int_equal(AZ_MQTT_T(client_subscribe)(&f.client, &sub, 1, NULL), AZ_ERROR_ARG);
   az_span const empty = AZ_SPAN_EMPTY;
   assert_int_equal(AZ_MQTT_T(client_unsubscribe)(&f.client, &empty, 1, NULL), AZ_ERROR_ARG);
+  sub.topic_filter = AZ_SPAN_FROM_STR("t");
+  az_span const filter = AZ_SPAN_FROM_STR("t");
+  for (int32_t count = -1; count <= 0; count++)
+  {
+    assert_int_equal(AZ_MQTT_T(client_subscribe)(&f.client, &sub, count, NULL), AZ_ERROR_ARG);
+    assert_int_equal(AZ_MQTT_T(client_unsubscribe)(&f.client, &filter, count, NULL), AZ_ERROR_ARG);
+  }
   assert_int_equal(_subscribe(&f), AZ_OK);
   _teardown(&f);
 }

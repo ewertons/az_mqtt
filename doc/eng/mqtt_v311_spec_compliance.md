@@ -61,7 +61,7 @@ to the current implementation status of `az_mqttv3` (on `az_mqtt_core`).
 | 44 | PUBREC / PUBREL / PUBCOMP decoded — packet identifier only (fixed 2-byte form) | [§3.5–3.7](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `az_mqtt3_codec_decode_ack` handles all three | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | **SUBSCRIBE ([§3.8](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html))** |||||
 | 45 | SUBSCRIBE encoded with fixed flags = 0x02 | [§3.8.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `0x02` hard-coded in `az_mqtt3_codec_encode_subscribe` | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
-| 46 | SUBSCRIBE contains at least one Topic Filter | [§3.8.3](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | No | No validation that `sub_count > 0` | |
+| 46 | SUBSCRIBE contains at least one Topic Filter | [§3.8.3](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `az_mqtt3_client_subscribe`: a count of 0 or less is AZ_ERROR_ARG (the codec requires it as a precondition) | [src/mqtt3/az_mqtt3_client.c](../../src/mqtt3/az_mqtt3_client.c) |
 | 47 | Subscription Options: QoS (0, 1, or 2) | [§3.8.3.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `subscription.qos` | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | 48 | Subscription Options: Reserved bits must be 0 | [§3.8.3.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | Only QoS bits (0–1) set; bits 2–7 left as 0 | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | **SUBACK ([§3.9](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html))** |||||
@@ -69,7 +69,7 @@ to the current implementation status of `az_mqttv3` (on `az_mqtt_core`).
 | 50 | SUBACK return codes: 0x00 (max QoS 0), 0x01 (max QoS 1), 0x02 (max QoS 2), 0x80 (failure) | [§3.9.3](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | Decoded and returned to caller | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | **UNSUBSCRIBE ([§3.10](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html))** |||||
 | 51 | UNSUBSCRIBE encoded with fixed flags = 0x02 | [§3.10.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `0x02` hard-coded | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
-| 52 | UNSUBSCRIBE must contain at least one Topic Filter | [§3.10.3](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | No | No validation that `filter_count > 0` | |
+| 52 | UNSUBSCRIBE must contain at least one Topic Filter | [§3.10.3](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `az_mqtt3_client_unsubscribe`: a count of 0 or less is AZ_ERROR_ARG (the codec requires it as a precondition) | [src/mqtt3/az_mqtt3_client.c](../../src/mqtt3/az_mqtt3_client.c) |
 | **UNSUBACK ([§3.11](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html))** |||||
 | 53 | UNSUBACK decoded — packet identifier only (2-byte fixed form) | [§3.11](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `az_mqtt3_codec_decode_ack` | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | **PINGREQ / PINGRESP ([§3.12](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html)–3.13)** |||||
@@ -98,9 +98,9 @@ to the current implementation status of `az_mqttv3` (on `az_mqtt_core`).
 
 | Status | Count |
 |--------|-------|
-| Yes | 63 |
+| Yes | 65 |
 | Partial | 1 |
-| No | 5 |
+| No | 3 |
 
 ### Key gaps (client-facing impact)
 

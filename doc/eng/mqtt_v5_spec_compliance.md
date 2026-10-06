@@ -108,7 +108,7 @@ to the current implementation status of `az_mqttv5` (on `az_mqtt_core`).
 | 91 | PUBREC / PUBREL / PUBCOMP decoded | [§3.5](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html)–3.7 | Yes | `az_mqtt5_codec_decode_ack` handles all three | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | **SUBSCRIBE ([§3.8](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html))** |||||
 | 92 | SUBSCRIBE encoded with fixed flags = 0x02 | [[MQTT-3.8.1-1]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `0x02` hard-coded in `az_mqtt5_codec_encode_subscribe` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
-| 93 | SUBSCRIBE contains at least one Topic Filter | [[MQTT-3.8.3-1]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | No validation that `sub_count > 0` | |
+| 93 | SUBSCRIBE contains at least one Topic Filter | [[MQTT-3.8.3-1]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `az_mqtt5_client_subscribe`: a count of 0 or less is AZ_ERROR_ARG (the codec requires it as a precondition) | [src/mqtt5/az_mqtt5_client.c](../../src/mqtt5/az_mqtt5_client.c) |
 | 94 | Subscription Options: QoS | [§3.8.3.1](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `subscription.qos` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 95 | Subscription Options: No Local | [§3.8.3.1](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `subscription.no_local` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 96 | Subscription Options: Retain As Published | [§3.8.3.1](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `subscription.retain_as_published` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
@@ -121,7 +121,7 @@ to the current implementation status of `az_mqttv5` (on `az_mqtt_core`).
 | 102 | SUBACK reason string decoded | [§3.9.2.1.2](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `suback_data.reason_string` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | **UNSUBSCRIBE ([§3.10](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html))** |||||
 | 103 | UNSUBSCRIBE encoded with fixed flags = 0x02 | [[MQTT-3.10.1-1]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `0x02` hard-coded | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
-| 104 | UNSUBSCRIBE must contain at least one Topic Filter | [[MQTT-3.10.3-1]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | No validation that `filter_count > 0` | |
+| 104 | UNSUBSCRIBE must contain at least one Topic Filter | [[MQTT-3.10.3-1]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `az_mqtt5_client_unsubscribe`: a count of 0 or less is AZ_ERROR_ARG (the codec requires it as a precondition) | [src/mqtt5/az_mqtt5_client.c](../../src/mqtt5/az_mqtt5_client.c) |
 | 105 | User Property (UNSUBSCRIBE) | [§3.10.2.1.2](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | Not supported in `az_mqtt5_codec_encode_unsubscribe` | |
 | **UNSUBACK ([§3.11](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html))** |||||
 | 106 | UNSUBACK decoded — packet identifier, reason codes, user properties | [§3.11](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `az_mqtt5_codec_decode_unsuback`; a code count other than the UNSUBSCRIBE's filters is AZ_MQTT_ERROR_PROTOCOL | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c), [src/mqtt5/az_mqtt5_client.c](../../src/mqtt5/az_mqtt5_client.c) |
@@ -165,9 +165,9 @@ to the current implementation status of `az_mqttv5` (on `az_mqtt_core`).
 
 | Status | Count |
 |--------|-------|
-| Yes | 117 |
+| Yes | 119 |
 | Partial | 2 |
-| No | 16 |
+| No | 14 |
 
 ### Key gaps (client-facing impact)
 
