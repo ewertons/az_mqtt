@@ -3,7 +3,8 @@
 # Licensed under the MIT license. See LICENSE file in the project root for full license information.
 #
 # Start a local Mosquitto for the e2e tests: plain MQTT on 1883, TLS on 8883,
-# MQTT over WebSockets on 8080 (ws) and 8081 (wss).
+# MQTT over WebSockets on 8080 (ws) and 8081 (wss), and TLS on 8884 with a server
+# certificate whose Extended Key Usage is clientAuth only (clients must refuse it).
 #
 #   eng/ci/start-broker.sh [work-dir]
 #
@@ -29,7 +30,12 @@ openssl req -newkey rsa:2048 -nodes -sha256 -subj "/CN=localhost" \
 printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\n' > "${work}/san.cnf"
 openssl x509 -req -in "${w}/server.csr" -CA "${w}/ca.crt" -CAkey "${w}/ca.key" \
   -CAcreateserial -days 30 -sha256 -extfile "${w}/san.cnf" -out "${w}/server.crt"
-[ -s "${work}/server.crt" ] || { echo "certificate generation failed" >&2; exit 1; }
+printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=clientAuth\n' \
+  > "${work}/client-auth.cnf"
+openssl x509 -req -in "${w}/server.csr" -CA "${w}/ca.crt" -CAkey "${w}/ca.key" \
+  -CAcreateserial -days 30 -sha256 -extfile "${w}/client-auth.cnf" -out "${w}/client-auth.crt"
+[ -s "${work}/server.crt" ] && [ -s "${work}/client-auth.crt" ] \
+  || { echo "certificate generation failed" >&2; exit 1; }
 
 mkdir -p "${root}/tests/broker/certs"
 cp "${work}/ca.crt" "${root}/tests/broker/certs/ca.crt"
@@ -49,6 +55,10 @@ protocol websockets
 cafile ${w}/ca.crt
 certfile ${w}/server.crt
 keyfile ${w}/server.key
+listener 8884 127.0.0.1
+cafile ${w}/ca.crt
+certfile ${w}/client-auth.crt
+keyfile ${w}/server.key
 CONF
 
 # A packaged broker may already own 1883.
@@ -61,7 +71,7 @@ nohup mosquitto -c "${w}/mosquitto.conf" > "${work}/mosquitto.log" 2>&1 &
 for _ in $(seq 1 30); do
   if mosquitto_pub -h 127.0.0.1 -p 1883 -t ci/ready -m ok 2>/dev/null \
     && mosquitto_pub -h localhost -p 8883 --cafile "${w}/ca.crt" -t ci/ready -m ok 2>/dev/null; then
-    echo "Mosquitto ready (1883, 8883, 8080, 8081)"
+    echo "Mosquitto ready (1883, 8883, 8080, 8081, 8884)"
     exit 0
   fi
   sleep 1

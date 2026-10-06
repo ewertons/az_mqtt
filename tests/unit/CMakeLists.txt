@@ -14,6 +14,18 @@ foreach(version 3 5)
     add_test(NAME ${target} COMMAND ${target})
   endif()
 endforeach()
+add_executable(az_mqtt_test_codec_fixed_header test_codec_fixed_header.c)
+target_include_directories(az_mqtt_test_codec_fixed_header PRIVATE
+  ${cmocka_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/core)
+target_link_libraries(az_mqtt_test_codec_fixed_header PRIVATE az_mqtt::core cmocka)
+az_mqtt_apply_warnings(az_mqtt_test_codec_fixed_header)
+add_test(NAME az_mqtt_test_codec_fixed_header COMMAND az_mqtt_test_codec_fixed_header)
+add_executable(az_mqtt_test_codec_utf8 test_codec_utf8.c)
+target_include_directories(az_mqtt_test_codec_utf8 PRIVATE
+  ${cmocka_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/core)
+target_link_libraries(az_mqtt_test_codec_utf8 PRIVATE az_mqtt::core cmocka)
+az_mqtt_apply_warnings(az_mqtt_test_codec_utf8)
+add_test(NAME az_mqtt_test_codec_utf8 COMMAND az_mqtt_test_codec_utf8)
 if(AZ_MQTT_ENABLE_PROXY)
   add_executable(az_mqtt_test_http_connect test_http_connect.c)
   target_include_directories(az_mqtt_test_http_connect PRIVATE

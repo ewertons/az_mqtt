@@ -5,6 +5,12 @@
 
 #include <string.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <time.h>
+#endif
+
 #define _FAKE(t) ((test_fake_transport*)(t))
 
 static az_result _fail(test_fake_transport* f, az_result rc)
@@ -46,6 +52,15 @@ static az_result _send(az_mqtt_transport* t, az_span data)
 {
   test_fake_transport* const f = _FAKE(t);
   f->send_calls++;
+  if (f->send_delay_ms > 0)
+  {
+#ifdef _WIN32
+    Sleep((DWORD)f->send_delay_ms);
+#else
+    struct timespec const ts = { f->send_delay_ms / 1000, (long)(f->send_delay_ms % 1000) * 1000000L };
+    nanosleep(&ts, NULL);
+#endif
+  }
   if (f->fail_send_call != 0 && f->send_calls >= f->fail_send_call)
   {
     return _fail(f, AZ_MQTT_ERROR_CONNECTION_CLOSED);

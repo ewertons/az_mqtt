@@ -38,6 +38,8 @@ typedef struct
     uint8_t kind;
     /** @brief From an earlier connection: 0, or a _az_mqtt_inflight_mark (resend or drop). */
     uint8_t mark;
+    /** @brief SUBSCRIBE / UNSUBSCRIBE: Topic Filters requested, as many as codes acknowledged. */
+    uint16_t filter_count;
   } _internal;
 } az_mqtt_inflight_entry;
 
@@ -82,6 +84,8 @@ struct az_mqtt_core
     az_mqtt_client_state state;
     uint16_t port;
     uint16_t next_packet_id;
+    /** @brief In-flight entries outgoing requests leave for inbound QoS 2 (mqttv5); 0: none. */
+    uint16_t inbound_reserve;
     /** @brief Keep-alive in force (the server's, if it sent one). */
     uint16_t keep_alive_seconds;
     /** @brief A PINGREQ is awaiting its PINGRESP (or any other packet). */

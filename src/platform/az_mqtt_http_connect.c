@@ -22,11 +22,23 @@ static bool _has_line_break(az_span text)
   return false;
 }
 
-/** @brief Whether @p host can go in a request line: non-empty, bounded, no break or space. */
+/** @brief Whether @p host can go in a request line: non-empty, bounded, no control or space. */
 static bool _is_valid_host(az_span host)
 {
-  return az_span_size(host) > 0 && az_span_size(host) <= AZ_MQTT_PROXY_HOST_MAX
-      && !_has_line_break(host) && az_span_find(host, AZ_SPAN_FROM_STR(" ")) < 0;
+  uint8_t const* const p = az_span_ptr(host);
+  int32_t const size = az_span_size(host);
+  if (size == 0 || size > AZ_MQTT_PROXY_HOST_MAX)
+  {
+    return false;
+  }
+  for (int32_t i = 0; i < size; i++)
+  {
+    if (p[i] <= ' ' || p[i] == 0x7F)
+    {
+      return false;
+    }
+  }
+  return true;
 }
 
 az_result _az_mqtt_http_connect_check(az_mqtt_proxy_options const* proxy)
@@ -38,7 +50,8 @@ az_result _az_mqtt_http_connect_check(az_mqtt_proxy_options const* proxy)
   int32_t const user_size = az_span_size(proxy->username);
   int32_t const password_size = az_span_size(proxy->password);
   if (proxy->port == 0 || !_is_valid_host(proxy->host)
-      || user_size + password_size > AZ_MQTT_PROXY_CREDENTIALS_MAX
+      || user_size > AZ_MQTT_PROXY_CREDENTIALS_MAX // Separate checks: the sum may overflow.
+      || password_size > AZ_MQTT_PROXY_CREDENTIALS_MAX - user_size
       || _has_line_break(proxy->username) || _has_line_break(proxy->password)
       || az_span_find(proxy->username, AZ_SPAN_FROM_STR(":")) >= 0 // RFC 7617 §2
       || (user_size == 0 && password_size > 0))

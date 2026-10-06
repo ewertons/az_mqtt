@@ -9,6 +9,7 @@
 #include <az_mqtt5/az_mqtt5_client.h>
 #include <az_mqtt5/az_mqtt5_codec.h>
 
+#include "az_mqtt_codec_internal.h"
 #include "az_mqtt_core_internal.h"
 
 #include <azure/core/internal/az_precondition_internal.h>
@@ -162,6 +163,19 @@ static az_result _handle_connack(az_mqtt5_client* client, az_span body)
   return AZ_OK;
 }
 
+/** @brief Send DISCONNECT with @p reason (best effort); return @p result. */
+static az_result
+_disconnect_with(az_mqtt5_client* client, az_mqtt5_reason_code reason, az_result result)
+{
+  az_span disconnect = _SEND_BUFFER(client);
+  if (az_result_succeeded(az_mqtt5_codec_encode_disconnect(&disconnect, reason, 0)))
+  {
+    az_result const send_rc = _az_mqtt_core_send(&client->_internal.core, disconnect);
+    (void)send_rc;
+  }
+  return result;
+}
+
 static az_result _handle_publish(az_mqtt5_client* client, az_span body, uint8_t flags)
 {
   az_mqtt5_publish_data publish;
@@ -177,6 +191,11 @@ static az_result _handle_publish(az_mqtt5_client* client, az_span body, uint8_t 
   az_result rc = az_mqtt5_codec_decode_publish(body, flags, &publish);
   if (az_result_failed(rc))
     return rc;
+  // 3.3.2.3.4: above the Topic Alias Maximum this client sent.
+  if (publish.topic_alias > client->_internal.connect_options.topic_alias_maximum)
+  {
+    return _disconnect_with(client, AZ_MQTT5_REASON_TOPIC_ALIAS_INVALID, AZ_MQTT_ERROR_PROTOCOL);
+  }
 
   // Send acknowledgment for QoS > 0
   if (publish.qos == AZ_MQTT_QOS_AT_LEAST_ONCE)
@@ -192,8 +211,13 @@ static az_result _handle_publish(az_mqtt5_client* client, az_span body, uint8_t 
   else if (publish.qos == AZ_MQTT_QOS_EXACTLY_ONCE)
   {
     bool is_duplicate;
-    _az_mqtt_core_inflight_track_inbound_qos2(
+    rc = _az_mqtt_core_inflight_track_inbound_qos2(
         &client->_internal.core, publish.packet_id, &is_duplicate);
+    if (az_result_failed(rc))
+    {
+      // Ends the session; the server resends it on a resumed one.
+      return _disconnect_with(client, AZ_MQTT5_REASON_QUOTA_EXCEEDED, rc);
+    }
     az_span send_buf = _SEND_BUFFER(client);
     rc = az_mqtt5_codec_encode_pubrec(&send_buf, publish.packet_id, AZ_MQTT5_REASON_SUCCESS);
     if (az_result_failed(rc))
@@ -211,6 +235,52 @@ static az_result _handle_publish(az_mqtt5_client* client, az_span body, uint8_t 
   return AZ_OK;
 }
 
+/**
+ * @brief AUTH: a protocol error once decoded. Enhanced authentication is not implemented, so
+ * no AUTH exchange is ever in progress (one during CONNECT is refused by the core).
+ */
+static az_result _handle_auth(az_span body)
+{
+  az_mqtt5_auth_data auth;
+  memset(&auth, 0, sizeof(auth));
+  az_result const rc = az_mqtt5_codec_decode_auth(body, &auth);
+  return az_result_failed(rc) ? rc : AZ_MQTT_ERROR_PROTOCOL;
+}
+
+/** @brief Whether @p reason may appear in a PUBACK / PUBREC / PUBREL / PUBCOMP (@p type). */
+static bool _ack_reason_allowed(az_mqtt_packet_type type, uint8_t reason)
+{
+  // 3.4.2.1, 3.5.2.1.
+  static uint8_t const publish_acks[] = { 0x00, 0x10, 0x80, 0x83, 0x87, 0x90, 0x91, 0x97, 0x99 };
+  if (type == AZ_MQTT_PACKET_TYPE_PUBACK || type == AZ_MQTT_PACKET_TYPE_PUBREC)
+  {
+    for (size_t i = 0; i < sizeof(publish_acks); i++)
+    {
+      if (publish_acks[i] == reason)
+      {
+        return true;
+      }
+    }
+    return false;
+  }
+  return reason == 0x00 || reason == 0x92; // PUBREL, PUBCOMP (3.6.2.1, 3.7.2.1).
+}
+
+/**
+ * @brief Reason codes in SUBACK / UNSUBACK @p body, decoded already: every byte after the
+ * properties. reason_code_count stops at the caller's capacity.
+ */
+static int32_t _reason_code_total(az_span body)
+{
+  az_span rest = az_span_slice_to_end(body, 2); // Packet Identifier.
+  int32_t properties = 0;
+  if (az_result_failed(_az_mqtt_read_vbi(&rest, &properties)))
+  {
+    return -1;
+  }
+  return az_span_size(rest) - properties;
+}
+
 /** @brief PUBACK, PUBREC, PUBREL or PUBCOMP. */
 static az_result _handle_ack(az_mqtt5_client* client, az_mqtt_packet_type type, az_span body)
 {
@@ -223,6 +293,8 @@ static az_result _handle_ack(az_mqtt5_client* client, az_mqtt_packet_type type, 
   az_result rc = az_mqtt5_codec_decode_ack(body, &ack);
   if (az_result_failed(rc))
     return rc;
+  if (!_ack_reason_allowed(type, (uint8_t)ack.reason_code))
+    return AZ_MQTT_ERROR_PROTOCOL;
 
   az_mqtt_core* const core = &client->_internal.core;
   az_mqtt5_on_puback_fn callback = client->_internal.on_pubcomp;
@@ -283,6 +355,7 @@ static az_result _handle_ack(az_mqtt5_client* client, az_mqtt_packet_type type, 
     {
       return AZ_OK;
     }
+    ack.incoming = true;
   }
   uint32_t const generation = _CORE(client).session_generation;
   if (callback != NULL)
@@ -311,9 +384,15 @@ static az_result _handle_suback(az_mqtt5_client* client, az_span body)
       _span_count(client->_internal.buffers.suback_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
 
   az_result rc = az_mqtt5_codec_decode_suback(body, &suback);
-  if (az_result_failed(rc)
-      || !_az_mqtt_core_inflight_release_entry(
-          &client->_internal.core, _AZ_MQTT_INFLIGHT_SUBSCRIBE, suback.packet_id))
+  bool released = false;
+  if (az_result_succeeded(rc))
+    rc = _az_mqtt_core_inflight_release_request(
+        &client->_internal.core,
+        _AZ_MQTT_INFLIGHT_SUBSCRIBE,
+        suback.packet_id,
+        _reason_code_total(body),
+        &released);
+  if (!released || az_result_failed(rc))
     return rc;
 
   if (client->_internal.on_suback != NULL)
@@ -336,9 +415,15 @@ static az_result _handle_unsuback(az_mqtt5_client* client, az_span body)
       _span_count(client->_internal.buffers.suback_user_properties, (int32_t)sizeof(az_mqtt5_user_property));
 
   az_result rc = az_mqtt5_codec_decode_unsuback(body, &unsuback);
-  if (az_result_failed(rc)
-      || !_az_mqtt_core_inflight_release_entry(
-          &client->_internal.core, _AZ_MQTT_INFLIGHT_UNSUBSCRIBE, unsuback.packet_id))
+  bool released = false;
+  if (az_result_succeeded(rc))
+    rc = _az_mqtt_core_inflight_release_request(
+        &client->_internal.core,
+        _AZ_MQTT_INFLIGHT_UNSUBSCRIBE,
+        unsuback.packet_id,
+        _reason_code_total(body),
+        &released);
+  if (!released || az_result_failed(rc))
     return rc;
 
   if (client->_internal.on_unsuback != NULL)
@@ -391,11 +476,15 @@ static az_result _dispatch_packet(
     case AZ_MQTT_PACKET_TYPE_UNSUBACK:
       return _handle_unsuback(client, body);
     case AZ_MQTT_PACKET_TYPE_PINGRESP:
-      return AZ_OK; // Nothing to do
+      return az_span_size(body) == 0 ? AZ_OK : AZ_MQTT_ERROR_MALFORMED_PACKET;
     case AZ_MQTT_PACKET_TYPE_DISCONNECT:
       return _handle_disconnect(client, body);
     case AZ_MQTT_PACKET_TYPE_AUTH:
-      return AZ_OK; // Enhanced authentication is not implemented.
+      return _handle_auth(body);
+    case AZ_MQTT_PACKET_TYPE_CONNECT: // Client to server only.
+    case AZ_MQTT_PACKET_TYPE_SUBSCRIBE:
+    case AZ_MQTT_PACKET_TYPE_UNSUBSCRIBE:
+    case AZ_MQTT_PACKET_TYPE_PINGREQ:
     default:
       return AZ_MQTT_ERROR_PROTOCOL;
   }
@@ -437,12 +526,15 @@ az_mqtt5_client_init(az_mqtt5_client* client, az_mqtt5_client_options const* opt
   client->_internal.on_transport_error = options->on_transport_error;
   client->_internal.user_context = options->user_context;
   // A session outliving the connection resends QoS 1/2 PUBLISH: they must be stored.
-  return _az_mqtt_core_inflight_init(
+  az_result const rc = _az_mqtt_core_inflight_init(
       &client->_internal.core,
       options->inflight_control_buffer,
       options->inflight_message_buffer,
       !options->connect_options.clean_start
           && options->connect_options.session_expiry_interval > 0);
+  _az_mqtt_core_inflight_reserve_inbound(
+      &client->_internal.core, options->connect_options.receive_maximum);
+  return rc;
 }
 
 AZ_NODISCARD az_result az_mqtt5_client_connect_start(az_mqtt5_client* client, int32_t timeout_ms)
@@ -490,6 +582,12 @@ AZ_NODISCARD az_result az_mqtt5_client_publish(
     return AZ_MQTT_ERROR_NOT_CONNECTED;
   }
 
+  // A Topic Name has no wildcards; it may be empty only with a Topic Alias (3.3.2.1).
+  if (_az_mqtt_topic_has_wildcard(options->topic)
+      || (az_span_size(options->topic) == 0 && options->topic_alias == 0))
+  {
+    return AZ_ERROR_ARG;
+  }
   if ((uint8_t)options->qos > client->_internal.server_maximum_qos
       || (options->retain && !client->_internal.server_retain_available)
       || options->topic_alias > client->_internal.server_topic_alias_maximum)
@@ -553,10 +651,15 @@ AZ_NODISCARD az_result az_mqtt5_client_subscribe(
   {
     return AZ_MQTT_ERROR_NOT_CONNECTED;
   }
+  if (subscription_count <= 0 || subscription_count > UINT16_MAX)
+  {
+    return AZ_ERROR_ARG; // At least one; counted in the entry, to match the acknowledgement.
+  }
 
   az_mqtt_inflight_entry* entry = NULL;
   _az_RETURN_IF_FAILED(_az_mqtt_core_inflight_reserve_entry(
       &client->_internal.core, _AZ_MQTT_INFLIGHT_SUBSCRIBE, UINT16_MAX, &entry));
+  entry->_internal.filter_count = (uint16_t)subscription_count;
   uint16_t const packet_id = entry->_internal.packet_id;
   az_span send_buf = _SEND_BUFFER(client);
   az_result rc = az_mqtt5_codec_encode_subscribe(
@@ -582,10 +685,15 @@ AZ_NODISCARD az_result az_mqtt5_client_unsubscribe(
   {
     return AZ_MQTT_ERROR_NOT_CONNECTED;
   }
+  if (filter_count <= 0 || filter_count > UINT16_MAX)
+  {
+    return AZ_ERROR_ARG; // At least one; counted in the entry, to match the acknowledgement.
+  }
 
   az_mqtt_inflight_entry* entry = NULL;
   _az_RETURN_IF_FAILED(_az_mqtt_core_inflight_reserve_entry(
       &client->_internal.core, _AZ_MQTT_INFLIGHT_UNSUBSCRIBE, UINT16_MAX, &entry));
+  entry->_internal.filter_count = (uint16_t)filter_count;
   uint16_t const packet_id = entry->_internal.packet_id;
   az_span send_buf = _SEND_BUFFER(client);
   az_result rc

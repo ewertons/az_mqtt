@@ -46,6 +46,7 @@ struct test_server
   int last_pubrel_reason;
   int pubcomps;
   int last_pubcomp_reason;
+  int client_disconnect_reason;
   bool session_present;
   char log[1024];
   bool client_closed;
@@ -112,6 +113,7 @@ static X509* _make_cert(
     X509* issuer,
     EVP_PKEY* issuer_key,
     bool is_ca,
+    char const* eku,
     char const* san,
     long not_before_s,
     long not_after_s)
@@ -136,12 +138,12 @@ static X509* _make_cert(
   X509V3_set_ctx(&v3, issuer != NULL ? issuer : cert, cert, NULL, NULL, 0);
   bool ok = _add_ext(cert, &v3, NID_basic_constraints, is_ca ? "critical,CA:TRUE" : "CA:FALSE")
       && _add_ext(
-             cert,
-             &v3,
-             NID_key_usage,
-             is_ca ? "critical,keyCertSign,cRLSign" : "critical,digitalSignature")
+                cert,
+                &v3,
+                NID_key_usage,
+                is_ca ? "critical,keyCertSign,cRLSign" : "critical,digitalSignature")
       && _add_ext(cert, &v3, NID_subject_key_identifier, "hash")
-      && (is_ca || _add_ext(cert, &v3, NID_ext_key_usage, "serverAuth,clientAuth"))
+      && (eku == NULL || _add_ext(cert, &v3, NID_ext_key_usage, eku))
       && (san == NULL || _add_ext(cert, &v3, NID_subject_alt_name, san))
       && X509_sign(cert, issuer_key != NULL ? issuer_key : key, EVP_sha256()) > 0;
   if (!ok)
@@ -179,8 +181,9 @@ static bool _setup_tls(test_server* s)
   EVP_PKEY* rogue_key = EVP_EC_gen("P-256");
   EVP_PKEY* srv_key = EVP_EC_gen("P-256");
   EVP_PKEY* cli_key = EVP_EC_gen("P-256");
-  X509* ca = _make_cert(ca_key, "az-mqtt-test-ca", NULL, NULL, true, NULL, -day, 30 * day);
-  X509* rogue = _make_cert(rogue_key, "az-mqtt-rogue-ca", NULL, NULL, true, NULL, -day, 30 * day);
+  X509* ca = _make_cert(ca_key, "az-mqtt-test-ca", NULL, NULL, true, NULL, NULL, -day, 30 * day);
+  X509* rogue
+      = _make_cert(rogue_key, "az-mqtt-rogue-ca", NULL, NULL, true, NULL, NULL, -day, 30 * day);
   X509* signer = s->options.untrusted_ca ? rogue : ca;
   EVP_PKEY* signer_key = s->options.untrusted_ca ? rogue_key : ca_key;
   X509* srv = _make_cert(
@@ -189,10 +192,22 @@ static bool _setup_tls(test_server* s)
       signer,
       signer_key,
       false,
+      s->options.no_eku                 ? NULL
+          : s->options.client_auth_only ? "clientAuth"
+                                        : "serverAuth,clientAuth",
       s->options.san,
       s->options.expired ? -2 * day : -day,
       s->options.expired ? -day : 30 * day);
-  X509* cli = _make_cert(cli_key, "az-mqtt-test-client", ca, ca_key, false, NULL, -day, 30 * day);
+  X509* cli = _make_cert(
+      cli_key,
+      "az-mqtt-test-client",
+      ca,
+      ca_key,
+      false,
+      "serverAuth,clientAuth",
+      NULL,
+      -day,
+      30 * day);
 
   bool ok = ca_key && rogue_key && srv_key && cli_key && ca && rogue && srv && cli
       && _write_pem(s->ca_path, sizeof(s->ca_path), ca, NULL)
@@ -850,6 +865,11 @@ static void _serve(test_server* s, conn* c)
       return;
     }
   }
+  if (s->options.raw_after_connack != NULL
+      && !_write(c, s->options.raw_after_connack, s->options.raw_after_connack_size))
+  {
+    return;
+  }
   if (s->options.behavior == TEST_SERVER_DISCONNECT_AFTER_CONNACK)
   {
     static const uint8_t disconnect_v5[] = { 0xE0, 0x01, 0x8B };
@@ -893,6 +913,10 @@ static void _serve(test_server* s, conn* c)
     if (type < 0 || type == 14)
     {
       pthread_mutex_lock(&s->lock);
+      if (type == 14)
+      {
+        s->client_disconnect_reason = len >= 1 ? body[0] : 0;
+      }
       s->client_closed = !s->stop;
       pthread_mutex_unlock(&s->lock);
       return;
@@ -923,6 +947,10 @@ static void _serve(test_server* s, conn* c)
     }
     if (type == 3)
     {
+      // Read before the count: a test that waits for the count may change it next.
+      pthread_mutex_lock(&s->lock);
+      bool const ack_publishes = s->options.ack_publishes;
+      pthread_mutex_unlock(&s->lock);
       _add(s, &s->publishes, 1);
       int const qos = (c->flags >> 1) & 0x03;
       int const id_at = len >= 2 ? 2 + ((body[0] << 8) | body[1]) : len;
@@ -948,9 +976,6 @@ static void _serve(test_server* s, conn* c)
           (void)_write(c, pubrec, (int)sizeof(pubrec));
         }
       }
-      pthread_mutex_lock(&s->lock);
-      bool const ack_publishes = s->options.ack_publishes;
-      pthread_mutex_unlock(&s->lock);
       if (ack_publishes && !held && qos > 0 && id_at + 2 <= len)
       {
         bool const reason = v5 && qos == 2 && s->options.pubrec_reason != 0;
@@ -1113,6 +1138,7 @@ test_server* test_server_start(test_server_options const* options)
   s->options = *options;
   s->listen_fd = -1;
   s->ws_client_close_code = -1;
+  s->client_disconnect_reason = -1;
   pthread_mutex_init(&s->lock, NULL);
   if (s->options.tls && !_setup_tls(s))
   {
@@ -1235,6 +1261,10 @@ int test_server_pubrels(test_server* s) { return _get(s, &s->pubrels); }
 int test_server_last_pubrel_reason(test_server* s) { return _get(s, &s->last_pubrel_reason); }
 int test_server_pubcomps(test_server* s) { return _get(s, &s->pubcomps); }
 int test_server_last_pubcomp_reason(test_server* s) { return _get(s, &s->last_pubcomp_reason); }
+int test_server_client_disconnect_reason(test_server* s)
+{
+  return _get(s, &s->client_disconnect_reason);
+}
 int test_server_ws_pongs(test_server* s) { return _get(s, &s->ws_pongs); }
 int test_server_ws_unmasked(test_server* s) { return _get(s, &s->ws_unmasked); }
 int test_server_ws_client_close_code(test_server* s) { return _get(s, &s->ws_client_close_code); }

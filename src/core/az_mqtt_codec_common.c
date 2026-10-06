@@ -10,6 +10,7 @@
 
 #include <azure/core/internal/az_precondition_internal.h>
 
+#include <stdbool.h>
 #include <string.h>
 
 AZ_NODISCARD az_result _az_mqtt_write_byte(az_span* dest, uint8_t b)
@@ -36,6 +37,11 @@ AZ_NODISCARD az_result _az_mqtt_write_uint16(az_span* dest, uint16_t val)
 }
 
 AZ_NODISCARD az_result _az_mqtt_write_utf8_string(az_span* dest, az_span str)
+{
+  return _az_mqtt_utf8_valid(str) ? _az_mqtt_write_binary_data(dest, str) : AZ_ERROR_ARG;
+}
+
+AZ_NODISCARD az_result _az_mqtt_write_binary_data(az_span* dest, az_span str)
 {
   int32_t len = az_span_size(str);
   if (len > 65535)
@@ -141,7 +147,75 @@ AZ_NODISCARD az_result _az_mqtt_read_vbi(az_span* src, int32_t* out)
   return AZ_MQTT_ERROR_MALFORMED_PACKET;
 }
 
+bool _az_mqtt_utf8_valid(az_span text)
+{
+  uint8_t const* const p = az_span_ptr(text);
+  int32_t const size = az_span_size(text);
+  int32_t i = 0;
+  while (i < size)
+  {
+    uint8_t const b = p[i];
+    if (b < 0x80)
+    {
+      if (b == 0)
+      {
+        return false;
+      }
+      i++;
+      continue;
+    }
+    // Unicode 3.9, Table 3-7: the range of the second byte rules out overlong forms, surrogates
+    // (U+D800-U+DFFF) and code points above U+10FFFF.
+    int32_t length;
+    uint8_t second_min = 0x80;
+    uint8_t second_max = 0xBF;
+    if (b >= 0xC2 && b <= 0xDF)
+    {
+      length = 2;
+    }
+    else if (b >= 0xE0 && b <= 0xEF)
+    {
+      length = 3;
+      second_min = b == 0xE0 ? 0xA0 : 0x80;
+      second_max = b == 0xED ? 0x9F : 0xBF;
+    }
+    else if (b >= 0xF0 && b <= 0xF4)
+    {
+      length = 4;
+      second_min = b == 0xF0 ? 0x90 : 0x80;
+      second_max = b == 0xF4 ? 0x8F : 0xBF;
+    }
+    else
+    {
+      return false;
+    }
+    if (size - i < length || p[i + 1] < second_min || p[i + 1] > second_max)
+    {
+      return false;
+    }
+    for (int32_t k = 2; k < length; k++)
+    {
+      if ((p[i + k] & 0xC0) != 0x80)
+      {
+        return false;
+      }
+    }
+    i += length;
+  }
+  return true;
+}
+
 AZ_NODISCARD az_result _az_mqtt_read_utf8_string(az_span* src, az_span* out)
+{
+  az_result const rc = _az_mqtt_read_binary_data(src, out);
+  if (az_result_succeeded(rc) && !_az_mqtt_utf8_valid(*out))
+  {
+    return AZ_MQTT_ERROR_MALFORMED_PACKET;
+  }
+  return rc;
+}
+
+AZ_NODISCARD az_result _az_mqtt_read_binary_data(az_span* src, az_span* out)
 {
   uint16_t len;
   az_result rc = _az_mqtt_read_uint16(src, &len);
@@ -158,6 +232,17 @@ AZ_NODISCARD az_result _az_mqtt_read_utf8_string(az_span* src, az_span* out)
   return AZ_OK;
 }
 
+
+bool _az_mqtt_fixed_header_flags_valid(uint8_t first_byte)
+{
+  az_mqtt_packet_type const type = (az_mqtt_packet_type)(first_byte >> 4);
+  uint8_t const flags = first_byte & 0x0F;
+  // MQTT 3.1.1 2.2.2, 5.0 2.1.3. PUBLISH flags carry DUP, QoS and RETAIN, checked by its decoder.
+  bool const requires_0010 = type == AZ_MQTT_PACKET_TYPE_PUBREL
+      || type == AZ_MQTT_PACKET_TYPE_SUBSCRIBE || type == AZ_MQTT_PACKET_TYPE_UNSUBSCRIBE;
+  uint8_t const reserved_flags = requires_0010 ? 0x02 : 0x00;
+  return type == AZ_MQTT_PACKET_TYPE_PUBLISH || flags == reserved_flags;
+}
 
 AZ_NODISCARD az_result _az_mqtt_decode_fixed_header(
     az_span* src,
@@ -177,6 +262,11 @@ AZ_NODISCARD az_result _az_mqtt_decode_fixed_header(
 
   *out_packet_type = (az_mqtt_packet_type)(first_byte >> 4);
   *out_flags = first_byte & 0x0F;
+
+  if (!_az_mqtt_fixed_header_flags_valid(first_byte))
+  {
+    return AZ_MQTT_ERROR_MALFORMED_PACKET;
+  }
 
   rc = _az_mqtt_read_vbi(src, out_remaining);
   if (az_result_failed(rc))

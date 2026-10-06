@@ -7,6 +7,7 @@
  * az_mqtt_websocket_internal.h.
  */
 
+#include "az_mqtt_io_layers_internal.h"
 #include "az_mqtt_websocket_internal.h"
 
 #include "../platform/az_mqtt_http_connect.h"
@@ -37,7 +38,7 @@ typedef char _http_state_fits
 
 // ──────────────────────── SHA-1 ──────────────────────────────
 
-static uint32_t _rotl(uint32_t x, int n) { return (x << n) | (x >> (32 - n)); }
+static uint32_t _sha1_rotl(uint32_t x, int n) { return (x << n) | (x >> (32 - n)); }
 
 static void _sha1_block(uint32_t h[5], uint8_t const* block)
 {
@@ -49,7 +50,7 @@ static void _sha1_block(uint32_t h[5], uint8_t const* block)
   }
   for (int i = 16; i < 80; i++)
   {
-    w[i] = _rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+    w[i] = _sha1_rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
   }
   uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
   for (int i = 0; i < 80; i++)
@@ -76,10 +77,10 @@ static void _sha1_block(uint32_t h[5], uint8_t const* block)
       f = b ^ c ^ d;
       k = 0xCA62C1D6;
     }
-    uint32_t const t = _rotl(a, 5) + f + e + k + w[i];
+    uint32_t const t = _sha1_rotl(a, 5) + f + e + k + w[i];
     e = d;
     d = c;
-    c = _rotl(b, 30);
+    c = _sha1_rotl(b, 30);
     b = a;
     a = t;
   }
@@ -162,7 +163,7 @@ static bool _is_valid_path(az_span path)
 
 bool _az_mqtt_websocket_path_is_valid(az_span path) { return _is_valid_path(path); }
 
-/** @brief Whether @p host can go in a Host header: non-empty, bounded, no break or space. */
+/** @brief Whether @p host can go in a Host header: non-empty, bounded, no control or space. */
 static bool _is_valid_host(az_span host)
 {
   uint8_t const* p = az_span_ptr(host);
@@ -173,7 +174,7 @@ static bool _is_valid_host(az_span host)
   }
   for (int32_t i = 0; i < size; i++)
   {
-    if (p[i] == '\r' || p[i] == '\n' || p[i] == '\0' || p[i] == ' ')
+    if (p[i] <= ' ' || p[i] == 0x7F)
     {
       return false;
     }
@@ -414,6 +415,7 @@ az_result _az_mqtt_websocket_reply_parse(
       case _AZ_MQTT_HTTP_MALFORMED:
         rc = AZ_MQTT_ERROR_WEBSOCKET;
         break;
+      case _AZ_MQTT_HTTP_MORE:
       default:
         break;
     }
@@ -715,9 +717,17 @@ static void _report(az_mqtt_websocket* ws, int32_t code, az_result result)
   }
 }
 
-/** @brief Send @p payload as one masked frame of @p opcode, through a stack buffer. */
+/**
+ * @brief Send @p payload as one masked frame of @p opcode, through a stack buffer.
+ *
+ * Each piece goes through the lower send, which may wait up to AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS;
+ * no piece starts after that time from the first, so a frame takes at most twice that.
+ * @retval AZ_MQTT_ERROR_TIMEOUT The frame was cut off.
+ * On any failure the WebSocket is CLOSED: a partial frame makes the stream unusable.
+ */
 static az_result _send_frame(az_mqtt_websocket* ws, uint8_t opcode, az_span payload)
 {
+  int64_t const deadline = _az_mqtt_io_layer_deadline(AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS);
   uint8_t chunk[AZ_MQTT_WEBSOCKET_SEND_CHUNK];
   uint8_t mask[4];
   _az_RETURN_IF_FAILED(az_mqtt_transport_random(AZ_SPAN_FROM_BUFFER(mask)));
@@ -726,6 +736,11 @@ static az_result _send_frame(az_mqtt_websocket* ws, uint8_t opcode, az_span payl
   int32_t offset = 0;
   do
   {
+    if (offset > 0 && _az_mqtt_io_layer_remaining(deadline) == 0)
+    {
+      _W(ws).stage = _AZ_MQTT_WEBSOCKET_CLOSED;
+      return AZ_MQTT_ERROR_TIMEOUT;
+    }
     int32_t const room = (int32_t)sizeof(chunk) - used;
     int32_t const take = size - offset < room ? size - offset : room;
     if (take > 0)
@@ -733,7 +748,12 @@ static az_result _send_frame(az_mqtt_websocket* ws, uint8_t opcode, az_span payl
       memcpy(chunk + used, az_span_ptr(payload) + offset, (size_t)take);
       _az_mqtt_websocket_mask(chunk + used, take, mask, (uint64_t)offset);
     }
-    _az_RETURN_IF_FAILED(az_mqtt_transport_send(_W(ws).lower, az_span_create(chunk, used + take)));
+    az_result const rc = az_mqtt_transport_send(_W(ws).lower, az_span_create(chunk, used + take));
+    if (az_result_failed(rc))
+    {
+      _W(ws).stage = _AZ_MQTT_WEBSOCKET_CLOSED;
+      return rc;
+    }
     offset += take;
     used = 0;
   } while (offset < size);

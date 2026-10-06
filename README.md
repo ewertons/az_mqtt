@@ -19,7 +19,7 @@ the [Azure SDK for C](https://github.com/Azure/azure-sdk-for-c) span and platfor
 - Connect is blocking (`az_mqttN_client_connect`) or not (`az_mqttN_client_connect_start`, then
   `az_mqttN_client_process_loop` until CONNECTED; only name resolution may block).
 - Requests awaiting acknowledgement are tracked in caller storage
-  (`options.inflight_control_buffer`, 4 B per `az_mqtt_inflight_entry`): unique packet identifiers,
+  (`options.inflight_control_buffer`, 6 B per `az_mqtt_inflight_entry`): unique packet identifiers,
   QoS 2 duplicate detection, acknowledgements for unknown identifiers ignored. With no free entry a
   request fails with `AZ_MQTT_ERROR_FLOW_CONTROL`.
 - Session resumption: with a session that outlives the connection (mqttv3 Clean Session 0;
@@ -93,9 +93,13 @@ az_result rc = az_mqtt5_client_init(&client, &options);
 | `AZ_MQTT_TLS_BACKEND` | `auto` | `auto`, `openssl`, `mbedtls` or `none` |
 | `AZ_MQTT_ENABLE_PROXY` | `ON` | HTTP CONNECT proxy support |
 | `AZ_MQTT_ENABLE_WEBSOCKETS` | `ON` | MQTT over WebSockets |
-| `AZ_MQTT_BUILD_SAMPLES` | `ON` | |
-| `AZ_MQTT_BUILD_TESTS` | `ON` | |
+| `AZ_MQTT_BUILD_SAMPLES` | `ON`; `OFF` as a subproject | |
+| `AZ_MQTT_BUILD_TESTS` | `ON`; `OFF` as a subproject | |
 | `AZ_MQTT_WARNINGS_AS_ERRORS` | `OFF` | |
+
+In another CMake project, `add_subdirectory()` this directory and link `az_mqtt::mqttv3` and/or
+`az_mqtt::mqttv5`. If the project already builds azure-sdk-for-c (target `az_core`), az_mqtt uses
+it instead of `deps/azure-sdk-for-c`.
 
 ### Migrating from the previous `az_mqtt5` / `az_mqtt3` trees
 
@@ -112,6 +116,9 @@ az_result rc = az_mqtt5_client_init(&client, &options);
   - `az_mqtt3_client_disconnect(client)` takes no reason code;
   - removed: `buffers`, `on_disconnect`, properties, AUTH.
 - mqttv3: `az_mqtt3_codec_decode_ack` rejects bytes after the packet identifier. An AUTH packet (reserved in 3.1.1) is a protocol error.
+- mqttv5: a received AUTH packet is a protocol error (enhanced authentication is not implemented).
+- `az_mqtt_inflight_entry` is 6 B (was 4 B): it keeps the filter count of a SUBSCRIBE or
+  UNSUBSCRIBE. A SUBACK (MQTT 5: or UNSUBACK) with a different number of codes is a protocol error.
 - Transport failures that were `AZ_MQTT_ERROR_TRANSPORT` may now be one of the specific results
   above.
 - `options.inflight_control_buffer` is required for QoS 1/2 publish, subscribe and unsubscribe;
@@ -128,8 +135,10 @@ az_result rc = az_mqtt5_client_init(&client, &options);
 
 ## Getting started
 
-See [samples/README.md](samples/README.md): start a local broker, build, and run the connect
-samples ([mqttv5](samples/az_mqtt5_sample_connect.c), [mqttv3](samples/az_mqtt3_sample_connect.c)).
+See [samples/README.md](samples/README.md): start a local broker, build, and run the samples
+(TCP, QoS 0/1/2, TLS and mutual TLS, WebSockets, HTTP proxy, non-blocking connect; mqttv5
+request/response), for [mqttv5](samples/az_mqtt5_sample_connect.c) and
+[mqttv3](samples/az_mqtt3_sample_connect.c).
 
 ## Documentation
 
@@ -152,6 +161,7 @@ Warnings in our code are errors in every job.
 | Linux | {OpenSSL, mbedTLS 3.6.7 / 4.1.1 / 4.2.0, no TLS} × {gcc, clang}: build, link-isolation check, all tests (mqttv3, mqttv5, and both linked together), including e2e against a local Mosquitto (plain and TLS) |
 | Single version | Builds and tests with only mqttv3 or only mqttv5 enabled |
 | Sanitizers | ASan + UBSan (+ leak check) over all tests |
+| Subproject | `add_subdirectory()` from a parent project, with the parent's azure-sdk-for-c and with the bundled one; fails if the parent's cache changes ([tests/subproject](tests/subproject/CMakeLists.txt)) |
 | Hardened | Release build with `_FORTIFY_SOURCE=3`, stack protector, CET, full RELRO and PIE, verified on every executable, then all tests |
 | Windows | MSVC `/W4 /WX`, Schannel, all tests |
 

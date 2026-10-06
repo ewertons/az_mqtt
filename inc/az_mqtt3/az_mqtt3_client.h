@@ -56,7 +56,7 @@ typedef void (*az_mqtt3_on_puback_fn)(az_mqtt3_client* client, az_mqtt3_ack_data
 /**
  * @brief A QoS 2 exchange completed: PUBCOMP received (outgoing) or PUBREL
  * received and PUBCOMP sent (incoming, held in an in-flight entry); or an outgoing one was
- * dropped unacknowledged (ack->status says why).
+ * dropped unacknowledged (ack->status says why). ack->incoming tells the direction.
  */
 typedef void (*az_mqtt3_on_pubcomp_fn)(az_mqtt3_client* client, az_mqtt3_ack_data const* ack);
 
@@ -114,8 +114,9 @@ typedef struct
    *
    * Each QoS 1/2 PUBLISH, SUBSCRIBE and UNSUBSCRIBE holds an entry until acknowledged, and each
    * inbound QoS 2 PUBLISH until its PUBREL. A request with no free entry fails with
-   * AZ_MQTT_ERROR_FLOW_CONTROL; an inbound QoS 2 PUBLISH with none is delivered without duplicate
-   * detection. May be empty if only QoS 0 is published and nothing is subscribed.
+   * AZ_MQTT_ERROR_FLOW_CONTROL; an inbound QoS 2 PUBLISH with none is not delivered, and the
+   * session ends with AZ_MQTT_ERROR_FLOW_CONTROL. May be empty if only QoS 0 is published and
+   * nothing is subscribed.
    * Acknowledgements for packet identifiers not in flight are ignored.
    *
    * When a connection ends, SUBSCRIBE and UNSUBSCRIBE in flight are abandoned; PUBLISH exchanges
@@ -206,6 +207,7 @@ az_mqtt3_client_init(az_mqtt3_client* client, az_mqtt3_client_options const* opt
  * az_mqtt3_client_process_loop() until the state leaves CONNECTING.
  *
  * @retval AZ_MQTT_ERROR_INVALID_STATE Not DISCONNECTED.
+ * @retval AZ_ERROR_ARG CONNECT cannot be encoded (az_mqtt3_codec_encode_connect()).
  */
 AZ_NODISCARD az_result az_mqtt3_client_connect(az_mqtt3_client* client, int32_t timeout_ms);
 
@@ -216,9 +218,10 @@ AZ_NODISCARD az_result az_mqtt3_client_connect(az_mqtt3_client* client, int32_t 
  * (see az_mqtt_transport_connect_start()). az_mqtt3_client_process_loop() then
  * completes the TCP/TLS connect, sends CONNECT and handles the CONNACK, each call
  * waiting for the peer no longer than its own timeout. Sending CONNECT, like
- * every send, is bounded by AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS instead; it waits
- * only if CONNECT exceeds the socket send buffer. The state is CONNECTING until
- * an accepted CONNACK makes it CONNECTED (on_connack runs first).
+ * every send, is bounded by AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS (over WebSockets,
+ * twice that) instead; it waits only if CONNECT exceeds the socket send buffer.
+ * The state is CONNECTING until an accepted CONNACK makes it CONNECTED
+ * (on_connack runs first).
  *
  * @p timeout_ms bounds the whole sequence (-1: no bound). If it expires, the
  * CONNACK refuses, or anything fails, the session ends: process_loop returns the
@@ -227,6 +230,7 @@ AZ_NODISCARD az_result az_mqtt3_client_connect(az_mqtt3_client* client, int32_t 
  *
  * @retval AZ_OK Started.
  * @retval AZ_MQTT_ERROR_INVALID_STATE Not DISCONNECTED.
+ * @retval AZ_ERROR_ARG CONNECT cannot be encoded (az_mqtt3_codec_encode_connect()).
  */
 AZ_NODISCARD az_result
 az_mqtt3_client_connect_start(az_mqtt3_client* client, int32_t timeout_ms);
@@ -244,7 +248,8 @@ az_mqtt3_client_connect_start(az_mqtt3_client* client, int32_t timeout_ms);
  *
  * @param timeout_ms  Max time to wait for incoming data (or connect progress);
  *                    -1 waits until keep-alive is due. Sends are bounded by
- *                    AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS, not by this.
+ *                    AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS (over WebSockets, twice that), not
+ *                    by this.
  * @retval AZ_MQTT_ERROR_KEEP_ALIVE_TIMEOUT A PINGREQ got nothing back within the keep-alive.
  * @retval AZ_MQTT_ERROR_NOT_CONNECTED Called while disconnected.
  */
@@ -260,6 +265,7 @@ AZ_NODISCARD az_result az_mqtt3_client_process_loop(az_mqtt3_client* client, int
  * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free in-flight entry, or (QoS 1/2) an earlier PUBLISH
  *         still awaits its resend after a resume.
  * @retval AZ_MQTT_ERROR_OUT_OF_STORAGE, AZ_MQTT_ERROR_INVALID_CONFIG See inflight_message_buffer.
+ * @retval AZ_ERROR_ARG Topic empty, with a wildcard ('+', '#') or not valid UTF-8.
  */
 AZ_NODISCARD az_result az_mqtt3_client_publish(
     az_mqtt3_client* client,
@@ -270,6 +276,8 @@ AZ_NODISCARD az_result az_mqtt3_client_publish(
  * @brief Subscribe to topic(s). Holds an in-flight entry until SUBACK.
  * @param[out] out_packet_id  Packet ID assigned. Can be NULL.
  * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free in-flight entry.
+ * @retval AZ_ERROR_ARG No or over 65,535 Topic Filters, or one empty, with a misplaced wildcard or
+ *         not valid UTF-8.
  */
 AZ_NODISCARD az_result az_mqtt3_client_subscribe(
     az_mqtt3_client* client,
@@ -281,6 +289,8 @@ AZ_NODISCARD az_result az_mqtt3_client_subscribe(
  * @brief Unsubscribe from topic(s). Holds an in-flight entry until UNSUBACK.
  * @param[out] out_packet_id  Packet ID assigned. Can be NULL.
  * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free in-flight entry.
+ * @retval AZ_ERROR_ARG No or over 65,535 Topic Filters, or one empty, with a misplaced wildcard or
+ *         not valid UTF-8.
  */
 AZ_NODISCARD az_result az_mqtt3_client_unsubscribe(
     az_mqtt3_client* client,

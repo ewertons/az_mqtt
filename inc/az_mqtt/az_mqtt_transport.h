@@ -178,8 +178,9 @@ AZ_NODISCARD AZ_INLINE az_result az_mqtt_tls_options_check(az_mqtt_tls_options c
 
 #ifndef AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS
 /**
- * @brief Longest az_mqtt_transport_send() waits for the peer to accept data.
- * On expiry the connection is unusable (a partial packet may have been sent).
+ * @brief Longest az_mqtt_transport_send() waits for the peer to accept data (over WebSockets,
+ * up to twice this; see AZ_MQTT_WEBSOCKET_SEND_CHUNK). On expiry the connection is unusable (a
+ * partial packet may have been sent).
  */
 #define AZ_MQTT_TRANSPORT_SEND_TIMEOUT_MS 30000
 #endif
@@ -383,14 +384,15 @@ struct az_mqtt_transport
  * @brief Connect through @p proxy from the next connect on (NULL, or an empty host: directly).
  * A connect already started keeps the proxy it started with.
  *
- * @p proxy and the spans in it are used, not copied: they must stay valid while set, and until
- * every connect started with them has completed or the transport is closed, even after
- * another proxy (or NULL) is set. With a proxy, the host passed to
- * az_mqtt_transport_connect_start() must stay valid until the connect completes. A connect
- * through a proxy never falls back to connecting directly.
+ * @p proxy and the spans in it are used, not copied: they must stay valid and unchanged while
+ * set, and until every connect started with them has completed or the transport is closed, even
+ * after another proxy (or NULL) is set; changing them meanwhile is undefined behavior. With a
+ * proxy, the host passed to az_mqtt_transport_connect_start() must stay valid until the connect
+ * completes. A connect through a proxy never falls back to connecting directly.
  *
- * @retval AZ_MQTT_ERROR_INVALID_CONFIG Port 0; host or credentials too long, or containing CR,
- *         LF or NUL; user name containing ':'; or a password without a user name.
+ * @retval AZ_MQTT_ERROR_INVALID_CONFIG Port 0; host too long or with a control character or
+ *         space; credentials too long or containing CR, LF or NUL; user name containing ':'; or
+ *         a password without a user name.
  * @retval AZ_MQTT_ERROR_NOT_SUPPORTED This transport has no proxy support.
  */
 AZ_NODISCARD az_result

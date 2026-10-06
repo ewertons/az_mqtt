@@ -136,7 +136,7 @@ static void bad_hosts_and_paths_are_refused(void** state)
   (void)state;
   az_mqtt_websocket ws = _ws();
   char request[_AZ_MQTT_WEBSOCKET_REQUEST_MAX];
-  char const* hosts[] = { "", "a b", "a\r\nX: y", "a\n" };
+  char const* hosts[] = { "", "a b", "a\r\nX: y", "a\n", "a\tb", "a\x01", "a\x7f" };
   for (size_t i = 0; i < sizeof(hosts) / sizeof(hosts[0]); i++)
   {
     assert_int_equal(

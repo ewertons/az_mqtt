@@ -29,7 +29,9 @@
  * @brief Encode a CONNECT packet into the destination buffer.
  * @param[in,out] dest  Buffer to write into. On success, advanced past the written bytes.
  * @param[in]     opts  CONNECT options.
- * @return AZ_OK or AZ_ERROR_NOT_ENOUGH_SPACE.
+ * @retval AZ_ERROR_NOT_ENOUGH_SPACE @p dest too small.
+ * @retval AZ_ERROR_ARG A string not valid UTF-8 or over 65,535 bytes, a Will Topic empty or with
+ * a wildcard, or a Will Response Topic with a wildcard.
  */
 AZ_NODISCARD az_result az_mqtt5_codec_encode_connect(az_span* dest, az_mqtt5_connect_options const* opts);
 
@@ -38,6 +40,8 @@ AZ_NODISCARD az_result az_mqtt5_codec_encode_connect(az_span* dest, az_mqtt5_con
  * @param[in,out] dest      Buffer; advanced on success.
  * @param[in]     opts      Publish options.
  * @param[in]     packet_id Packet identifier (must be non-zero for QoS>0).
+ * @retval AZ_ERROR_ARG Topic with a wildcard or empty without a Topic Alias; Response Topic with
+ * a wildcard; either not valid UTF-8.
  */
 AZ_NODISCARD az_result az_mqtt5_codec_encode_publish(
     az_span* dest,
@@ -81,6 +85,7 @@ AZ_NODISCARD az_result az_mqtt5_codec_encode_pubcomp(
  * @param[in]     subs      Array of subscriptions.
  * @param[in]     sub_count Number of subscriptions.
  * @param[in]     packet_id Packet identifier.
+ * @retval AZ_ERROR_ARG A Topic Filter empty, with a misplaced wildcard or not valid UTF-8.
  */
 AZ_NODISCARD az_result az_mqtt5_codec_encode_subscribe(
     az_span* dest,
@@ -90,6 +95,7 @@ AZ_NODISCARD az_result az_mqtt5_codec_encode_subscribe(
 
 /**
  * @brief Encode an UNSUBSCRIBE packet.
+ * @retval AZ_ERROR_ARG A Topic Filter empty, with a misplaced wildcard or not valid UTF-8.
  */
 AZ_NODISCARD az_result az_mqtt5_codec_encode_unsubscribe(
     az_span* dest,
@@ -126,6 +132,7 @@ AZ_NODISCARD az_result az_mqtt5_codec_decode_connack(az_span body, az_mqtt5_conn
  * @param[in] flags  Fixed header flags.
  * @param[in,out] out  In: user_properties / subscription_identifiers (may be NULL) and
  * their capacities. Out: every other field; entries beyond a capacity are dropped.
+ * @retval AZ_MQTT_ERROR_MALFORMED_PACKET QoS 3 (reserved), among others.
  */
 AZ_NODISCARD az_result
 az_mqtt5_codec_decode_publish(az_span body, uint8_t flags, az_mqtt5_publish_data* out);
@@ -137,11 +144,13 @@ AZ_NODISCARD az_result az_mqtt5_codec_decode_ack(az_span body, az_mqtt5_ack_data
 
 /**
  * @brief Decode SUBACK body.
+ * @retval AZ_MQTT_ERROR_MALFORMED_PACKET No reason code, among others.
  */
 AZ_NODISCARD az_result az_mqtt5_codec_decode_suback(az_span body, az_mqtt5_suback_data* out);
 
 /**
  * @brief Decode UNSUBACK body.
+ * @retval AZ_MQTT_ERROR_MALFORMED_PACKET No reason code, among others.
  */
 AZ_NODISCARD az_result az_mqtt5_codec_decode_unsuback(az_span body, az_mqtt5_suback_data* out);
 

@@ -428,6 +428,13 @@ static uint16_t _publishes_in_flight(az_mqtt_core* core)
   return publishes;
 }
 
+void _az_mqtt_core_inflight_reserve_inbound(az_mqtt_core* core, uint16_t receive_maximum)
+{
+  int32_t count;
+  (void)_get_inflight_entries(core, &count);
+  _S(core).inbound_reserve = (int32_t)receive_maximum < count ? receive_maximum : 0;
+}
+
 az_result _az_mqtt_core_inflight_reserve_entry(
     az_mqtt_core* core,
     _az_mqtt_inflight_kind kind,
@@ -437,12 +444,28 @@ az_result _az_mqtt_core_inflight_reserve_entry(
   int32_t count;
   az_mqtt_inflight_entry* entries = _get_inflight_entries(core, &count);
   az_mqtt_inflight_entry* entry = NULL;
-  for (int32_t i = 0; i < count && entry == NULL; i++)
+  int32_t free_entries = 0;
+  int32_t inbound = 0;
+  for (int32_t i = 0; i < count; i++)
   {
     if (entries[i]._internal.kind == _AZ_MQTT_INFLIGHT_FREE)
     {
-      entry = &entries[i]; // After every entry in use: the newest.
+      free_entries++;
+      if (entry == NULL)
+      {
+        entry = &entries[i]; // After every entry in use: the newest.
+      }
     }
+    else if (entries[i]._internal.kind == _AZ_MQTT_INFLIGHT_INBOUND_QOS2)
+    {
+      inbound++;
+    }
+  }
+  // Entries the server may still fill with inbound QoS 2 within its Receive Maximum.
+  int32_t const kept = _S(core).inbound_reserve > inbound ? _S(core).inbound_reserve - inbound : 0;
+  if (free_entries <= kept)
+  {
+    entry = NULL;
   }
   bool resend_pending = false;
   for (int32_t i = 0; i < count && kind <= _AZ_MQTT_INFLIGHT_PUBLISH_QOS2; i++)
@@ -761,11 +784,33 @@ bool _az_mqtt_core_inflight_release_entry(
   return entry != NULL;
 }
 
-void _az_mqtt_core_inflight_track_inbound_qos2(
+az_result _az_mqtt_core_inflight_release_request(
+    az_mqtt_core* core,
+    _az_mqtt_inflight_kind kind,
+    uint16_t packet_id,
+    int32_t code_count,
+    bool* out_released)
+{
+  az_mqtt_inflight_entry* entry = _az_mqtt_core_inflight_find_entry(core, kind, packet_id);
+  *out_released = entry != NULL;
+  if (entry == NULL)
+  {
+    return AZ_OK;
+  }
+  if (code_count != (int32_t)entry->_internal.filter_count)
+  {
+    return AZ_MQTT_ERROR_PROTOCOL;
+  }
+  _az_mqtt_core_inflight_free_entry(core, entry);
+  return AZ_OK;
+}
+
+az_result _az_mqtt_core_inflight_track_inbound_qos2(
     az_mqtt_core* core,
     uint16_t packet_id,
     bool* out_is_duplicate)
 {
+  *out_is_duplicate = false;
   int32_t count;
   az_mqtt_inflight_entry* entries = _get_inflight_entries(core, &count);
   az_mqtt_inflight_entry* free_entry = NULL;
@@ -775,20 +820,21 @@ void _az_mqtt_core_inflight_track_inbound_qos2(
         && entries[i]._internal.packet_id == packet_id)
     {
       *out_is_duplicate = true;
-      return;
+      return AZ_OK;
     }
     if (free_entry == NULL && entries[i]._internal.kind == _AZ_MQTT_INFLIGHT_FREE)
     {
       free_entry = &entries[i];
     }
   }
-  if (free_entry != NULL)
+  if (free_entry == NULL)
   {
-    free_entry->_internal.packet_id = packet_id;
-    free_entry->_internal.kind = _AZ_MQTT_INFLIGHT_INBOUND_QOS2;
-    free_entry->_internal.mark = _AZ_MQTT_INFLIGHT_MARK_NONE;
+    return AZ_MQTT_ERROR_FLOW_CONTROL;
   }
-  *out_is_duplicate = false;
+  free_entry->_internal.packet_id = packet_id;
+  free_entry->_internal.kind = _AZ_MQTT_INFLIGHT_INBOUND_QOS2;
+  free_entry->_internal.mark = _AZ_MQTT_INFLIGHT_MARK_NONE;
+  return AZ_OK;
 }
 
 az_result _az_mqtt_core_send_tracked_request(
@@ -881,10 +927,15 @@ static az_result _read_packet(
     az_span* out_body,
     int32_t* out_packet_size)
 {
-  // Fixed header: type byte + 1-4 byte Remaining Length.
-  az_result rc = _ensure_received(core, 2, deadline_ms);
+  // Fixed header: type byte + 1-4 byte Remaining Length. The type byte is checked first, so a
+  // malformed one fails without waiting for more.
+  az_result rc = _ensure_received(core, 1, deadline_ms);
   if (az_result_failed(rc))
     return rc;
+  if (!_az_mqtt_fixed_header_flags_valid(az_span_ptr(_S(core).receive_buffer)[0]))
+  {
+    return AZ_MQTT_ERROR_MALFORMED_PACKET;
+  }
 
   int32_t header_size = 1;
   int32_t remaining_length = 0;
@@ -1121,9 +1172,9 @@ az_result _az_mqtt_core_process_loop(
     if (az_result_succeeded(rc))
     {
       _log_packet(AZ_SPAN_FROM_STR("received "), (uint8_t)(type << 4), packet_size);
-      // While connecting, only a CONNACK is valid.
-      rc = connecting && type != AZ_MQTT_PACKET_TYPE_CONNACK ? AZ_MQTT_ERROR_PROTOCOL
-                                                             : dispatch(core, type, flags, body);
+      // While connecting, only a CONNACK is valid; after that, never.
+      rc = connecting != (type == AZ_MQTT_PACKET_TYPE_CONNACK) ? AZ_MQTT_ERROR_PROTOCOL
+                                                               : dispatch(core, type, flags, body);
       if (_S(core).session_generation != generation)
       {
         // A callback ended this session, and may have connected a new one whose

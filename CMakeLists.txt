@@ -12,8 +12,14 @@ option(AZ_MQTT_ENABLE_MQTTV3 "Build az_mqttv3 (MQTT 3.1.1 client)" ON)
 option(AZ_MQTT_ENABLE_MQTTV5 "Build az_mqttv5 (MQTT 5.0 client)" ON)
 option(AZ_MQTT_ENABLE_PROXY "HTTP CONNECT proxy support (az_mqtt_transport_set_proxy)" ON)
 option(AZ_MQTT_ENABLE_WEBSOCKETS "MQTT over WebSockets (websocket_options)" ON)
-option(AZ_MQTT_BUILD_SAMPLES "Build sample applications" ON)
-option(AZ_MQTT_BUILD_TESTS "Build tests" ON)
+# Samples and tests default to off when az_mqtt is built inside another project.
+if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+  set(_az_mqtt_top_level ON)
+else()
+  set(_az_mqtt_top_level OFF)
+endif()
+option(AZ_MQTT_BUILD_SAMPLES "Build sample applications" ${_az_mqtt_top_level})
+option(AZ_MQTT_BUILD_TESTS "Build tests" ${_az_mqtt_top_level})
 option(AZ_MQTT_WARNINGS_AS_ERRORS "Treat warnings in az_mqtt code (libraries, samples, tests) as errors" OFF)
 option(AZ_MQTT_BUILD_FUZZERS "Build libFuzzer targets (clang; instruments everything with ASan + UBSan)" OFF)
 
@@ -40,36 +46,49 @@ endif()
 
 # ──────────────────────── Azure SDK for C dependency ──────────
 
-if(WIN32)
-  set(AZ_PLATFORM_IMPL "WIN32" CACHE STRING "Azure SDK platform")
-else()
-  set(AZ_PLATFORM_IMPL "POSIX" CACHE STRING "Azure SDK platform")
+# A project embedding az_mqtt may provide azure-sdk-for-c (target az_core) itself; else the
+# submodule is built.
+# Its settings are directory-scoped variables, so a parent project's cache is left unchanged.
+if(NOT TARGET az_core)
+  if(NOT DEFINED AZ_PLATFORM_IMPL)
+    if(WIN32)
+      set(AZ_PLATFORM_IMPL "WIN32")
+    else()
+      set(AZ_PLATFORM_IMPL "POSIX")
+    endif()
+  endif()
+
+  # No Azure SDK tests or samples. option() honors these variables only under CMP0077, which
+  # azure-sdk-for-c's cmake_minimum_required(3.10) leaves unset.
+  set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+  set(UNIT_TESTING OFF)
+  set(TRANSPORT_PAHO OFF)
+
+  add_subdirectory(deps/azure-sdk-for-c)
 endif()
-
-# Don't build Azure SDK tests or samples
-set(UNIT_TESTING OFF CACHE BOOL "" FORCE)
-set(TRANSPORT_PAHO OFF CACHE BOOL "" FORCE)
-
-add_subdirectory(deps/azure-sdk-for-c)
-
-# azure-sdk-for-c headers are third-party: our warning set must not apply to them.
-get_target_property(_az_core_includes az_core INTERFACE_INCLUDE_DIRECTORIES)
-set_property(TARGET az_core APPEND PROPERTY INTERFACE_SYSTEM_INCLUDE_DIRECTORIES ${_az_core_includes})
 
 # ──────────────────────── Compiler warnings ───────────────────
 
 # az_mqtt_apply_warnings(<target>): the project's warning set, applied to our
 # own targets only (never to azure-sdk-for-c or cmocka).
 function(az_mqtt_apply_warnings target)
+  # azure-sdk-for-c headers are third-party: included as system headers by this target only,
+  # never by changing az_core, which a parent project may own.
+  get_target_property(_az_core_includes az_core INTERFACE_INCLUDE_DIRECTORIES)
+  if(_az_core_includes)
+    target_include_directories(${target} SYSTEM PRIVATE ${_az_core_includes})
+  endif()
   if(MSVC)
-    target_compile_options(${target} PRIVATE /W4)
+    # C4061: an enumerator without a case label, even with a default (as -Wswitch-enum).
+    target_compile_options(${target} PRIVATE /W4 /w14061)
     if(AZ_MQTT_WARNINGS_AS_ERRORS)
       target_compile_options(${target} PRIVATE /WX)
     endif()
   else()
     target_compile_options(${target} PRIVATE
       -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes
-      -Wformat=2 -Wcast-qual -Wvla -Wundef -Wnull-dereference -Wimplicit-fallthrough)
+      -Wformat=2 -Wcast-qual -Wvla -Wundef -Wnull-dereference -Wimplicit-fallthrough
+      -Wswitch-enum)
     if(AZ_MQTT_WARNINGS_AS_ERRORS)
       target_compile_options(${target} PRIVATE -Werror)
     endif()
@@ -155,9 +174,11 @@ elseif(AZ_MQTT_TLS_BACKEND STREQUAL "mbedtls")
   else()
     find_library(MBEDTLS_SSL_LIB    NAMES mbedtls    REQUIRED)
     find_library(MBEDTLS_X509_LIB   NAMES mbedx509   REQUIRED)
-    find_library(MBEDTLS_CRYPTO_LIB NAMES mbedcrypto REQUIRED)
+    # Per directory, so the crypto library of the same install wins over another one's.
+    find_library(MBEDTLS_CRYPTO_LIB NAMES tfpsacrypto mbedcrypto NAMES_PER_DIR REQUIRED)
     find_path(MBEDTLS_INCLUDE_DIR NAMES mbedtls/ssl.h REQUIRED)
-    target_include_directories(az_mqtt_core PRIVATE ${MBEDTLS_INCLUDE_DIR})
+    # Third-party headers: our warning set must not apply to them.
+    target_include_directories(az_mqtt_core SYSTEM PRIVATE ${MBEDTLS_INCLUDE_DIR})
     # Order matters: ssl depends on x509 depends on crypto.
     target_link_libraries(az_mqtt_core PRIVATE
         ${MBEDTLS_SSL_LIB} ${MBEDTLS_X509_LIB} ${MBEDTLS_CRYPTO_LIB})

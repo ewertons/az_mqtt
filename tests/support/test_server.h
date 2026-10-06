@@ -63,6 +63,10 @@ typedef struct
   bool untrusted_ca;
   /** @brief Server certificate validity ended before the test ran. */
   bool expired;
+  /** @brief Server certificate Extended Key Usage is clientAuth only. */
+  bool client_auth_only;
+  /** @brief Server certificate without an Extended Key Usage. */
+  bool no_eku;
   /** @brief Require and verify a client certificate issued by the test CA. */
   bool require_client_cert;
   test_server_behavior behavior;
@@ -126,6 +130,10 @@ typedef struct
   bool ticket_before_burst;
   /** @brief Close the connection right after CONNACK (TLS: without close_notify). */
   bool close_after_connack;
+  /** @brief After CONNACK: these bytes, as is (NULL: none). */
+  uint8_t const* raw_after_connack;
+  /** @brief Size of raw_after_connack. */
+  int raw_after_connack_size;
 } test_server_options;
 
 typedef struct test_server test_server;
@@ -172,6 +180,9 @@ int test_server_last_pubrel_reason(test_server* server);
 /** @brief PUBCOMP packets received, and the reason code of the last (0 if absent). */
 int test_server_pubcomps(test_server* server);
 int test_server_last_pubcomp_reason(test_server* server);
+
+/** @brief Reason code of the client's last DISCONNECT (0 without one); -1: none received. */
+int test_server_client_disconnect_reason(test_server* server);
 
 /**
  * @brief Keep sessions: the CONNACKs that follow (accepted ones) set Session Present when the

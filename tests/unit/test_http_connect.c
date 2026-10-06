@@ -7,6 +7,10 @@
 #include <stdint.h>
 #include <string.h>
 
+#if defined(__unix__) || defined(__APPLE__)
+#include <sys/mman.h>
+#endif
+
 #include <cmocka.h>
 
 #include "az_mqtt_http_connect.h"
@@ -104,6 +108,21 @@ static void invalid_options_are_refused(void** state)
   long_user[AZ_MQTT_PROXY_CREDENTIALS_MAX] = '\0';
   p = _proxy(long_user, "p");
   assert_int_equal(_az_mqtt_http_connect_check(&p), AZ_MQTT_ERROR_INVALID_CONFIG);
+  p = _proxy("u", long_user);
+  assert_int_equal(_az_mqtt_http_connect_check(&p), AZ_MQTT_ERROR_INVALID_CONFIG);
+#if defined(__unix__) || defined(__APPLE__)
+  // Sizes whose sum overflows int32_t: refused (readable, so a check that reads stays in bounds).
+  void* const zeros
+      = mmap(NULL, (size_t)INT32_MAX, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+  if (zeros != MAP_FAILED)
+  {
+    p = _proxy("", "");
+    p.username = az_span_create((uint8_t*)zeros, INT32_MAX);
+    p.password = az_span_create((uint8_t*)zeros, INT32_MAX);
+    assert_int_equal(_az_mqtt_http_connect_check(&p), AZ_MQTT_ERROR_INVALID_CONFIG);
+    (void)munmap(zeros, (size_t)INT32_MAX);
+  }
+#endif
 
   // The target host goes in the request line too.
   p = _proxy("", "");
@@ -115,6 +134,17 @@ static void invalid_options_are_refused(void** state)
   assert_int_equal(
       _az_mqtt_http_connect_request(&p, _str("hub x"), 1, AZ_SPAN_FROM_BUFFER(buf), &size),
       AZ_MQTT_ERROR_INVALID_CONFIG);
+  // Other controls (HTAB, DEL) would change tokenization too.
+  char const* const controls[] = { "hub\tx", "hub\x01", "hub\x7f" };
+  for (size_t i = 0; i < sizeof(controls) / sizeof(controls[0]); i++)
+  {
+    assert_int_equal(
+        _az_mqtt_http_connect_request(&p, _str(controls[i]), 1, AZ_SPAN_FROM_BUFFER(buf), &size),
+        AZ_MQTT_ERROR_INVALID_CONFIG);
+    p.host = _str(controls[i]);
+    assert_int_equal(_az_mqtt_http_connect_check(&p), AZ_MQTT_ERROR_INVALID_CONFIG);
+    p = _proxy("", "");
+  }
 }
 
 /** @brief Parse @p reply in pieces of @p piece bytes; *out_consumed sums what was consumed. */
