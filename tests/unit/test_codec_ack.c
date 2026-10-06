@@ -409,6 +409,14 @@ static void topics_and_filters_are_checked_when_encoding(void** state)
   will.topic = AZ_SPAN_FROM_STR("will");
   dest = AZ_SPAN_FROM_BUFFER(buf);
   assert_int_equal(_V(codec_encode_connect)(&dest, &connect), AZ_OK);
+#if AZ_MQTT_TEST_VERSION == 5
+  will.response_topic = AZ_SPAN_FROM_STR("reply/#");
+  dest = AZ_SPAN_FROM_BUFFER(buf);
+  assert_int_equal(az_mqtt5_codec_encode_connect(&dest, &connect), AZ_ERROR_ARG);
+  will.response_topic = AZ_SPAN_FROM_STR("reply");
+  dest = AZ_SPAN_FROM_BUFFER(buf);
+  assert_int_equal(az_mqtt5_codec_encode_connect(&dest, &connect), AZ_OK);
+#endif
 
 #if AZ_MQTT_TEST_VERSION == 5
   az_mqtt5_publish_options publish = az_mqtt5_publish_options_default();

@@ -135,7 +135,7 @@ static void invalid_options_are_refused(void** state)
       _az_mqtt_http_connect_request(&p, _str("hub x"), 1, AZ_SPAN_FROM_BUFFER(buf), &size),
       AZ_MQTT_ERROR_INVALID_CONFIG);
   // Other controls (HTAB, DEL) would change tokenization too.
-  char const* const controls[] = { "hub	x", "hub", "hub" };
+  char const* const controls[] = { "hub\tx", "hub\x01", "hub\x7f" };
   for (size_t i = 0; i < sizeof(controls) / sizeof(controls[0]); i++)
   {
     assert_int_equal(
