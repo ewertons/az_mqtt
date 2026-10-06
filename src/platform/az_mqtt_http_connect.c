@@ -111,7 +111,8 @@ az_result _az_mqtt_http_connect_request(
     az_span buffer,
     int32_t* out_size)
 {
-  if (!_is_valid_host(host))
+  // Checked again: the options are used, not copied, and the credentials must fit.
+  if (!_is_valid_host(host) || az_result_failed(_az_mqtt_http_connect_check(proxy)))
   {
     return AZ_MQTT_ERROR_INVALID_CONFIG;
   }

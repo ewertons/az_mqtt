@@ -63,6 +63,8 @@ typedef struct
   bool untrusted_ca;
   /** @brief Server certificate validity ended before the test ran. */
   bool expired;
+  /** @brief Server certificate Extended Key Usage is clientAuth only. */
+  bool client_auth_only;
   /** @brief Require and verify a client certificate issued by the test CA. */
   bool require_client_cert;
   test_server_behavior behavior;

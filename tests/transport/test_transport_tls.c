@@ -217,6 +217,14 @@ static void expired_certificate_is_rejected(void** state)
   _expect_rejected(&o, "localhost");
 }
 
+static void certificate_not_for_server_authentication_is_rejected(void** state)
+{
+  (void)state;
+  test_server_options o = test_server_options_default();
+  o.client_auth_only = true;
+  _expect_rejected(&o, "localhost");
+}
+
 static void missing_trust_anchor_never_trusts_the_server(void** state)
 {
   (void)state;
@@ -319,6 +327,7 @@ int main(void)
     cmocka_unit_test(host_name_not_in_certificate_is_rejected),
     cmocka_unit_test(ip_address_not_in_certificate_is_rejected),
     cmocka_unit_test(expired_certificate_is_rejected),
+    cmocka_unit_test(certificate_not_for_server_authentication_is_rejected),
     cmocka_unit_test(missing_trust_anchor_never_trusts_the_server),
     cmocka_unit_test(half_a_client_identity_is_refused_before_connecting),
     cmocka_unit_test(client_certificate_is_presented),
