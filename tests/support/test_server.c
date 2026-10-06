@@ -928,6 +928,10 @@ static void _serve(test_server* s, conn* c)
     }
     if (type == 3)
     {
+      // Read before the count: a test that waits for the count may change it next.
+      pthread_mutex_lock(&s->lock);
+      bool const ack_publishes = s->options.ack_publishes;
+      pthread_mutex_unlock(&s->lock);
       _add(s, &s->publishes, 1);
       int const qos = (c->flags >> 1) & 0x03;
       int const id_at = len >= 2 ? 2 + ((body[0] << 8) | body[1]) : len;
@@ -953,9 +957,6 @@ static void _serve(test_server* s, conn* c)
           (void)_write(c, pubrec, (int)sizeof(pubrec));
         }
       }
-      pthread_mutex_lock(&s->lock);
-      bool const ack_publishes = s->options.ack_publishes;
-      pthread_mutex_unlock(&s->lock);
       if (ack_publishes && !held && qos > 0 && id_at + 2 <= len)
       {
         bool const reason = v5 && qos == 2 && s->options.pubrec_reason != 0;
