@@ -1533,6 +1533,52 @@ static void wrong_flags_are_rejected_before_the_remaining_length_is_read(void** 
   _expect_malformed(puback_flags_1_alone, (int)sizeof(puback_flags_1_alone));
 }
 
+#if AZ_MQTT_TEST_VERSION == 5
+static void an_auth_with_a_malformed_string_ends_the_session(void** state)
+{
+  (void)state;
+  // Continue authentication; Reason String "a\0b".
+  static const uint8_t auth[] = { 0xF0, 0x08, 0x18, 0x06, 0x1F, 0x00, 0x03, 'a', 0x00, 'b' };
+  _expect_malformed(auth, (int)sizeof(auth));
+}
+
+#endif
+
+static void a_publish_with_a_malformed_topic_is_refused(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  s_inflight_slots = 1; // A refused QoS 1 PUBLISH that kept its entry would block the next.
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  for (int qos = 0; qos <= 1; qos++)
+  {
+    AZ_MQTT_T(publish_options) p = _publish_options((az_mqtt_qos)qos);
+    p.topic = az_span_create((uint8_t*)(uintptr_t) "\xC0\x80", 2); // Overlong U+0000.
+    assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &p, NULL), AZ_ERROR_ARG);
+  }
+  // Nothing sent, no in-flight entry kept, and the session is up.
+  AZ_MQTT_T(publish_options) const p = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &p, NULL), AZ_OK);
+  PUMP_UNTIL(&f, test_server_publishes(f.server) == 1);
+  assert_int_equal(test_server_publishes(f.server), 1);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+  _teardown(&f);
+}
+
+static void a_topic_with_u0000_ends_the_session(void** state)
+{
+  (void)state;
+#if AZ_MQTT_TEST_VERSION == 5
+  static const uint8_t publish[] = { 0x30, 0x06, 0x00, 0x03, 'a', 0x00, 'b', 0x00 };
+#else
+  static const uint8_t publish[] = { 0x30, 0x05, 0x00, 0x03, 'a', 0x00, 'b' };
+#endif
+  _expect_malformed(publish, (int)sizeof(publish));
+  assert_int_equal(g.publishes, 0);
+}
+
 static void wrong_flags_are_rejected_before_the_body_is_read(void** state)
 {
   (void)state;
@@ -2281,6 +2327,11 @@ int main(void)
     cmocka_unit_test(a_pubrel_without_its_required_flags_ends_the_session),
     cmocka_unit_test(a_puback_with_flags_set_ends_the_session),
     cmocka_unit_test(wrong_flags_are_rejected_before_the_body_is_read),
+    cmocka_unit_test(a_topic_with_u0000_ends_the_session),
+    cmocka_unit_test(a_publish_with_a_malformed_topic_is_refused),
+#if AZ_MQTT_TEST_VERSION == 5
+    cmocka_unit_test(an_auth_with_a_malformed_string_ends_the_session),
+#endif
     cmocka_unit_test(wrong_flags_are_rejected_before_the_remaining_length_is_read),
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(the_server_receive_maximum_limits_publishes),

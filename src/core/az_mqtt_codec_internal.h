@@ -30,14 +30,17 @@ AZ_NODISCARD az_result _az_mqtt_write_byte(az_span* dest, uint8_t b);
 /** @brief Write a big-endian 16-bit integer; advance @p dest. */
 AZ_NODISCARD az_result _az_mqtt_write_uint16(az_span* dest, uint16_t val);
 
-/** @brief Write a 2-byte length followed by @p str; advance @p dest. */
+/**
+ * @brief Write a 2-byte length followed by @p str; advance @p dest.
+ * @retval AZ_ERROR_ARG Longer than 65,535 bytes, not well-formed UTF-8, or contains U+0000.
+ */
 AZ_NODISCARD az_result _az_mqtt_write_utf8_string(az_span* dest, az_span str);
 
-/** @brief Write a 2-byte length followed by @p data; advance @p dest. */
-AZ_NODISCARD AZ_INLINE az_result _az_mqtt_write_binary_data(az_span* dest, az_span data)
-{
-  return _az_mqtt_write_utf8_string(dest, data);
-}
+/**
+ * @brief Write a 2-byte length followed by @p data; advance @p dest.
+ * @retval AZ_ERROR_ARG Longer than 65,535 bytes.
+ */
+AZ_NODISCARD az_result _az_mqtt_write_binary_data(az_span* dest, az_span data);
 
 /** @brief Write a Variable Byte Integer; advance @p dest. */
 AZ_NODISCARD az_result _az_mqtt_write_vbi(az_span* dest, int32_t value);
@@ -54,14 +57,19 @@ AZ_NODISCARD az_result _az_mqtt_read_uint16(az_span* src, uint16_t* out);
 /** @brief Read a Variable Byte Integer; advance @p src. */
 AZ_NODISCARD az_result _az_mqtt_read_vbi(az_span* src, int32_t* out);
 
-/** @brief Read a length-prefixed string (a view into @p src); advance @p src. */
+/**
+ * @brief Whether @p text is well-formed UTF-8 without U+0000 (MQTT 3.1.1 1.5.3, 5.0 1.5.4).
+ */
+bool _az_mqtt_utf8_valid(az_span text);
+
+/**
+ * @brief Read a length-prefixed UTF-8 string (a view into @p src); advance @p src.
+ * @retval AZ_MQTT_ERROR_MALFORMED_PACKET Not well-formed UTF-8, or contains U+0000.
+ */
 AZ_NODISCARD az_result _az_mqtt_read_utf8_string(az_span* src, az_span* out);
 
 /** @brief Read length-prefixed binary data (a view into @p src); advance @p src. */
-AZ_NODISCARD AZ_INLINE az_result _az_mqtt_read_binary_data(az_span* src, az_span* out)
-{
-  return _az_mqtt_read_utf8_string(src, out);
-}
+AZ_NODISCARD az_result _az_mqtt_read_binary_data(az_span* src, az_span* out);
 
 /**
  * @brief Whether the fixed-header flags (low nibble of @p first_byte) are valid for its packet
