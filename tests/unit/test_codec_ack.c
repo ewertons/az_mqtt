@@ -282,6 +282,42 @@ static void single_use_properties_must_not_repeat(void** state)
       az_mqtt5_codec_decode_auth(AZ_SPAN_FROM_BUFFER(reason_then_two), &auth),
       AZ_MQTT_ERROR_PROTOCOL);
 }
+
+static void nothing_may_follow_the_properties(void** state)
+{
+  (void)state;
+  az_mqtt5_connack_data connack;
+  memset(&connack, 0, sizeof(connack));
+  uint8_t connack_no_properties[] = { 0x00, 0x00 }; // Property Length is mandatory.
+  uint8_t connack_trailing[] = { 0x00, 0x00, 0x00, 0xFF };
+  assert_true(az_result_failed(
+      az_mqtt5_codec_decode_connack(AZ_SPAN_FROM_BUFFER(connack_no_properties), &connack)));
+  assert_int_equal(
+      az_mqtt5_codec_decode_connack(AZ_SPAN_FROM_BUFFER(connack_trailing), &connack),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+
+  az_mqtt5_ack_data ack;
+  memset(&ack, 0, sizeof(ack));
+  uint8_t ack_reason_only[] = { 0x00, 0x01, 0x10 }; // Properties may be omitted here.
+  uint8_t ack_trailing[] = { 0x00, 0x01, 0x10, 0x00, 0xFF };
+  assert_int_equal(az_mqtt5_codec_decode_ack(AZ_SPAN_FROM_BUFFER(ack_reason_only), &ack), AZ_OK);
+  assert_int_equal(
+      az_mqtt5_codec_decode_ack(AZ_SPAN_FROM_BUFFER(ack_trailing), &ack),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+
+  uint8_t trailing[] = { 0x00, 0x00, 0xFF }; // Reason, empty properties, one more byte.
+  az_mqtt5_disconnect_data disconnect;
+  memset(&disconnect, 0, sizeof(disconnect));
+  assert_int_equal(
+      az_mqtt5_codec_decode_disconnect(AZ_SPAN_FROM_BUFFER(trailing), &disconnect),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+  az_mqtt5_auth_data auth;
+  memset(&auth, 0, sizeof(auth));
+  trailing[0] = 0x18; // Continue authentication.
+  assert_int_equal(
+      az_mqtt5_codec_decode_auth(AZ_SPAN_FROM_BUFFER(trailing), &auth),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+}
 #endif
 
 static void subscribe_acknowledgement_codes_are_checked(void** state)
@@ -324,6 +360,7 @@ int main(void)
     cmocka_unit_test(zero_valued_properties_are_protocol_errors),
     cmocka_unit_test(one_byte_flag_properties_must_be_0_or_1),
     cmocka_unit_test(single_use_properties_must_not_repeat),
+    cmocka_unit_test(nothing_may_follow_the_properties),
 #endif
     cmocka_unit_test(a_suback_without_codes_is_malformed),
   };
