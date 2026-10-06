@@ -27,6 +27,10 @@ set(BUILD_SHARED_LIBS ${_saved_BUILD_SHARED_LIBS} CACHE BOOL "" FORCE)
 
 add_subdirectory(unit)
 add_subdirectory(e2e)
+# Fuzz targets replay their seeds and regression inputs (with AZ_MQTT_BUILD_FUZZERS: built there).
+if(NOT AZ_MQTT_BUILD_FUZZERS)
+  add_subdirectory(fuzz)
+endif()
 
 # Tests against an in-process peer (POSIX + OpenSSL 3.0+); no broker needed.
 if(UNIX)

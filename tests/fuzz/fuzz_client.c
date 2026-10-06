@@ -39,6 +39,9 @@
 
 int LLVMFuzzerTestOneInput(uint8_t const* data, size_t size);
 
+/** @brief Results the fuzzer has no use for (the input decides them). */
+static void _ignore(az_result rc) { (void)rc; }
+
 static uint8_t s_input[70000];
 static uint8_t s_sent[70000];
 static uint8_t s_send_buffer[_BUFFER_SIZE];
@@ -58,7 +61,7 @@ static void _publish(_CLIENT(client) * client, az_mqtt_qos qos)
   message.topic = AZ_SPAN_FROM_STR("t/out");
   message.payload = AZ_SPAN_FROM_STR("payload");
   message.qos = qos;
-  (void)_CLIENT(client_publish)(client, &message, NULL);
+  _ignore(_CLIENT(client_publish)(client, &message, NULL));
 }
 
 static void _on_publish(_CLIENT(client) * client, _CLIENT(publish_data) const* publish)
@@ -201,7 +204,7 @@ int LLVMFuzzerTestOneInput(uint8_t const* data, size_t size)
         memset(&subscription, 0, sizeof(subscription));
         subscription.topic_filter = AZ_SPAN_FROM_STR("t/#");
         subscription.qos = AZ_MQTT_QOS_EXACTLY_ONCE;
-        (void)_CLIENT(client_subscribe)(&client, &subscription, 1, NULL);
+        _ignore(_CLIENT(client_subscribe)(&client, &subscription, 1, NULL));
         _publish(&client, AZ_MQTT_QOS_AT_MOST_ONCE);
         _publish(&client, AZ_MQTT_QOS_AT_LEAST_ONCE);
         _publish(&client, AZ_MQTT_QOS_EXACTLY_ONCE);
@@ -217,9 +220,9 @@ int LLVMFuzzerTestOneInput(uint8_t const* data, size_t size)
     }
   }
 #if AZ_MQTT_FUZZ_VERSION == 5
-  (void)az_mqtt5_client_disconnect(&client, AZ_MQTT5_REASON_NORMAL_DISCONNECTION);
+  _ignore(az_mqtt5_client_disconnect(&client, AZ_MQTT5_REASON_NORMAL_DISCONNECTION));
 #else
-  (void)az_mqtt3_client_disconnect(&client);
+  _ignore(az_mqtt3_client_disconnect(&client));
 #endif
   return 0;
 }
