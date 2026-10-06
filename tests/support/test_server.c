@@ -113,6 +113,7 @@ static X509* _make_cert(
     X509* issuer,
     EVP_PKEY* issuer_key,
     bool is_ca,
+    char const* eku,
     char const* san,
     long not_before_s,
     long not_after_s)
@@ -137,12 +138,12 @@ static X509* _make_cert(
   X509V3_set_ctx(&v3, issuer != NULL ? issuer : cert, cert, NULL, NULL, 0);
   bool ok = _add_ext(cert, &v3, NID_basic_constraints, is_ca ? "critical,CA:TRUE" : "CA:FALSE")
       && _add_ext(
-             cert,
-             &v3,
-             NID_key_usage,
-             is_ca ? "critical,keyCertSign,cRLSign" : "critical,digitalSignature")
+                cert,
+                &v3,
+                NID_key_usage,
+                is_ca ? "critical,keyCertSign,cRLSign" : "critical,digitalSignature")
       && _add_ext(cert, &v3, NID_subject_key_identifier, "hash")
-      && (is_ca || _add_ext(cert, &v3, NID_ext_key_usage, "serverAuth,clientAuth"))
+      && (eku == NULL || _add_ext(cert, &v3, NID_ext_key_usage, eku))
       && (san == NULL || _add_ext(cert, &v3, NID_subject_alt_name, san))
       && X509_sign(cert, issuer_key != NULL ? issuer_key : key, EVP_sha256()) > 0;
   if (!ok)
@@ -180,8 +181,9 @@ static bool _setup_tls(test_server* s)
   EVP_PKEY* rogue_key = EVP_EC_gen("P-256");
   EVP_PKEY* srv_key = EVP_EC_gen("P-256");
   EVP_PKEY* cli_key = EVP_EC_gen("P-256");
-  X509* ca = _make_cert(ca_key, "az-mqtt-test-ca", NULL, NULL, true, NULL, -day, 30 * day);
-  X509* rogue = _make_cert(rogue_key, "az-mqtt-rogue-ca", NULL, NULL, true, NULL, -day, 30 * day);
+  X509* ca = _make_cert(ca_key, "az-mqtt-test-ca", NULL, NULL, true, NULL, NULL, -day, 30 * day);
+  X509* rogue
+      = _make_cert(rogue_key, "az-mqtt-rogue-ca", NULL, NULL, true, NULL, NULL, -day, 30 * day);
   X509* signer = s->options.untrusted_ca ? rogue : ca;
   EVP_PKEY* signer_key = s->options.untrusted_ca ? rogue_key : ca_key;
   X509* srv = _make_cert(
@@ -190,10 +192,22 @@ static bool _setup_tls(test_server* s)
       signer,
       signer_key,
       false,
+      s->options.no_eku                 ? NULL
+          : s->options.client_auth_only ? "clientAuth"
+                                        : "serverAuth,clientAuth",
       s->options.san,
       s->options.expired ? -2 * day : -day,
       s->options.expired ? -day : 30 * day);
-  X509* cli = _make_cert(cli_key, "az-mqtt-test-client", ca, ca_key, false, NULL, -day, 30 * day);
+  X509* cli = _make_cert(
+      cli_key,
+      "az-mqtt-test-client",
+      ca,
+      ca_key,
+      false,
+      "serverAuth,clientAuth",
+      NULL,
+      -day,
+      30 * day);
 
   bool ok = ca_key && rogue_key && srv_key && cli_key && ca && rogue && srv && cli
       && _write_pem(s->ca_path, sizeof(s->ca_path), ca, NULL)

@@ -42,7 +42,7 @@ static void reset_state(void)
   s_connack_reason = -1;
 }
 
-static az_result init_tls_client(AZ_MQTT_T(client)* client, az_span client_id)
+static az_result init_tls_client(AZ_MQTT_T(client)* client, az_span client_id, uint16_t port)
 {
   az_mqtt_e2e_fixture_reset(&s_fixture);
 
@@ -56,7 +56,7 @@ static az_result init_tls_client(AZ_MQTT_T(client)* client, az_span client_id)
   memset(&params, 0, sizeof(params));
   params.client_id = client_id;
   params.hostname = AZ_SPAN_FROM_STR("localhost");
-  params.port = 8883;
+  params.port = port;
   params.keep_alive_seconds = 30;
   params.clean_start = true;
   params.tls_options = &tls_opts;
@@ -86,7 +86,7 @@ static void test_tls_connect_and_disconnect_win32(void** state)
 #endif
 
   AZ_MQTT_T(client) client;
-  az_result rc = init_tls_client(&client, AZ_SPAN_FROM_STR("test-tls-win32-01"));
+  az_result rc = init_tls_client(&client, AZ_SPAN_FROM_STR("test-tls-win32-01"), 8883);
   assert_int_equal(rc, AZ_OK);
 
   rc = AZ_MQTT_T(client_connect)(&client, 5000);
@@ -111,7 +111,7 @@ static void test_tls_started_connect_win32(void** state)
   }
 
   AZ_MQTT_T(client) client;
-  az_result rc = init_tls_client(&client, AZ_SPAN_FROM_STR("test-tls-win32-02"));
+  az_result rc = init_tls_client(&client, AZ_SPAN_FROM_STR("test-tls-win32-02"), 8883);
   assert_int_equal(rc, AZ_OK);
 
   rc = AZ_MQTT_T(client_connect_start)(&client, 5000);
@@ -132,11 +132,30 @@ static void test_tls_started_connect_win32(void** state)
   assert_int_equal(rc, AZ_OK);
 }
 
+/** @brief Port 8884: a server certificate whose Extended Key Usage is clientAuth only. */
+static void test_tls_client_auth_only_certificate_is_refused_win32(void** state)
+{
+  (void)state;
+  reset_state();
+  char const* run_tls = getenv("AZ_MQTT_RUN_TLS_E2E");
+  if (run_tls == NULL || strcmp(run_tls, "1") != 0 || !E2E_WIN32_TLS_BACKEND_AVAILABLE)
+  {
+    return; // Same opt-in as test_tls_connect_and_disconnect_win32.
+  }
+
+  AZ_MQTT_T(client) client;
+  az_result rc = init_tls_client(&client, AZ_SPAN_FROM_STR("test-tls-win32-03"), 8884);
+  assert_int_equal(rc, AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&client, 5000), AZ_MQTT_ERROR_TLS_VERIFY);
+  assert_false(s_connack_received);
+}
+
 int main(void)
 {
   const struct CMUnitTest tests[] = {
     cmocka_unit_test(test_tls_connect_and_disconnect_win32),
     cmocka_unit_test(test_tls_started_connect_win32),
+    cmocka_unit_test(test_tls_client_auth_only_certificate_is_refused_win32),
   };
 
   return cmocka_run_group_tests(tests, NULL, NULL);
