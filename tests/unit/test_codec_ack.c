@@ -198,6 +198,32 @@ static void zero_valued_properties_are_protocol_errors(void** state)
       az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(topic_alias_1), 0x00, &publish), AZ_OK);
   assert_int_equal(publish.topic_alias, 1);
 }
+
+static void one_byte_flag_properties_must_be_0_or_1(void** state)
+{
+  (void)state;
+  // CONNACK: Maximum QoS; Retain, Wildcard, Subscription Identifier, Shared Subscription Available.
+  uint8_t const ids[] = { 0x24, 0x25, 0x28, 0x29, 0x2A };
+  for (size_t i = 0; i < sizeof(ids); i++)
+  {
+    az_mqtt5_connack_data connack;
+    memset(&connack, 0, sizeof(connack));
+    uint8_t one[] = { 0x00, 0x00, 0x02, ids[i], 0x01 };
+    uint8_t two[] = { 0x00, 0x00, 0x02, ids[i], 0x02 };
+    assert_int_equal(az_mqtt5_codec_decode_connack(AZ_SPAN_FROM_BUFFER(one), &connack), AZ_OK);
+    assert_int_equal(
+        az_mqtt5_codec_decode_connack(AZ_SPAN_FROM_BUFFER(two), &connack), AZ_MQTT_ERROR_PROTOCOL);
+  }
+  // PUBLISH: Payload Format Indicator.
+  az_mqtt5_publish_data publish;
+  memset(&publish, 0, sizeof(publish));
+  uint8_t utf8[] = { 0x00, 0x01, 't', 0x02, 0x01, 0x01 };
+  uint8_t two[] = { 0x00, 0x01, 't', 0x02, 0x01, 0x02 };
+  assert_int_equal(az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(utf8), 0x00, &publish), AZ_OK);
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(two), 0x00, &publish),
+      AZ_MQTT_ERROR_PROTOCOL);
+}
 #endif
 
 int main(void)
@@ -210,6 +236,7 @@ int main(void)
     cmocka_unit_test(acknowledgements_with_packet_id_0_are_malformed),
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(zero_valued_properties_are_protocol_errors),
+    cmocka_unit_test(one_byte_flag_properties_must_be_0_or_1),
 #endif
     cmocka_unit_test(a_suback_without_codes_is_malformed),
   };
