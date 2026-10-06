@@ -1533,6 +1533,17 @@ static void wrong_flags_are_rejected_before_the_remaining_length_is_read(void** 
   _expect_malformed(puback_flags_1_alone, (int)sizeof(puback_flags_1_alone));
 }
 
+#if AZ_MQTT_TEST_VERSION == 5
+static void an_auth_with_a_malformed_string_ends_the_session(void** state)
+{
+  (void)state;
+  // Continue authentication; Reason String "a\0b".
+  static const uint8_t auth[] = { 0xF0, 0x08, 0x18, 0x06, 0x1F, 0x00, 0x03, 'a', 0x00, 'b' };
+  _expect_malformed(auth, (int)sizeof(auth));
+}
+
+#endif
+
 static void a_publish_with_a_malformed_topic_is_refused(void** state)
 {
   (void)state;
@@ -2318,6 +2329,9 @@ int main(void)
     cmocka_unit_test(wrong_flags_are_rejected_before_the_body_is_read),
     cmocka_unit_test(a_topic_with_u0000_ends_the_session),
     cmocka_unit_test(a_publish_with_a_malformed_topic_is_refused),
+#if AZ_MQTT_TEST_VERSION == 5
+    cmocka_unit_test(an_auth_with_a_malformed_string_ends_the_session),
+#endif
     cmocka_unit_test(wrong_flags_are_rejected_before_the_remaining_length_is_read),
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(the_server_receive_maximum_limits_publishes),
