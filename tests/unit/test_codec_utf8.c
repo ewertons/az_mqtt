@@ -4,7 +4,8 @@
 
 /**
  * @file test_codec_utf8.c
- * @brief _az_mqtt_utf8_valid() and _az_mqtt_read_utf8_string().
+ * @brief _az_mqtt_utf8_valid(), and reading and writing UTF-8 strings and
+ * binary data.
  */
 
 #include <setjmp.h>
@@ -78,11 +79,33 @@ reading_a_string_checks_it_and_reading_binary_does_not(void **state) {
   assert_int_equal(az_span_size(out), 2);
 }
 
+static void
+writing_a_string_checks_it_and_writing_binary_does_not(void **state) {
+  (void)state;
+  uint8_t buf[16];
+  az_span dest = AZ_SPAN_FROM_BUFFER(buf);
+  assert_int_equal(_az_mqtt_write_utf8_string(&dest, _SPAN("a"
+                                                           "\x00"
+                                                           "b")),
+                   AZ_ERROR_ARG);
+  assert_int_equal(_az_mqtt_write_utf8_string(&dest, _SPAN("\xC0\x80")),
+                   AZ_ERROR_ARG);
+  assert_int_equal(az_span_size(dest),
+                   (int32_t)sizeof(buf)); // Nothing written.
+  assert_int_equal(_az_mqtt_write_binary_data(&dest, _SPAN("a"
+                                                           "\x00"
+                                                           "b")),
+                   AZ_OK);
+  assert_int_equal(_az_mqtt_write_utf8_string(&dest, _SPAN("\xC3\xA9")), AZ_OK);
+  assert_int_equal(az_span_size(dest), (int32_t)sizeof(buf) - 5 - 4);
+}
+
 int main(void) {
   const struct CMUnitTest tests[] = {
       cmocka_unit_test(well_formed_utf8_is_valid),
       cmocka_unit_test(malformed_utf8_and_nul_are_invalid),
       cmocka_unit_test(reading_a_string_checks_it_and_reading_binary_does_not),
+      cmocka_unit_test(writing_a_string_checks_it_and_writing_binary_does_not),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }
