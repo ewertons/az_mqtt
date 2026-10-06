@@ -32,6 +32,8 @@ typedef struct
   int send_calls;
   /** @brief Bytes send_some() may still take (-1: no limit), used up as it takes them: buffer space. */
   int32_t send_some_budget;
+  /** @brief send() waits this long before taking the data (a slow peer). */
+  int send_delay_ms;
   /** @brief Fail this send call (1-based; 0: none) and later ones. */
   int fail_send_call;
   /** @brief connect_poll() returns AZ_MQTT_ERROR_TIMEOUT this many times before succeeding. */

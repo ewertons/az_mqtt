@@ -20,3 +20,10 @@ endif()
 if(AZ_MQTT_ENABLE_PROXY)
   add_az_mqtt_local_test(az_mqtt_test_transport_proxy test_transport_proxy.c)
 endif()
+if(AZ_MQTT_ENABLE_WEBSOCKETS)
+  add_az_mqtt_local_test(az_mqtt_test_websocket_send_deadline test_websocket_send_deadline.c
+    LIBRARY az_mqtt_short_timeouts)
+  target_sources(az_mqtt_test_websocket_send_deadline PRIVATE ${PROJECT_SOURCE_DIR}/tests/unit/test_fake_transport.c)
+  target_include_directories(az_mqtt_test_websocket_send_deadline PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/core ${PROJECT_SOURCE_DIR}/tests/unit)
+endif()
