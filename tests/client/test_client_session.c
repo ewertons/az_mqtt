@@ -2128,17 +2128,12 @@ static void tls_sessions_end_with_close_notify_whatever_the_reason(void** state)
 
   // Protocol error.
   so = test_server_options_default();
-  so.send_auth = true; // Reserved in MQTT 3.1.1; valid in 5.
+  so.send_auth = true; // Reserved in MQTT 3.1.1; unsolicited in 5.
   _setup(&f, &so, 30);
-  az_result const rc = AZ_MQTT_T(client_connect)(&f.client, 3000);
+  _ignore(AZ_MQTT_T(client_connect)(&f.client, 3000));
   _ignore(_pump_until_closed(&f, 1000));
-#if AZ_MQTT_TEST_VERSION == 3
-  (void)rc;
   assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_PROTOCOL);
   assert_int_equal(_close_notifies(&f, 1), 1);
-#else
-  assert_int_equal(rc, AZ_OK);
-#endif
   _teardown(&f);
 }
 #endif
@@ -2336,11 +2331,11 @@ static void publish_properties_never_exceed_the_buffers(void** state)
 }
 #endif
 
-static void an_auth_packet_is_a_protocol_error_only_in_mqttv3(void** state)
+static void an_auth_packet_is_a_protocol_error(void** state)
 {
   (void)state;
   test_server_options so = _plain();
-  so.send_auth = true;
+  so.send_auth = true; // Reserved in MQTT 3.1.1; unsolicited in 5 (no enhanced authentication).
   fixture f;
   _setup(&f, &so, 30);
   assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
@@ -2349,12 +2344,7 @@ static void an_auth_packet_is_a_protocol_error_only_in_mqttv3(void** state)
   {
     rc = AZ_MQTT_T(client_process_loop)(&f.client, 50);
   }
-#if AZ_MQTT_TEST_VERSION == 5
-  assert_int_equal(rc, AZ_OK);
-  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
-#else
   assert_int_equal(rc, AZ_MQTT_ERROR_PROTOCOL);
-#endif
   _teardown(&f);
 }
 
@@ -2536,7 +2526,7 @@ int main(void)
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(publish_properties_never_exceed_the_buffers),
 #endif
-    cmocka_unit_test(an_auth_packet_is_a_protocol_error_only_in_mqttv3),
+    cmocka_unit_test(an_auth_packet_is_a_protocol_error),
     cmocka_unit_test(a_server_disconnect_is_a_protocol_error_only_in_mqttv3),
     cmocka_unit_test(an_explicit_server_keep_alive_of_zero_disables_pings),
     cmocka_unit_test(reconnecting_from_on_connection_closed_is_safe),

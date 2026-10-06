@@ -116,6 +116,7 @@ it instead of `deps/azure-sdk-for-c`.
   - `az_mqtt3_client_disconnect(client)` takes no reason code;
   - removed: `buffers`, `on_disconnect`, properties, AUTH.
 - mqttv3: `az_mqtt3_codec_decode_ack` rejects bytes after the packet identifier. An AUTH packet (reserved in 3.1.1) is a protocol error.
+- mqttv5: a received AUTH packet is a protocol error (enhanced authentication is not implemented).
 - Transport failures that were `AZ_MQTT_ERROR_TRANSPORT` may now be one of the specific results
   above.
 - `options.inflight_control_buffer` is required for QoS 1/2 publish, subscribe and unsubscribe;
