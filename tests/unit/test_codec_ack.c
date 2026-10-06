@@ -3,7 +3,8 @@
 
 /**
  * @file test_codec_ack.c
- * @brief The acknowledgement decoder of az_mqttv3 / az_mqttv5 (AZ_MQTT_TEST_VERSION).
+ * @brief Decoders of az_mqttv3 / az_mqttv5 (AZ_MQTT_TEST_VERSION): acknowledgements, PUBLISH,
+ * CONNACK, SUBACK.
  */
 
 #include <setjmp.h>
@@ -61,6 +62,57 @@ static void a_publish_with_qos_3_is_malformed(void** state)
   assert_int_equal(publish.qos, AZ_MQTT_QOS_EXACTLY_ONCE);
 }
 
+static void a_qos1_publish_with_packet_id_0_is_malformed(void** state)
+{
+  (void)state;
+#if AZ_MQTT_TEST_VERSION == 5
+  uint8_t body[] = { 0x00, 0x01, 't', 0x00, 0x00, 0x00 }; // Topic, packet id 0, no properties.
+  az_mqtt5_publish_data publish;
+  memset(&publish, 0, sizeof(publish));
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(body), 0x02, &publish),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+#else
+  uint8_t body[] = { 0x00, 0x01, 't', 0x00, 0x00 }; // Topic, packet id 0.
+  az_mqtt3_publish_data publish;
+  assert_int_equal(
+      az_mqtt3_codec_decode_publish(AZ_SPAN_FROM_BUFFER(body), 0x02, &publish),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+#endif
+}
+
+/** @brief Decode a CONNACK with acknowledge flags @p flags and code @p code. */
+static az_result _decode_connack(uint8_t flags, uint8_t code)
+{
+#if AZ_MQTT_TEST_VERSION == 5
+  uint8_t body[] = { flags, code, 0x00 }; // No properties.
+  az_mqtt5_connack_data connack;
+  memset(&connack, 0, sizeof(connack));
+  return az_mqtt5_codec_decode_connack(AZ_SPAN_FROM_BUFFER(body), &connack);
+#else
+  uint8_t body[] = { flags, code };
+  az_mqtt3_connack_data connack;
+  return az_mqtt3_codec_decode_connack(AZ_SPAN_FROM_BUFFER(body), &connack);
+#endif
+}
+
+static void connack_flags_and_codes_are_checked(void** state)
+{
+  (void)state;
+  assert_int_equal(_decode_connack(0x00, 0x00), AZ_OK);
+  assert_int_equal(_decode_connack(0x01, 0x00), AZ_OK); // Session present.
+  assert_int_equal(_decode_connack(0x02, 0x00), AZ_MQTT_ERROR_MALFORMED_PACKET); // Reserved bit.
+  assert_int_equal(_decode_connack(0x80, 0x00), AZ_MQTT_ERROR_MALFORMED_PACKET);
+#if AZ_MQTT_TEST_VERSION == 5
+  assert_int_equal(_decode_connack(0x00, 0x87), AZ_OK); // Not authorized.
+  assert_int_equal(_decode_connack(0x01, 0x87), AZ_MQTT_ERROR_MALFORMED_PACKET);
+#else
+  assert_int_equal(_decode_connack(0x00, 0x05), AZ_OK); // Not authorized.
+  assert_int_equal(_decode_connack(0x01, 0x05), AZ_MQTT_ERROR_MALFORMED_PACKET);
+  assert_int_equal(_decode_connack(0x00, 0x06), AZ_MQTT_ERROR_MALFORMED_PACKET); // Reserved.
+#endif
+}
+
 static void a_suback_without_codes_is_malformed(void** state)
 {
   (void)state;
@@ -93,6 +145,8 @@ int main(void)
   const struct CMUnitTest tests[] = {
     cmocka_unit_test(a_decoded_ack_has_status_ok),
     cmocka_unit_test(a_publish_with_qos_3_is_malformed),
+    cmocka_unit_test(a_qos1_publish_with_packet_id_0_is_malformed),
+    cmocka_unit_test(connack_flags_and_codes_are_checked),
     cmocka_unit_test(a_suback_without_codes_is_malformed),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
