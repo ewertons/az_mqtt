@@ -133,6 +133,8 @@ static void connack_flags_and_codes_are_checked(void** state)
   assert_int_equal(_decode_connack(0x80, 0x00), AZ_MQTT_ERROR_MALFORMED_PACKET);
 #if AZ_MQTT_TEST_VERSION == 5
   assert_int_equal(_decode_connack(0x00, 0x87), AZ_OK); // Not authorized.
+  assert_int_equal(_decode_connack(0x00, 0x01), AZ_MQTT_ERROR_PROTOCOL); // Not a CONNACK code.
+  assert_int_equal(_decode_connack(0x00, 0x8B), AZ_MQTT_ERROR_PROTOCOL);
   assert_int_equal(_decode_connack(0x01, 0x87), AZ_MQTT_ERROR_MALFORMED_PACKET);
 #else
   assert_int_equal(_decode_connack(0x00, 0x05), AZ_OK); // Not authorized.
@@ -320,6 +322,27 @@ static void nothing_may_follow_the_properties(void** state)
 }
 #endif
 
+static void a_qos0_publish_with_dup_is_malformed(void** state)
+{
+  (void)state;
+#if AZ_MQTT_TEST_VERSION == 5
+  uint8_t body[] = { 0x00, 0x01, 't', 0x00 }; // Topic, no properties.
+  az_mqtt5_publish_data p;
+  memset(&p, 0, sizeof(p));
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(body), 0x08, &p),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+  assert_int_equal(az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(body), 0x00, &p), AZ_OK);
+#else
+  uint8_t body[] = { 0x00, 0x01, 't' };
+  az_mqtt3_publish_data p;
+  assert_int_equal(
+      az_mqtt3_codec_decode_publish(AZ_SPAN_FROM_BUFFER(body), 0x08, &p),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+  assert_int_equal(az_mqtt3_codec_decode_publish(AZ_SPAN_FROM_BUFFER(body), 0x00, &p), AZ_OK);
+#endif
+}
+
 static void topic_names_are_checked(void** state)
 {
   (void)state;
@@ -387,6 +410,7 @@ int main(void)
     cmocka_unit_test(acknowledgements_with_packet_id_0_are_malformed),
     cmocka_unit_test(subscribe_acknowledgement_codes_are_checked),
     cmocka_unit_test(topic_names_are_checked),
+    cmocka_unit_test(a_qos0_publish_with_dup_is_malformed),
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(zero_valued_properties_are_protocol_errors),
     cmocka_unit_test(one_byte_flag_properties_must_be_0_or_1),
