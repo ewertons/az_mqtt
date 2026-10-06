@@ -177,6 +177,9 @@ int test_server_last_pubrel_reason(test_server* server);
 int test_server_pubcomps(test_server* server);
 int test_server_last_pubcomp_reason(test_server* server);
 
+/** @brief Reason code of the client's last DISCONNECT (0 without one); -1: none received. */
+int test_server_client_disconnect_reason(test_server* server);
+
 /**
  * @brief Keep sessions: the CONNACKs that follow (accepted ones) set Session Present when the
  * CONNECT has Clean Session / Clean Start 0.

@@ -1449,7 +1449,7 @@ static void inbound_qos2_duplicates_are_delivered_once(void** state)
   _teardown(&f);
 }
 
-static void inbound_qos2_without_a_free_slot_is_still_delivered(void** state)
+static void inbound_qos2_without_a_free_slot_ends_the_session(void** state)
 {
   (void)state;
   test_server_options so = _plain();
@@ -1458,12 +1458,23 @@ static void inbound_qos2_without_a_free_slot_is_still_delivered(void** state)
   fixture f;
   _setup(&f, &so, 30);
   assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
-  PUMP_UNTIL(&f, test_server_pubcomps(f.server) == 2);
-  assert_int_equal(test_server_pubcomps(f.server), 2); // Every PUBREL still answered.
-  assert_int_equal(g.publishes, 3);                    // No duplicate detection.
-  assert_int_equal(g.pubcomps, 0);                     // Untracked: not reported.
+  az_result rc = AZ_OK;
+  for (int i = 0; i < 150 && az_result_succeeded(rc); i++)
+  {
+    rc = AZ_MQTT_T(client_process_loop)(&f.client, 20);
+  }
+  assert_int_equal(rc, AZ_MQTT_ERROR_FLOW_CONTROL);
+  assert_int_equal(g.closed, 1);
+  assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_FLOW_CONTROL);
+  assert_int_equal(g.publishes, 0); // Not delivered, so a resend cannot be delivered twice.
+  assert_int_equal(test_server_pubcomps(f.server), 0);
 #if AZ_MQTT_TEST_VERSION == 5
-  assert_int_equal(test_server_last_pubcomp_reason(f.server), 0x92); // Packet Identifier not found
+  int64_t const end = _now_ms() + 2000; // The server thread records the DISCONNECT.
+  while (test_server_client_disconnect_reason(f.server) < 0 && _now_ms() < end)
+  {
+    _sleep_ms(10);
+  }
+  assert_int_equal(test_server_client_disconnect_reason(f.server), 0x97); // Quota exceeded
 #endif
   _teardown(&f);
 }
@@ -2322,7 +2333,7 @@ int main(void)
     cmocka_unit_test(a_topic_alias_is_refused_on_a_kept_session),
 #endif
     cmocka_unit_test(inbound_qos2_duplicates_are_delivered_once),
-    cmocka_unit_test(inbound_qos2_without_a_free_slot_is_still_delivered),
+    cmocka_unit_test(inbound_qos2_without_a_free_slot_ends_the_session),
     cmocka_unit_test(unknown_acknowledgements_are_ignored),
     cmocka_unit_test(a_pubrel_without_its_required_flags_ends_the_session),
     cmocka_unit_test(a_puback_with_flags_set_ends_the_session),

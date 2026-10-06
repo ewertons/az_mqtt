@@ -46,6 +46,7 @@ struct test_server
   int last_pubrel_reason;
   int pubcomps;
   int last_pubcomp_reason;
+  int client_disconnect_reason;
   bool session_present;
   char log[1024];
   bool client_closed;
@@ -898,6 +899,10 @@ static void _serve(test_server* s, conn* c)
     if (type < 0 || type == 14)
     {
       pthread_mutex_lock(&s->lock);
+      if (type == 14)
+      {
+        s->client_disconnect_reason = len >= 1 ? body[0] : 0;
+      }
       s->client_closed = !s->stop;
       pthread_mutex_unlock(&s->lock);
       return;
@@ -1119,6 +1124,7 @@ test_server* test_server_start(test_server_options const* options)
   s->options = *options;
   s->listen_fd = -1;
   s->ws_client_close_code = -1;
+  s->client_disconnect_reason = -1;
   pthread_mutex_init(&s->lock, NULL);
   if (s->options.tls && !_setup_tls(s))
   {
@@ -1241,6 +1247,10 @@ int test_server_pubrels(test_server* s) { return _get(s, &s->pubrels); }
 int test_server_last_pubrel_reason(test_server* s) { return _get(s, &s->last_pubrel_reason); }
 int test_server_pubcomps(test_server* s) { return _get(s, &s->pubcomps); }
 int test_server_last_pubcomp_reason(test_server* s) { return _get(s, &s->last_pubcomp_reason); }
+int test_server_client_disconnect_reason(test_server* s)
+{
+  return _get(s, &s->client_disconnect_reason);
+}
 int test_server_ws_pongs(test_server* s) { return _get(s, &s->ws_pongs); }
 int test_server_ws_unmasked(test_server* s) { return _get(s, &s->ws_unmasked); }
 int test_server_ws_client_close_code(test_server* s) { return _get(s, &s->ws_client_close_code); }
