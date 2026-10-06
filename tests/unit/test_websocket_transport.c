@@ -263,6 +263,11 @@ static void a_send_failure_is_returned(void** state)
   f.fake.fail_send_call = f.fake.send_calls + 2; // The frame's second piece.
   assert_int_equal(
       az_mqtt_transport_send(f.t, AZ_SPAN_FROM_BUFFER(data)), AZ_MQTT_ERROR_CONNECTION_CLOSED);
+  // A partial frame leaves the stream unusable: nothing more is sent.
+  f.fake.fail_send_call = 0;
+  int const calls = f.fake.send_calls;
+  assert_int_equal(az_mqtt_transport_send(f.t, AZ_SPAN_FROM_STR("x")), AZ_MQTT_ERROR_NOT_CONNECTED);
+  assert_int_equal(f.fake.send_calls, calls);
 }
 
 static void a_refused_upgrade_fails_and_closes(void** state)
