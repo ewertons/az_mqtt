@@ -165,9 +165,9 @@ to the current implementation status of `az_mqttv5` (on `az_mqtt_core`).
 
 | Status | Count |
 |--------|-------|
-| Yes | 114 |
+| Yes | 115 |
 | Partial | 2 |
-| No | 19 |
+| No | 18 |
 
 ### Key gaps (client-facing impact)
 

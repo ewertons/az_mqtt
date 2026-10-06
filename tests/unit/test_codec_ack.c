@@ -81,6 +81,34 @@ static void a_qos1_publish_with_packet_id_0_is_malformed(void** state)
 #endif
 }
 
+static void acknowledgements_with_packet_id_0_are_malformed(void** state)
+{
+  (void)state;
+#if AZ_MQTT_TEST_VERSION == 5
+  uint8_t ack[] = { 0x00, 0x00 };
+  uint8_t sub[] = { 0x00, 0x00, 0x00, 0x00 }; // Packet id 0, no properties, one reason code.
+  az_mqtt5_ack_data a;
+  memset(&a, 0, sizeof(a));
+  az_mqtt5_suback_data b;
+  memset(&b, 0, sizeof(b));
+  assert_int_equal(
+      az_mqtt5_codec_decode_ack(AZ_SPAN_FROM_BUFFER(ack), &a), AZ_MQTT_ERROR_MALFORMED_PACKET);
+  assert_int_equal(
+      az_mqtt5_codec_decode_suback(AZ_SPAN_FROM_BUFFER(sub), &b), AZ_MQTT_ERROR_MALFORMED_PACKET);
+  assert_int_equal(
+      az_mqtt5_codec_decode_unsuback(AZ_SPAN_FROM_BUFFER(sub), &b), AZ_MQTT_ERROR_MALFORMED_PACKET);
+#else
+  uint8_t ack[] = { 0x00, 0x00 }; // PUBACK, PUBREC, PUBREL, PUBCOMP, UNSUBACK.
+  uint8_t sub[] = { 0x00, 0x00, 0x00 };
+  az_mqtt3_ack_data a;
+  az_mqtt3_suback_data b;
+  assert_int_equal(
+      az_mqtt3_codec_decode_ack(AZ_SPAN_FROM_BUFFER(ack), &a), AZ_MQTT_ERROR_MALFORMED_PACKET);
+  assert_int_equal(
+      az_mqtt3_codec_decode_suback(AZ_SPAN_FROM_BUFFER(sub), &b), AZ_MQTT_ERROR_MALFORMED_PACKET);
+#endif
+}
+
 /** @brief Decode a CONNACK with acknowledge flags @p flags and code @p code. */
 static az_result _decode_connack(uint8_t flags, uint8_t code)
 {
@@ -147,6 +175,7 @@ int main(void)
     cmocka_unit_test(a_publish_with_qos_3_is_malformed),
     cmocka_unit_test(a_qos1_publish_with_packet_id_0_is_malformed),
     cmocka_unit_test(connack_flags_and_codes_are_checked),
+    cmocka_unit_test(acknowledgements_with_packet_id_0_are_malformed),
     cmocka_unit_test(a_suback_without_codes_is_malformed),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
