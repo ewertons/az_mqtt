@@ -16,6 +16,7 @@
  *   up to 3 times, while input remains.
  */
 
+#include "fuzz_websocket.h"
 #include "test_fake_transport.h"
 
 #include "az_mqtt_websocket_internal.h"
@@ -71,42 +72,6 @@ static void _on_publish(_CLIENT(client) * client, _CLIENT(publish_data) const* p
   {
     _publish(client, AZ_MQTT_QOS_AT_LEAST_ONCE);
   }
-}
-
-/** @brief Once the upgrade request has been sent, feed a valid reply to it. */
-static bool _feed_upgrade_reply(test_fake_transport* fake)
-{
-  char const* key = strstr((char const*)s_sent, "\r\nSec-WebSocket-Key: ");
-  if (key == NULL || strstr((char const*)s_sent, "\r\n\r\n") == NULL)
-  {
-    return false;
-  }
-  key += 21;
-  static char const guid[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-  uint8_t joined[24 + sizeof(guid) - 1];
-  memcpy(joined, key, 24);
-  memcpy(joined + 24, guid, sizeof(guid) - 1);
-  uint8_t digest[21] = { 0 };
-  _az_mqtt_sha1(joined, sizeof(joined), digest);
-  static char const b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  char accept[28];
-  for (int i = 0; i < 7; i++)
-  {
-    uint32_t const v = (uint32_t)digest[3 * i] << 16 | (uint32_t)digest[3 * i + 1] << 8
-        | (uint32_t)digest[3 * i + 2];
-    accept[4 * i] = b64[v >> 18 & 63];
-    accept[4 * i + 1] = b64[v >> 12 & 63];
-    accept[4 * i + 2] = b64[v >> 6 & 63];
-    accept[4 * i + 3] = b64[v & 63];
-  }
-  accept[27] = '='; // 20 bytes: the last group holds 2.
-  static char const head[]
-      = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-        "Sec-WebSocket-Accept: ";
-  test_fake_transport_feed(fake, head, (int32_t)sizeof(head) - 1);
-  test_fake_transport_feed(fake, accept, 28);
-  test_fake_transport_feed(fake, "\r\n\r\n", 4);
-  return true;
 }
 
 int LLVMFuzzerTestOneInput(uint8_t const* data, size_t size)
@@ -190,7 +155,7 @@ int LLVMFuzzerTestOneInput(uint8_t const* data, size_t size)
     bool exchanged = false;
     for (int i = 0; i < 100000; i++)
     {
-      if (!upgrade_fed && _feed_upgrade_reply(&fake))
+      if (!upgrade_fed && fuzz_feed_upgrade_reply(&fake, s_sent))
       {
         test_fake_transport_feed(&fake, data + 1, (int32_t)size - 1);
         fake.end_of_input = AZ_MQTT_ERROR_CONNECTION_CLOSED;

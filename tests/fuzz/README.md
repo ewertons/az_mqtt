@@ -8,7 +8,7 @@ regression inputs as tests.
 | Target | Seeds | Input | Covers |
 |---|---|---|---|
 | `az_mqtt3_fuzz_client`, `az_mqtt5_fuzz_client` | `client3`, `client5` | options byte, then the broker's bytes | framing, every packet decoder, in-flight state, resend on resume, callbacks; optionally over WebSockets |
-| `az_mqtt_fuzz_transport` | `transport` | options byte, then the bytes received | HTTP CONNECT proxy reply, WebSocket upgrade reply and frames |
+| `az_mqtt_fuzz_transport` | `transport` | options byte, then the bytes received (optionally after a valid WebSocket upgrade reply) | HTTP CONNECT proxy reply, WebSocket upgrade reply and frames |
 
 The options bits are documented at the top of each source file.
 
