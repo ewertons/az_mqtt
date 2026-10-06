@@ -168,6 +168,38 @@ static void a_suback_without_codes_is_malformed(void** state)
 #endif
 }
 
+#if AZ_MQTT_TEST_VERSION == 5
+static void zero_valued_properties_are_protocol_errors(void** state)
+{
+  (void)state;
+  az_mqtt5_connack_data connack;
+  memset(&connack, 0, sizeof(connack));
+  uint8_t receive_maximum_0[] = { 0x00, 0x00, 0x03, 0x21, 0x00, 0x00 };
+  uint8_t maximum_packet_size_0[] = { 0x00, 0x00, 0x05, 0x27, 0x00, 0x00, 0x00, 0x00 };
+  assert_int_equal(
+      az_mqtt5_codec_decode_connack(AZ_SPAN_FROM_BUFFER(receive_maximum_0), &connack),
+      AZ_MQTT_ERROR_PROTOCOL);
+  assert_int_equal(
+      az_mqtt5_codec_decode_connack(AZ_SPAN_FROM_BUFFER(maximum_packet_size_0), &connack),
+      AZ_MQTT_ERROR_PROTOCOL);
+
+  az_mqtt5_publish_data publish;
+  memset(&publish, 0, sizeof(publish));
+  uint8_t topic_alias_0[] = { 0x00, 0x01, 't', 0x03, 0x23, 0x00, 0x00 };
+  uint8_t subscription_identifier_0[] = { 0x00, 0x01, 't', 0x02, 0x0B, 0x00 };
+  uint8_t topic_alias_1[] = { 0x00, 0x01, 't', 0x03, 0x23, 0x00, 0x01 };
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(topic_alias_0), 0x00, &publish),
+      AZ_MQTT_ERROR_PROTOCOL);
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(subscription_identifier_0), 0x00, &publish),
+      AZ_MQTT_ERROR_PROTOCOL);
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(topic_alias_1), 0x00, &publish), AZ_OK);
+  assert_int_equal(publish.topic_alias, 1);
+}
+#endif
+
 int main(void)
 {
   const struct CMUnitTest tests[] = {
@@ -176,6 +208,9 @@ int main(void)
     cmocka_unit_test(a_qos1_publish_with_packet_id_0_is_malformed),
     cmocka_unit_test(connack_flags_and_codes_are_checked),
     cmocka_unit_test(acknowledgements_with_packet_id_0_are_malformed),
+#if AZ_MQTT_TEST_VERSION == 5
+    cmocka_unit_test(zero_valued_properties_are_protocol_errors),
+#endif
     cmocka_unit_test(a_suback_without_codes_is_malformed),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
