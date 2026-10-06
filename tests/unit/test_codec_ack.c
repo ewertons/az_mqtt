@@ -258,6 +258,29 @@ static void single_use_properties_must_not_repeat(void** state)
   assert_int_equal(
       az_mqtt5_codec_decode_ack(AZ_SPAN_FROM_BUFFER(two_reason_strings), &ack),
       AZ_MQTT_ERROR_PROTOCOL);
+
+  // SUBACK / UNSUBACK: packet id, properties, one reason code.
+  az_mqtt5_suback_data suback;
+  memset(&suback, 0, sizeof(suback));
+  uint8_t sub[] = { 0x00, 0x01, 0x08, 0x1F, 0x00, 0x01, 'a', 0x1F, 0x00, 0x01, 'b', 0x00 };
+  assert_int_equal(
+      az_mqtt5_codec_decode_suback(AZ_SPAN_FROM_BUFFER(sub), &suback), AZ_MQTT_ERROR_PROTOCOL);
+  assert_int_equal(
+      az_mqtt5_codec_decode_unsuback(AZ_SPAN_FROM_BUFFER(sub), &suback), AZ_MQTT_ERROR_PROTOCOL);
+
+  // DISCONNECT and AUTH: reason code, properties.
+  uint8_t reason_then_two[] = { 0x00, 0x08, 0x1F, 0x00, 0x01, 'a', 0x1F, 0x00, 0x01, 'b' };
+  az_mqtt5_disconnect_data disconnect;
+  memset(&disconnect, 0, sizeof(disconnect));
+  assert_int_equal(
+      az_mqtt5_codec_decode_disconnect(AZ_SPAN_FROM_BUFFER(reason_then_two), &disconnect),
+      AZ_MQTT_ERROR_PROTOCOL);
+  az_mqtt5_auth_data auth;
+  memset(&auth, 0, sizeof(auth));
+  reason_then_two[0] = 0x18; // Continue authentication.
+  assert_int_equal(
+      az_mqtt5_codec_decode_auth(AZ_SPAN_FROM_BUFFER(reason_then_two), &auth),
+      AZ_MQTT_ERROR_PROTOCOL);
 }
 #endif
 
