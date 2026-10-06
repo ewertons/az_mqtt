@@ -79,7 +79,7 @@ to the current implementation status of `az_mqttv5` (on `az_mqtt_core`).
 | 64 | DUP flag on received PUBLISH decoded | [§3.3.1.1](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `publish_data.dup` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 65 | Retain flag encoded/decoded | [§3.3.1.3](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `publish_options.retain` / `publish_data.retain` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 66 | Retain flag must be 0 when forwarding (server responsibility; client receives them correctly) | [[MQTT-3.3.1-9]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | Client only receives; retain bit from server in received PUBLISH | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
-| 67 | Topic Name: must not contain wildcard characters in send | [[MQTT-3.3.2-2]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | No topic validation on outgoing PUBLISH | |
+| 67 | Topic Name: must not contain wildcard characters in send | [[MQTT-3.3.2-2]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `az_mqtt5_codec_encode_publish` and `az_mqtt5_client_publish`: a wildcard, or empty without a Topic Alias, is AZ_ERROR_ARG | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 68 | Payload Format Indicator property | [§3.3.2.3.2](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `publish_options.payload_format_indicator` / `publish_data.payload_format_indicator` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 69 | Message Expiry Interval property | [§3.3.2.3.3](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `publish_options.message_expiry_interval` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 70 | Topic Alias property (send) | [§3.3.2.3.4](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Partial | Encoded when `publish_options.topic_alias != 0`, but no alias↔topic mapping table managed by the library | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
@@ -165,9 +165,9 @@ to the current implementation status of `az_mqttv5` (on `az_mqtt_core`).
 
 | Status | Count |
 |--------|-------|
-| Yes | 115 |
+| Yes | 117 |
 | Partial | 2 |
-| No | 18 |
+| No | 16 |
 
 ### Key gaps (client-facing impact)
 
