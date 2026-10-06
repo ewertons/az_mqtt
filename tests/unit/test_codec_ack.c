@@ -343,6 +343,59 @@ static void a_qos0_publish_with_dup_is_malformed(void** state)
 #endif
 }
 
+#if AZ_MQTT_TEST_VERSION == 5
+#define _V(name) az_mqtt5_##name
+#else
+#define _V(name) az_mqtt3_##name
+#endif
+
+static void topics_and_filters_are_checked_when_encoding(void** state)
+{
+  (void)state;
+  uint8_t buf[256];
+  az_span dest = AZ_SPAN_FROM_BUFFER(buf);
+
+  _V(subscription) sub;
+  memset(&sub, 0, sizeof(sub));
+  sub.topic_filter = AZ_SPAN_EMPTY;
+  assert_int_equal(_V(codec_encode_subscribe)(&dest, &sub, 1, 1), AZ_ERROR_ARG);
+  az_span const empty_filter = AZ_SPAN_EMPTY;
+  dest = AZ_SPAN_FROM_BUFFER(buf);
+  assert_int_equal(_V(codec_encode_unsubscribe)(&dest, &empty_filter, 1, 1), AZ_ERROR_ARG);
+
+  _V(will_options) will;
+  memset(&will, 0, sizeof(will));
+  will.topic = AZ_SPAN_FROM_STR("will/#");
+  _V(connect_options) connect = _V(connect_options_default)();
+  connect.client_id = AZ_SPAN_FROM_STR("c");
+  connect.will = &will;
+  dest = AZ_SPAN_FROM_BUFFER(buf);
+  assert_int_equal(_V(codec_encode_connect)(&dest, &connect), AZ_ERROR_ARG);
+  will.topic = AZ_SPAN_FROM_STR("will");
+  dest = AZ_SPAN_FROM_BUFFER(buf);
+  assert_int_equal(_V(codec_encode_connect)(&dest, &connect), AZ_OK);
+
+#if AZ_MQTT_TEST_VERSION == 5
+  az_mqtt5_publish_options publish = az_mqtt5_publish_options_default();
+  publish.topic = AZ_SPAN_FROM_STR("t");
+  publish.response_topic = AZ_SPAN_FROM_STR("reply/+");
+  dest = AZ_SPAN_FROM_BUFFER(buf);
+  assert_int_equal(az_mqtt5_codec_encode_publish(&dest, &publish, 0), AZ_ERROR_ARG);
+
+  // Received: Response Topic must be a non-empty Topic Name.
+  az_mqtt5_publish_data p;
+  memset(&p, 0, sizeof(p));
+  uint8_t empty_response[] = { 0x00, 0x01, 't', 0x03, 0x08, 0x00, 0x00 };
+  uint8_t wildcard_response[] = { 0x00, 0x01, 't', 0x04, 0x08, 0x00, 0x01, '#' };
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(empty_response), 0x00, &p),
+      AZ_MQTT_ERROR_PROTOCOL);
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(wildcard_response), 0x00, &p),
+      AZ_MQTT_ERROR_PROTOCOL);
+#endif
+}
+
 static void topic_names_are_checked(void** state)
 {
   (void)state;
@@ -410,6 +463,7 @@ int main(void)
     cmocka_unit_test(acknowledgements_with_packet_id_0_are_malformed),
     cmocka_unit_test(subscribe_acknowledgement_codes_are_checked),
     cmocka_unit_test(topic_names_are_checked),
+    cmocka_unit_test(topics_and_filters_are_checked_when_encoding),
     cmocka_unit_test(a_qos0_publish_with_dup_is_malformed),
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(zero_valued_properties_are_protocol_errors),

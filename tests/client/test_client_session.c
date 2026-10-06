@@ -1675,6 +1675,47 @@ static void a_publish_to_an_empty_or_wildcard_topic_is_refused(void** state)
   _teardown(&f);
 }
 
+static void a_second_connack_ends_the_session(void** state)
+{
+  (void)state;
+#if AZ_MQTT_TEST_VERSION == 5
+  static const uint8_t connack[] = { 0x20, 0x03, 0x00, 0x00, 0x00 };
+#else
+  static const uint8_t connack[] = { 0x20, 0x02, 0x00, 0x00 };
+#endif
+  test_server_options so = _plain();
+  so.raw_after_connack = connack;
+  so.raw_after_connack_size = (int)sizeof(connack);
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  az_result rc = AZ_OK;
+  for (int i = 0; i < 150 && az_result_succeeded(rc); i++)
+  {
+    rc = AZ_MQTT_T(client_process_loop)(&f.client, 20);
+  }
+  assert_int_equal(rc, AZ_MQTT_ERROR_PROTOCOL);
+  assert_int_equal(g.connacks, 1);
+  _teardown(&f);
+}
+
+static void a_subscription_to_an_empty_filter_is_refused(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  s_inflight_slots = 1; // A refused request that kept its entry would block the next.
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  AZ_MQTT_T(subscription) sub;
+  memset(&sub, 0, sizeof(sub));
+  assert_int_equal(AZ_MQTT_T(client_subscribe)(&f.client, &sub, 1, NULL), AZ_ERROR_ARG);
+  az_span const empty = AZ_SPAN_EMPTY;
+  assert_int_equal(AZ_MQTT_T(client_unsubscribe)(&f.client, &empty, 1, NULL), AZ_ERROR_ARG);
+  assert_int_equal(_subscribe(&f), AZ_OK);
+  _teardown(&f);
+}
+
 static void a_publish_with_a_malformed_topic_is_refused(void** state)
 {
   (void)state;
@@ -2463,6 +2504,8 @@ int main(void)
     cmocka_unit_test(wrong_flags_are_rejected_before_the_body_is_read),
     cmocka_unit_test(a_topic_with_u0000_ends_the_session),
     cmocka_unit_test(a_publish_with_a_malformed_topic_is_refused),
+    cmocka_unit_test(a_second_connack_ends_the_session),
+    cmocka_unit_test(a_subscription_to_an_empty_filter_is_refused),
     cmocka_unit_test(a_publish_to_an_empty_or_wildcard_topic_is_refused),
     cmocka_unit_test(a_pingresp_with_a_body_ends_the_session),
 #if AZ_MQTT_TEST_VERSION == 5
