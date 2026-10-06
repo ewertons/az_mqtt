@@ -246,6 +246,10 @@ static void _sleep_ms(int ms)
 
 /** @brief In-flight entries the next _setup() gives the client (at most 8); then back to 4. */
 static int s_inflight_slots = 4;
+#if AZ_MQTT_TEST_VERSION == 5
+/** @brief Receive Maximum the next _setup() advertises (0: the default). */
+static uint16_t s_receive_maximum;
+#endif
 
 /** @brief Next _setup() connects with credentials, a will and a client id that must never be logged. */
 static bool s_with_secrets;
@@ -314,6 +318,13 @@ static void _setup(fixture* f, test_server_options const* server_options, uint16
       (uint8_t*)f->inflight_control_buffer,
       s_inflight_slots * (int32_t)sizeof(az_mqtt_inflight_entry));
   s_inflight_slots = 4; // Reset here: a failed test skips _teardown().
+#if AZ_MQTT_TEST_VERSION == 5
+  if (s_receive_maximum != 0)
+  {
+    o.connect_options.receive_maximum = s_receive_maximum;
+    s_receive_maximum = 0;
+  }
+#endif
   o.on_connection_closed = _on_closed;
   o.proxy_options = s_proxy;
   s_proxy = NULL;
@@ -1449,6 +1460,30 @@ static void inbound_qos2_duplicates_are_delivered_once(void** state)
   _teardown(&f);
 }
 
+#if AZ_MQTT_TEST_VERSION == 5
+static void requests_leave_the_receive_maximum_to_inbound_qos2(void** state)
+{
+  (void)state;
+  test_server_options so = _plain(); // Never acknowledges a PUBLISH.
+  so.send_qos2_sequence = true;      // Queued right after CONNACK; read by the pumps below.
+  s_inflight_slots = 4;
+  s_receive_maximum = 2;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  AZ_MQTT_T(publish_options) const qos1 = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, NULL), AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, NULL), AZ_OK);
+  // 2 of 4 entries left for the 2 inbound QoS 2 the server may send.
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, NULL), AZ_MQTT_ERROR_FLOW_CONTROL);
+  PUMP_UNTIL(&f, test_server_pubcomps(f.server) == 2);
+  assert_int_equal(test_server_pubcomps(f.server), 2);
+  assert_int_equal(g.publishes, 2);
+  assert_int_equal(g.closed, 0);
+  _teardown(&f);
+}
+#endif
+
 static void inbound_qos2_without_a_free_slot_ends_the_session(void** state)
 {
   (void)state;
@@ -2364,6 +2399,9 @@ int main(void)
 #endif
     cmocka_unit_test(inbound_qos2_duplicates_are_delivered_once),
     cmocka_unit_test(inbound_qos2_without_a_free_slot_ends_the_session),
+#if AZ_MQTT_TEST_VERSION == 5
+    cmocka_unit_test(requests_leave_the_receive_maximum_to_inbound_qos2),
+#endif
     cmocka_unit_test(unknown_acknowledgements_are_ignored),
     cmocka_unit_test(a_pubrel_without_its_required_flags_ends_the_session),
     cmocka_unit_test(a_puback_with_flags_set_ends_the_session),
