@@ -320,6 +320,36 @@ static void nothing_may_follow_the_properties(void** state)
 }
 #endif
 
+static void topic_names_are_checked(void** state)
+{
+  (void)state;
+#if AZ_MQTT_TEST_VERSION == 5
+  az_mqtt5_publish_data p;
+  memset(&p, 0, sizeof(p));
+  uint8_t empty_no_alias[] = { 0x00, 0x00, 0x00 };
+  uint8_t empty_alias_1[] = { 0x00, 0x00, 0x03, 0x23, 0x00, 0x01 };
+  uint8_t wildcard[] = { 0x00, 0x03, 'a', '/', '#', 0x00 };
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(empty_no_alias), 0x00, &p),
+      AZ_MQTT_ERROR_PROTOCOL);
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(empty_alias_1), 0x00, &p), AZ_OK);
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(wildcard), 0x00, &p),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+#else
+  az_mqtt3_publish_data p;
+  uint8_t empty[] = { 0x00, 0x00 };
+  uint8_t wildcard[] = { 0x00, 0x03, 'a', '/', '+' };
+  assert_int_equal(
+      az_mqtt3_codec_decode_publish(AZ_SPAN_FROM_BUFFER(empty), 0x00, &p),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+  assert_int_equal(
+      az_mqtt3_codec_decode_publish(AZ_SPAN_FROM_BUFFER(wildcard), 0x00, &p),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+#endif
+}
+
 static void subscribe_acknowledgement_codes_are_checked(void** state)
 {
   (void)state;
@@ -356,6 +386,7 @@ int main(void)
     cmocka_unit_test(connack_flags_and_codes_are_checked),
     cmocka_unit_test(acknowledgements_with_packet_id_0_are_malformed),
     cmocka_unit_test(subscribe_acknowledgement_codes_are_checked),
+    cmocka_unit_test(topic_names_are_checked),
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(zero_valued_properties_are_protocol_errors),
     cmocka_unit_test(one_byte_flag_properties_must_be_0_or_1),

@@ -1656,6 +1656,25 @@ static void an_acknowledgement_with_a_disallowed_reason_ends_the_session(void** 
 }
 #endif
 
+static void a_publish_to_an_empty_or_wildcard_topic_is_refused(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  char const* const topics[] = { "", "a/+", "a/#" };
+  for (size_t i = 0; i < sizeof(topics) / sizeof(topics[0]); i++)
+  {
+    AZ_MQTT_T(publish_options) p = _publish_options(AZ_MQTT_QOS_AT_MOST_ONCE);
+    p.topic = az_span_create_from_str((char*)(uintptr_t)topics[i]);
+    assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &p, NULL), AZ_ERROR_ARG);
+  }
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+  assert_int_equal(test_server_publishes(f.server), 0);
+  _teardown(&f);
+}
+
 static void a_publish_with_a_malformed_topic_is_refused(void** state)
 {
   (void)state;
@@ -2444,6 +2463,7 @@ int main(void)
     cmocka_unit_test(wrong_flags_are_rejected_before_the_body_is_read),
     cmocka_unit_test(a_topic_with_u0000_ends_the_session),
     cmocka_unit_test(a_publish_with_a_malformed_topic_is_refused),
+    cmocka_unit_test(a_publish_to_an_empty_or_wildcard_topic_is_refused),
     cmocka_unit_test(a_pingresp_with_a_body_ends_the_session),
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(an_acknowledgement_with_a_disallowed_reason_ends_the_session),
