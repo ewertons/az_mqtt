@@ -36,6 +36,55 @@ AZ_NODISCARD az_result _az_mqtt_write_uint16(az_span* dest, uint16_t val);
  */
 AZ_NODISCARD az_result _az_mqtt_write_utf8_string(az_span* dest, az_span str);
 
+/** @brief Whether @p topic contains a wildcard ('+' or '#'), not allowed in a Topic Name. */
+AZ_NODISCARD AZ_INLINE bool _az_mqtt_topic_has_wildcard(az_span topic)
+{
+  return az_span_find(topic, AZ_SPAN_FROM_STR("+")) >= 0
+      || az_span_find(topic, AZ_SPAN_FROM_STR("#")) >= 0;
+}
+
+/**
+ * @brief Write Topic Name @p topic (Will Topic, Response Topic); advance @p dest.
+ * @retval AZ_ERROR_ARG Empty, with a wildcard ('+', '#'), or as _az_mqtt_write_utf8_string().
+ */
+AZ_NODISCARD AZ_INLINE az_result _az_mqtt_write_topic_name(az_span* dest, az_span topic)
+{
+  return az_span_size(topic) == 0 || _az_mqtt_topic_has_wildcard(topic)
+      ? AZ_ERROR_ARG
+      : _az_mqtt_write_utf8_string(dest, topic);
+}
+
+/**
+ * @brief Whether @p filter is a valid Topic Filter (4.7.1): non-empty; '+' fills a whole level;
+ * '#' fills the last level.
+ */
+AZ_NODISCARD AZ_INLINE bool _az_mqtt_topic_filter_valid(az_span filter)
+{
+  int32_t const size = az_span_size(filter);
+  uint8_t const* const p = az_span_ptr(filter);
+  for (int32_t i = 0; i < size; i++)
+  {
+    bool const level_start = i == 0 || p[i - 1] == '/';
+    if ((p[i] == '+' && !(level_start && (i + 1 == size || p[i + 1] == '/')))
+        || (p[i] == '#' && !(level_start && i + 1 == size)))
+    {
+      return false;
+    }
+  }
+  return size > 0;
+}
+
+/**
+ * @brief Write Topic Filter @p filter; advance @p dest.
+ * @retval AZ_ERROR_ARG Not valid (_az_mqtt_topic_filter_valid()), or as
+ * _az_mqtt_write_utf8_string().
+ */
+AZ_NODISCARD AZ_INLINE az_result _az_mqtt_write_topic_filter(az_span* dest, az_span filter)
+{
+  return _az_mqtt_topic_filter_valid(filter) ? _az_mqtt_write_utf8_string(dest, filter)
+                                             : AZ_ERROR_ARG;
+}
+
 /**
  * @brief Write a 2-byte length followed by @p data; advance @p dest.
  * @retval AZ_ERROR_ARG Longer than 65,535 bytes.

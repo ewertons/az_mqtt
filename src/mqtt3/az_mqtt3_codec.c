@@ -120,7 +120,7 @@ az_mqtt3_codec_encode_connect(az_span* dest, az_mqtt3_connect_options const* opt
   // Will
   if (opts->will != NULL)
   {
-    rc = _az_mqtt_write_utf8_string(dest, opts->will->topic);
+    rc = _az_mqtt_write_topic_name(dest, opts->will->topic);
     if (az_result_failed(rc))
       return rc;
     rc = _az_mqtt_write_binary_data(dest, opts->will->payload);
@@ -158,6 +158,12 @@ AZ_NODISCARD az_result az_mqtt3_codec_encode_publish(
 {
   _az_PRECONDITION_NOT_NULL(dest);
   _az_PRECONDITION_NOT_NULL(opts);
+
+  // 4.7.3: a Topic Name has at least one character and no wildcards.
+  if (az_span_size(opts->topic) == 0 || _az_mqtt_topic_has_wildcard(opts->topic))
+  {
+    return AZ_ERROR_ARG;
+  }
 
   // Calculate remaining length
   int32_t remaining = 2 + az_span_size(opts->topic); // Topic Name
@@ -284,7 +290,7 @@ AZ_NODISCARD az_result az_mqtt3_codec_encode_subscribe(
   // Payload
   for (int32_t i = 0; i < sub_count; i++)
   {
-    rc = _az_mqtt_write_utf8_string(dest, subs[i].topic_filter);
+    rc = _az_mqtt_write_topic_filter(dest, subs[i].topic_filter);
     if (az_result_failed(rc))
       return rc;
 
@@ -334,7 +340,7 @@ AZ_NODISCARD az_result az_mqtt3_codec_encode_unsubscribe(
 
   for (int32_t i = 0; i < filter_count; i++)
   {
-    rc = _az_mqtt_write_utf8_string(dest, topic_filters[i]);
+    rc = _az_mqtt_write_topic_filter(dest, topic_filters[i]);
     if (az_result_failed(rc))
       return rc;
   }
@@ -395,9 +401,9 @@ az_mqtt3_codec_decode_publish(az_span body, uint8_t flags, az_mqtt3_publish_data
 
   out->dup = (flags & 0x08) != 0;
   out->qos = (az_mqtt_qos)((flags >> 1) & 0x03);
-  if (out->qos > AZ_MQTT_QOS_EXACTLY_ONCE)
+  if (out->qos > AZ_MQTT_QOS_EXACTLY_ONCE || (out->dup && out->qos == AZ_MQTT_QOS_AT_MOST_ONCE))
   {
-    return AZ_MQTT_ERROR_MALFORMED_PACKET; // QoS 3 is reserved.
+    return AZ_MQTT_ERROR_MALFORMED_PACKET; // QoS 3 is reserved; DUP is 0 for QoS 0.
   }
   out->retain = (flags & 0x01) != 0;
   out->packet_id = 0;
@@ -405,6 +411,9 @@ az_mqtt3_codec_decode_publish(az_span body, uint8_t flags, az_mqtt3_publish_data
   az_result rc = _az_mqtt_read_utf8_string(&body, &out->topic);
   if (az_result_failed(rc))
     return rc;
+  // 4.7.3: at least one character; no wildcards in a Topic Name.
+  if (az_span_size(out->topic) == 0 || _az_mqtt_topic_has_wildcard(out->topic))
+    return AZ_MQTT_ERROR_MALFORMED_PACKET;
 
   if (out->qos != AZ_MQTT_QOS_AT_MOST_ONCE)
   {
@@ -443,6 +452,12 @@ AZ_NODISCARD az_result az_mqtt3_codec_decode_suback(az_span body, az_mqtt3_subac
   if (out->packet_id == 0)
     return AZ_MQTT_ERROR_MALFORMED_PACKET; // Packet identifiers are non-zero.
   out->return_codes = body;
-  // One return code per topic filter, and a SUBSCRIBE has at least one.
+  // One return code per topic filter, and a SUBSCRIBE has at least one; 0, 1, 2 or 0x80 (3.9.3).
+  for (int32_t i = 0; i < az_span_size(body); i++)
+  {
+    uint8_t const code = az_span_ptr(body)[i];
+    if (code > 2 && code != 0x80)
+      return AZ_MQTT_ERROR_MALFORMED_PACKET;
+  }
   return az_span_size(body) > 0 ? AZ_OK : AZ_MQTT_ERROR_MALFORMED_PACKET;
 }

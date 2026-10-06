@@ -280,7 +280,7 @@ static az_result _write_will_props(az_span* dest, az_mqtt5_will_options const* w
     rc = _az_mqtt_write_byte(dest, AZ_MQTT5_PROPERTY_RESPONSE_TOPIC);
     if (az_result_failed(rc))
       return rc;
-    rc = _az_mqtt_write_utf8_string(dest, will->response_topic);
+    rc = _az_mqtt_write_topic_name(dest, will->response_topic);
     if (az_result_failed(rc))
       return rc;
   }
@@ -383,7 +383,7 @@ static az_result _write_publish_props(az_span* dest, az_mqtt5_publish_options co
     rc = _az_mqtt_write_byte(dest, AZ_MQTT5_PROPERTY_RESPONSE_TOPIC);
     if (az_result_failed(rc))
       return rc;
-    rc = _az_mqtt_write_utf8_string(dest, opts->response_topic);
+    rc = _az_mqtt_write_topic_name(dest, opts->response_topic);
     if (az_result_failed(rc))
       return rc;
   }
@@ -535,7 +535,7 @@ az_mqtt5_codec_encode_connect(az_span* dest, az_mqtt5_connect_options const* opt
     rc = _write_will_props(dest, opts->will);
     if (az_result_failed(rc))
       return rc;
-    rc = _az_mqtt_write_utf8_string(dest, opts->will->topic);
+    rc = _az_mqtt_write_topic_name(dest, opts->will->topic);
     if (az_result_failed(rc))
       return rc;
     rc = _az_mqtt_write_binary_data(dest, opts->will->payload);
@@ -573,6 +573,13 @@ AZ_NODISCARD az_result az_mqtt5_codec_encode_publish(
 {
   _az_PRECONDITION_NOT_NULL(dest);
   _az_PRECONDITION_NOT_NULL(opts);
+
+  // A Topic Name has no wildcards; it may be empty only with a Topic Alias (3.3.2.1).
+  if (_az_mqtt_topic_has_wildcard(opts->topic)
+      || (az_span_size(opts->topic) == 0 && opts->topic_alias == 0))
+  {
+    return AZ_ERROR_ARG;
+  }
 
   // Calculate remaining length
   int32_t remaining = 2 + az_span_size(opts->topic); // Topic Name
@@ -757,7 +764,7 @@ AZ_NODISCARD az_result az_mqtt5_codec_encode_subscribe(
   // Payload
   for (int32_t i = 0; i < sub_count; i++)
   {
-    rc = _az_mqtt_write_utf8_string(dest, subs[i].topic_filter);
+    rc = _az_mqtt_write_topic_filter(dest, subs[i].topic_filter);
     if (az_result_failed(rc))
       return rc;
 
@@ -820,7 +827,7 @@ AZ_NODISCARD az_result az_mqtt5_codec_encode_unsubscribe(
 
   for (int32_t i = 0; i < filter_count; i++)
   {
-    rc = _az_mqtt_write_utf8_string(dest, topic_filters[i]);
+    rc = _az_mqtt_write_topic_filter(dest, topic_filters[i]);
     if (az_result_failed(rc))
       return rc;
   }
@@ -968,6 +975,19 @@ AZ_NODISCARD az_result az_mqtt5_codec_encode_auth(
 // CONNACK decoding
 // ============================================================================
 
+
+/** @brief Whether @p reason is one of the @p count codes in @p allowed. */
+static bool _reason_in(uint8_t reason, uint8_t const* allowed, size_t count)
+{
+  for (size_t i = 0; i < count; i++)
+  {
+    if (allowed[i] == reason)
+    {
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * @brief Protocol error if property @p id was already seen in this packet (MQTT 5.0 2.2.2.2);
@@ -1174,16 +1194,20 @@ AZ_NODISCARD az_result az_mqtt5_codec_decode_connack(az_span body, az_mqtt5_conn
   {
     return AZ_MQTT_ERROR_MALFORMED_PACKET;
   }
-
-  // Properties
-  if (az_span_size(body) > 0)
+  // 3.2.2.2.
+  static uint8_t const allowed[] = { 0x00, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88,
+                                     0x89, 0x8A, 0x8C, 0x90, 0x95, 0x97, 0x99, 0x9A, 0x9B, 0x9C,
+                                     0x9D, 0x9F };
+  if (!_reason_in(reason, allowed, sizeof(allowed)))
   {
-    rc = _decode_connack_props(&body, out);
-    if (az_result_failed(rc))
-      return rc;
+    return AZ_MQTT_ERROR_PROTOCOL;
   }
 
-  return AZ_OK;
+  // Properties: always present (3.2.2.3.1), and nothing follows them.
+  rc = _decode_connack_props(&body, out);
+  if (az_result_failed(rc))
+    return rc;
+  return az_span_size(body) == 0 ? AZ_OK : AZ_MQTT_ERROR_MALFORMED_PACKET;
 }
 
 // ============================================================================
@@ -1235,6 +1259,10 @@ static az_result _decode_publish_props(az_span* src, az_mqtt5_publish_data* out)
         break;
       case AZ_MQTT5_PROPERTY_RESPONSE_TOPIC:
         rc = _az_mqtt_read_utf8_string(&props, &out->response_topic);
+        if (az_result_succeeded(rc)
+            && (az_span_size(out->response_topic) == 0
+                || _az_mqtt_topic_has_wildcard(out->response_topic)))
+          rc = AZ_MQTT_ERROR_PROTOCOL; // A Topic Name (3.3.2.3.5).
         break;
       case AZ_MQTT5_PROPERTY_CORRELATION_DATA:
         rc = _az_mqtt_read_binary_data(&props, &out->correlation_data);
@@ -1323,9 +1351,9 @@ az_mqtt5_codec_decode_publish(az_span body, uint8_t flags, az_mqtt5_publish_data
 
   out->dup = (flags & 0x08) != 0;
   out->qos = (az_mqtt_qos)((flags >> 1) & 0x03);
-  if (out->qos > AZ_MQTT_QOS_EXACTLY_ONCE)
+  if (out->qos > AZ_MQTT_QOS_EXACTLY_ONCE || (out->dup && out->qos == AZ_MQTT_QOS_AT_MOST_ONCE))
   {
-    return AZ_MQTT_ERROR_MALFORMED_PACKET; // QoS 3 is reserved.
+    return AZ_MQTT_ERROR_MALFORMED_PACKET; // QoS 3 is reserved; DUP is 0 for QoS 0.
   }
   out->retain = (flags & 0x01) != 0;
 
@@ -1348,6 +1376,10 @@ az_mqtt5_codec_decode_publish(az_span body, uint8_t flags, az_mqtt5_publish_data
   rc = _decode_publish_props(&body, out);
   if (az_result_failed(rc))
     return rc;
+  if (_az_mqtt_topic_has_wildcard(out->topic))
+    return AZ_MQTT_ERROR_MALFORMED_PACKET; // 4.7.1: not in a Topic Name.
+  if (az_span_size(out->topic) == 0 && out->topic_alias == 0)
+    return AZ_MQTT_ERROR_PROTOCOL; // 3.3.2.1: empty only with a Topic Alias.
 
   // The rest is the payload
   out->payload = body;
@@ -1475,6 +1507,7 @@ AZ_NODISCARD az_result az_mqtt5_codec_decode_ack(az_span body, az_mqtt5_ack_data
     return rc;
   out->reason_code = (az_mqtt5_reason_code)reason;
 
+  // Properties may be omitted after the reason code (3.4.2.2); nothing follows them.
   if (az_span_size(body) > 0)
   {
     rc = _decode_ack_props(&body, out);
@@ -1482,7 +1515,7 @@ AZ_NODISCARD az_result az_mqtt5_codec_decode_ack(az_span body, az_mqtt5_ack_data
       return rc;
   }
 
-  return AZ_OK;
+  return az_span_size(body) == 0 ? AZ_OK : AZ_MQTT_ERROR_MALFORMED_PACKET;
 }
 
 // ============================================================================
@@ -1573,7 +1606,12 @@ static az_result _decode_suback_props(az_span* src, az_mqtt5_suback_data* out)
   return AZ_OK;
 }
 
-static az_result _decode_suback_common(az_span body, az_mqtt5_suback_data* out)
+/** @brief SUBACK or UNSUBACK; reason codes outside @p allowed (@p count) are a protocol error. */
+static az_result _decode_suback_common(
+    az_span body,
+    az_mqtt5_suback_data* out,
+    uint8_t const* allowed,
+    size_t count)
 {
   _az_PRECONDITION_NOT_NULL(out);
 
@@ -1612,6 +1650,8 @@ static az_result _decode_suback_common(az_span body, az_mqtt5_suback_data* out)
     rc = _az_mqtt_read_byte(&body, &reason);
     if (az_result_failed(rc))
       return rc;
+    if (!_reason_in(reason, allowed, count))
+      return AZ_MQTT_ERROR_PROTOCOL;
     // Like user properties: keep what fits, so reason_code_count never exceeds capacity.
     if (out->reason_codes != NULL && out->reason_code_count < out->reason_code_capacity)
     {
@@ -1625,12 +1665,17 @@ static az_result _decode_suback_common(az_span body, az_mqtt5_suback_data* out)
 
 AZ_NODISCARD az_result az_mqtt5_codec_decode_suback(az_span body, az_mqtt5_suback_data* out)
 {
-  return _decode_suback_common(body, out);
+  // MQTT 5.0 3.9.3.
+  static uint8_t const allowed[]
+      = { 0x00, 0x01, 0x02, 0x80, 0x83, 0x87, 0x8F, 0x91, 0x97, 0x9E, 0xA1, 0xA2 };
+  return _decode_suback_common(body, out, allowed, sizeof(allowed));
 }
 
 AZ_NODISCARD az_result az_mqtt5_codec_decode_unsuback(az_span body, az_mqtt5_suback_data* out)
 {
-  return _decode_suback_common(body, out);
+  // MQTT 5.0 3.11.3.
+  static uint8_t const allowed[] = { 0x00, 0x11, 0x80, 0x83, 0x87, 0x8F, 0x91 };
+  return _decode_suback_common(body, out, allowed, sizeof(allowed));
 }
 
 // ============================================================================
@@ -1673,9 +1718,9 @@ AZ_NODISCARD az_result az_mqtt5_codec_decode_disconnect(az_span body, az_mqtt5_d
   if (az_result_failed(rc))
     return rc;
 
-  if (prop_len > az_span_size(body))
+  if (prop_len != az_span_size(body))
   {
-    return AZ_MQTT_ERROR_MALFORMED_PACKET;
+    return AZ_MQTT_ERROR_MALFORMED_PACKET; // Nothing follows the properties.
   }
 
   az_span props = az_span_slice(body, 0, prop_len);
@@ -1791,9 +1836,9 @@ AZ_NODISCARD az_result az_mqtt5_codec_decode_auth(az_span body, az_mqtt5_auth_da
   if (az_result_failed(rc))
     return rc;
 
-  if (prop_len > az_span_size(body))
+  if (prop_len != az_span_size(body))
   {
-    return AZ_MQTT_ERROR_MALFORMED_PACKET;
+    return AZ_MQTT_ERROR_MALFORMED_PACKET; // Nothing follows the properties.
   }
 
   az_span props = az_span_slice(body, 0, prop_len);

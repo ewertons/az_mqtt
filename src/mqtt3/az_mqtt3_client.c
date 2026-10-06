@@ -9,6 +9,7 @@
 #include <az_mqtt3/az_mqtt3_client.h>
 #include <az_mqtt3/az_mqtt3_codec.h>
 
+#include "az_mqtt_codec_internal.h"
 #include "az_mqtt_core_internal.h"
 
 #include <azure/core/internal/az_precondition_internal.h>
@@ -202,9 +203,15 @@ static az_result _handle_suback(az_mqtt3_client* client, az_span body)
 {
   az_mqtt3_suback_data suback;
   az_result rc = az_mqtt3_codec_decode_suback(body, &suback);
-  if (az_result_failed(rc)
-      || !_az_mqtt_core_inflight_release_entry(
-          &client->_internal.core, _AZ_MQTT_INFLIGHT_SUBSCRIBE, suback.packet_id))
+  bool released = false;
+  if (az_result_succeeded(rc))
+    rc = _az_mqtt_core_inflight_release_request(
+        &client->_internal.core,
+        _AZ_MQTT_INFLIGHT_SUBSCRIBE,
+        suback.packet_id,
+        az_span_size(suback.return_codes),
+        &released);
+  if (!released || az_result_failed(rc))
     return rc;
 
   if (client->_internal.on_suback != NULL)
@@ -236,7 +243,7 @@ static az_result _dispatch_packet(
     case AZ_MQTT_PACKET_TYPE_SUBACK:
       return _handle_suback(client, body);
     case AZ_MQTT_PACKET_TYPE_PINGRESP:
-      return AZ_OK;
+      return az_span_size(body) == 0 ? AZ_OK : AZ_MQTT_ERROR_MALFORMED_PACKET;
     case AZ_MQTT_PACKET_TYPE_CONNECT: // Client to server only.
     case AZ_MQTT_PACKET_TYPE_SUBSCRIBE:
     case AZ_MQTT_PACKET_TYPE_UNSUBSCRIBE:
@@ -333,6 +340,11 @@ AZ_NODISCARD az_result az_mqtt3_client_publish(
   {
     return AZ_MQTT_ERROR_NOT_CONNECTED;
   }
+  // 4.7.3: a Topic Name has at least one character and no wildcards.
+  if (az_span_size(options->topic) == 0 || _az_mqtt_topic_has_wildcard(options->topic))
+  {
+    return AZ_ERROR_ARG;
+  }
 
   az_mqtt_core* const core = &client->_internal.core;
   az_result rc;
@@ -382,10 +394,15 @@ AZ_NODISCARD az_result az_mqtt3_client_subscribe(
   {
     return AZ_MQTT_ERROR_NOT_CONNECTED;
   }
+  if (subscription_count <= 0 || subscription_count > UINT16_MAX)
+  {
+    return AZ_ERROR_ARG; // At least one; counted in the entry, to match the acknowledgement.
+  }
 
   az_mqtt_inflight_entry* entry = NULL;
   _az_RETURN_IF_FAILED(_az_mqtt_core_inflight_reserve_entry(
       &client->_internal.core, _AZ_MQTT_INFLIGHT_SUBSCRIBE, UINT16_MAX, &entry));
+  entry->_internal.filter_count = (uint16_t)subscription_count;
   uint16_t const packet_id = entry->_internal.packet_id;
   az_span send_buf = _SEND_BUFFER(client);
   az_result rc = az_mqtt3_codec_encode_subscribe(
@@ -411,10 +428,15 @@ AZ_NODISCARD az_result az_mqtt3_client_unsubscribe(
   {
     return AZ_MQTT_ERROR_NOT_CONNECTED;
   }
+  if (filter_count <= 0 || filter_count > UINT16_MAX)
+  {
+    return AZ_ERROR_ARG; // At least one; counted in the entry, to match the acknowledgement.
+  }
 
   az_mqtt_inflight_entry* entry = NULL;
   _az_RETURN_IF_FAILED(_az_mqtt_core_inflight_reserve_entry(
       &client->_internal.core, _AZ_MQTT_INFLIGHT_UNSUBSCRIBE, UINT16_MAX, &entry));
+  entry->_internal.filter_count = (uint16_t)filter_count;
   uint16_t const packet_id = entry->_internal.packet_id;
   az_span send_buf = _SEND_BUFFER(client);
   az_result rc
