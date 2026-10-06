@@ -363,6 +363,41 @@ static void topics_and_filters_are_checked_when_encoding(void** state)
   dest = AZ_SPAN_FROM_BUFFER(buf);
   assert_int_equal(_V(codec_encode_unsubscribe)(&dest, &empty_filter, 1, 1), AZ_ERROR_ARG);
 
+  // 4.7.1: '+' fills a whole level; '#' fills the last level.
+  static char const* const bad_filters[]
+      = { "a+", "+a", "a/+b", "#a", "a#", "a/#/b", "#/", "a/b#" };
+  static char const* const good_filters[] = { "+", "#", "a/+", "+/b", "a/+/b", "a/#", "+/+", "/#" };
+  for (size_t i = 0; i < 2 * sizeof(bad_filters) / sizeof(bad_filters[0]); i++)
+  {
+    bool const good = (i & 1) != 0;
+    char const* const text = good ? good_filters[i / 2] : bad_filters[i / 2];
+    az_result const expected = good ? AZ_OK : AZ_ERROR_ARG;
+    sub.topic_filter = az_span_create_from_str((char*)(uintptr_t)text);
+    dest = AZ_SPAN_FROM_BUFFER(buf);
+    assert_int_equal(_V(codec_encode_subscribe)(&dest, &sub, 1, 1), expected);
+    dest = AZ_SPAN_FROM_BUFFER(buf);
+    assert_int_equal(_V(codec_encode_unsubscribe)(&dest, &sub.topic_filter, 1, 1), expected);
+  }
+
+  // PUBLISH: a Topic Name has no wildcards and, but for an MQTT 5 Topic Alias, is not empty.
+  _V(publish_options) to = _V(publish_options_default)();
+  static char const* const bad_names[] = { "", "a/+", "a/#" };
+  for (size_t i = 0; i < sizeof(bad_names) / sizeof(bad_names[0]); i++)
+  {
+    to.topic = az_span_create_from_str((char*)(uintptr_t)bad_names[i]);
+    dest = AZ_SPAN_FROM_BUFFER(buf);
+    assert_int_equal(_V(codec_encode_publish)(&dest, &to, 0), AZ_ERROR_ARG);
+  }
+  to.topic = AZ_SPAN_FROM_STR("a/b");
+  dest = AZ_SPAN_FROM_BUFFER(buf);
+  assert_int_equal(_V(codec_encode_publish)(&dest, &to, 0), AZ_OK);
+#if AZ_MQTT_TEST_VERSION == 5
+  to.topic = AZ_SPAN_EMPTY;
+  to.topic_alias = 1;
+  dest = AZ_SPAN_FROM_BUFFER(buf);
+  assert_int_equal(az_mqtt5_codec_encode_publish(&dest, &to, 0), AZ_OK);
+#endif
+
   _V(will_options) will;
   memset(&will, 0, sizeof(will));
   will.topic = AZ_SPAN_FROM_STR("will/#");

@@ -35,7 +35,7 @@ to the current implementation status of `az_mqttv3` (on `az_mqtt_core`).
 | 21 | If return code is non-zero, server closes the Network Connection | [§3.2.2.2](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `_handle_connack` leaves state DISCONNECTED when return code ≥ 0x01 | [src/core/az_mqtt_core.c](../../src/core/az_mqtt_core.c) |
 | **PUBLISH ([§3.3](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html))** |||||
 | 22 | PUBLISH encoded with DUP, QoS, RETAIN in first byte flags | [§3.3.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | `az_mqtt3_codec_encode_publish` | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
-| 23 | DUP flag must be 0 for QoS 0 | [§3.3.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | No | No validation; caller may set DUP via raw flags | |
+| 23 | DUP flag must be 0 for QoS 0 | [§3.3.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | Received QoS 0 PUBLISH with DUP: AZ_MQTT_ERROR_MALFORMED_PACKET. Sent: DUP is set only on QoS 1/2 resends | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | 24 | QoS must be 0, 1, or 2 | [§3.3.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | No | No validation | |
 | 25 | Topic Name field: must not contain wildcard characters in send | [§3.3.2.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | No | No topic validation on outgoing PUBLISH | |
 | 26 | Packet Identifier present when QoS > 0 | [§3.3.2.2](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html) | Yes | Encoder writes `packet_id` when QoS>0 | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
