@@ -1631,21 +1631,28 @@ static void a_pingresp_with_a_body_ends_the_session(void** state)
 static void an_acknowledgement_with_a_disallowed_reason_ends_the_session(void** state)
 {
   (void)state;
-  static const uint8_t puback_0x01[] = { 0x40, 0x03, 0x00, 0x07, 0x01 }; // 0x01: SUBACK only.
-  test_server_options so = _plain();
-  so.raw_after_connack = puback_0x01;
-  so.raw_after_connack_size = (int)sizeof(puback_0x01);
-  fixture f;
-  _setup(&f, &so, 30);
-  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
-  az_result rc = AZ_OK;
-  for (int i = 0; i < 150 && az_result_succeeded(rc); i++)
+  // PUBACK, PUBREC, PUBREL, PUBCOMP with reason 0x01 (allowed in SUBACK only).
+  static const uint8_t acks[][5] = { { 0x40, 0x03, 0x00, 0x07, 0x01 },
+                                     { 0x50, 0x03, 0x00, 0x07, 0x01 },
+                                     { 0x62, 0x03, 0x00, 0x07, 0x01 },
+                                     { 0x70, 0x03, 0x00, 0x07, 0x01 } };
+  for (size_t k = 0; k < sizeof(acks) / sizeof(acks[0]); k++)
   {
-    rc = AZ_MQTT_T(client_process_loop)(&f.client, 20);
+    test_server_options so = _plain();
+    so.raw_after_connack = acks[k];
+    so.raw_after_connack_size = (int)sizeof(acks[k]);
+    fixture f;
+    _setup(&f, &so, 30);
+    assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+    az_result rc = AZ_OK;
+    for (int i = 0; i < 150 && az_result_succeeded(rc); i++)
+    {
+      rc = AZ_MQTT_T(client_process_loop)(&f.client, 20);
+    }
+    assert_int_equal(rc, AZ_MQTT_ERROR_PROTOCOL);
+    assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_PROTOCOL);
+    _teardown(&f);
   }
-  assert_int_equal(rc, AZ_MQTT_ERROR_PROTOCOL);
-  assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_PROTOCOL);
-  _teardown(&f);
 }
 #endif
 
