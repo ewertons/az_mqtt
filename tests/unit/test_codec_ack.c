@@ -224,6 +224,64 @@ static void one_byte_flag_properties_must_be_0_or_1(void** state)
       az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(two), 0x00, &publish),
       AZ_MQTT_ERROR_PROTOCOL);
 }
+
+static void single_use_properties_must_not_repeat(void** state)
+{
+  (void)state;
+  az_mqtt5_connack_data connack;
+  memset(&connack, 0, sizeof(connack));
+  uint8_t two_receive_maximum[] = { 0x00, 0x00, 0x06, 0x21, 0x00, 0x05, 0x21, 0x00, 0x05 };
+  assert_int_equal(
+      az_mqtt5_codec_decode_connack(AZ_SPAN_FROM_BUFFER(two_receive_maximum), &connack),
+      AZ_MQTT_ERROR_PROTOCOL);
+
+  az_mqtt5_publish_data publish;
+  memset(&publish, 0, sizeof(publish));
+  uint8_t two_topic_alias[] = { 0x00, 0x01, 't', 0x06, 0x23, 0x00, 0x01, 0x23, 0x00, 0x01 };
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(two_topic_alias), 0x00, &publish),
+      AZ_MQTT_ERROR_PROTOCOL);
+  // User Property and Subscription Identifier may repeat.
+  uint8_t repeatable[] = { 0x00, 0x01, 't', 0x0E, 0x26, 0x00, 0x01, 'k', 0x00, 0x01, 'v', 0x26,
+                           0x00, 0x01, 'k', 0x00, 0x01, 'v' };
+  uint8_t two_subscription_ids[] = { 0x00, 0x01, 't', 0x04, 0x0B, 0x01, 0x0B, 0x02 };
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(repeatable), 0x00, &publish), AZ_OK);
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(two_subscription_ids), 0x00, &publish),
+      AZ_OK);
+
+  az_mqtt5_ack_data ack;
+  memset(&ack, 0, sizeof(ack));
+  uint8_t two_reason_strings[]
+      = { 0x00, 0x01, 0x00, 0x08, 0x1F, 0x00, 0x01, 'a', 0x1F, 0x00, 0x01, 'b' };
+  assert_int_equal(
+      az_mqtt5_codec_decode_ack(AZ_SPAN_FROM_BUFFER(two_reason_strings), &ack),
+      AZ_MQTT_ERROR_PROTOCOL);
+
+  // SUBACK / UNSUBACK: packet id, properties, one reason code.
+  az_mqtt5_suback_data suback;
+  memset(&suback, 0, sizeof(suback));
+  uint8_t sub[] = { 0x00, 0x01, 0x08, 0x1F, 0x00, 0x01, 'a', 0x1F, 0x00, 0x01, 'b', 0x00 };
+  assert_int_equal(
+      az_mqtt5_codec_decode_suback(AZ_SPAN_FROM_BUFFER(sub), &suback), AZ_MQTT_ERROR_PROTOCOL);
+  assert_int_equal(
+      az_mqtt5_codec_decode_unsuback(AZ_SPAN_FROM_BUFFER(sub), &suback), AZ_MQTT_ERROR_PROTOCOL);
+
+  // DISCONNECT and AUTH: reason code, properties.
+  uint8_t reason_then_two[] = { 0x00, 0x08, 0x1F, 0x00, 0x01, 'a', 0x1F, 0x00, 0x01, 'b' };
+  az_mqtt5_disconnect_data disconnect;
+  memset(&disconnect, 0, sizeof(disconnect));
+  assert_int_equal(
+      az_mqtt5_codec_decode_disconnect(AZ_SPAN_FROM_BUFFER(reason_then_two), &disconnect),
+      AZ_MQTT_ERROR_PROTOCOL);
+  az_mqtt5_auth_data auth;
+  memset(&auth, 0, sizeof(auth));
+  reason_then_two[0] = 0x18; // Continue authentication.
+  assert_int_equal(
+      az_mqtt5_codec_decode_auth(AZ_SPAN_FROM_BUFFER(reason_then_two), &auth),
+      AZ_MQTT_ERROR_PROTOCOL);
+}
 #endif
 
 int main(void)
@@ -237,6 +295,7 @@ int main(void)
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(zero_valued_properties_are_protocol_errors),
     cmocka_unit_test(one_byte_flag_properties_must_be_0_or_1),
+    cmocka_unit_test(single_use_properties_must_not_repeat),
 #endif
     cmocka_unit_test(a_suback_without_codes_is_malformed),
   };
