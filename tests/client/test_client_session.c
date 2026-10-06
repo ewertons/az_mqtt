@@ -1555,6 +1555,36 @@ static void an_auth_with_a_malformed_string_ends_the_session(void** state)
 
 #endif
 
+#if AZ_MQTT_TEST_VERSION == 5
+static void a_topic_alias_above_the_advertised_maximum_ends_the_session(void** state)
+{
+  (void)state;
+  // QoS 0 PUBLISH "t" with Topic Alias 1; the client advertised Topic Alias Maximum 0.
+  static const uint8_t publish[] = { 0x30, 0x07, 0x00, 0x01, 't', 0x03, 0x23, 0x00, 0x01 };
+  test_server_options so = _plain();
+  so.raw_after_connack = publish;
+  so.raw_after_connack_size = (int)sizeof(publish);
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  az_result rc = AZ_OK;
+  for (int i = 0; i < 150 && az_result_succeeded(rc); i++)
+  {
+    rc = AZ_MQTT_T(client_process_loop)(&f.client, 20);
+  }
+  assert_int_equal(rc, AZ_MQTT_ERROR_PROTOCOL);
+  assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_PROTOCOL);
+  assert_int_equal(g.publishes, 0);
+  int64_t const end = _now_ms() + 2000; // The server thread records the DISCONNECT.
+  while (test_server_client_disconnect_reason(f.server) < 0 && _now_ms() < end)
+  {
+    _sleep_ms(10);
+  }
+  assert_int_equal(test_server_client_disconnect_reason(f.server), 0x94); // Topic Alias invalid
+  _teardown(&f);
+}
+#endif
+
 static void a_publish_with_a_malformed_topic_is_refused(void** state)
 {
   (void)state;
@@ -2340,6 +2370,9 @@ int main(void)
     cmocka_unit_test(wrong_flags_are_rejected_before_the_body_is_read),
     cmocka_unit_test(a_topic_with_u0000_ends_the_session),
     cmocka_unit_test(a_publish_with_a_malformed_topic_is_refused),
+#if AZ_MQTT_TEST_VERSION == 5
+    cmocka_unit_test(a_topic_alias_above_the_advertised_maximum_ends_the_session),
+#endif
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(an_auth_with_a_malformed_string_ends_the_session),
 #endif

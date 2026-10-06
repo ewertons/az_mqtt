@@ -3,7 +3,8 @@
 
 /**
  * @file test_codec_ack.c
- * @brief The acknowledgement decoder of az_mqttv3 / az_mqttv5 (AZ_MQTT_TEST_VERSION).
+ * @brief Decoders of az_mqttv3 / az_mqttv5 (AZ_MQTT_TEST_VERSION): acknowledgements, PUBLISH,
+ * CONNACK, SUBACK.
  */
 
 #include <setjmp.h>
@@ -61,6 +62,85 @@ static void a_publish_with_qos_3_is_malformed(void** state)
   assert_int_equal(publish.qos, AZ_MQTT_QOS_EXACTLY_ONCE);
 }
 
+static void a_qos1_publish_with_packet_id_0_is_malformed(void** state)
+{
+  (void)state;
+#if AZ_MQTT_TEST_VERSION == 5
+  uint8_t body[] = { 0x00, 0x01, 't', 0x00, 0x00, 0x00 }; // Topic, packet id 0, no properties.
+  az_mqtt5_publish_data publish;
+  memset(&publish, 0, sizeof(publish));
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(body), 0x02, &publish),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+#else
+  uint8_t body[] = { 0x00, 0x01, 't', 0x00, 0x00 }; // Topic, packet id 0.
+  az_mqtt3_publish_data publish;
+  assert_int_equal(
+      az_mqtt3_codec_decode_publish(AZ_SPAN_FROM_BUFFER(body), 0x02, &publish),
+      AZ_MQTT_ERROR_MALFORMED_PACKET);
+#endif
+}
+
+static void acknowledgements_with_packet_id_0_are_malformed(void** state)
+{
+  (void)state;
+#if AZ_MQTT_TEST_VERSION == 5
+  uint8_t ack[] = { 0x00, 0x00 };
+  uint8_t sub[] = { 0x00, 0x00, 0x00, 0x00 }; // Packet id 0, no properties, one reason code.
+  az_mqtt5_ack_data a;
+  memset(&a, 0, sizeof(a));
+  az_mqtt5_suback_data b;
+  memset(&b, 0, sizeof(b));
+  assert_int_equal(
+      az_mqtt5_codec_decode_ack(AZ_SPAN_FROM_BUFFER(ack), &a), AZ_MQTT_ERROR_MALFORMED_PACKET);
+  assert_int_equal(
+      az_mqtt5_codec_decode_suback(AZ_SPAN_FROM_BUFFER(sub), &b), AZ_MQTT_ERROR_MALFORMED_PACKET);
+  assert_int_equal(
+      az_mqtt5_codec_decode_unsuback(AZ_SPAN_FROM_BUFFER(sub), &b), AZ_MQTT_ERROR_MALFORMED_PACKET);
+#else
+  uint8_t ack[] = { 0x00, 0x00 }; // PUBACK, PUBREC, PUBREL, PUBCOMP, UNSUBACK.
+  uint8_t sub[] = { 0x00, 0x00, 0x00 };
+  az_mqtt3_ack_data a;
+  az_mqtt3_suback_data b;
+  assert_int_equal(
+      az_mqtt3_codec_decode_ack(AZ_SPAN_FROM_BUFFER(ack), &a), AZ_MQTT_ERROR_MALFORMED_PACKET);
+  assert_int_equal(
+      az_mqtt3_codec_decode_suback(AZ_SPAN_FROM_BUFFER(sub), &b), AZ_MQTT_ERROR_MALFORMED_PACKET);
+#endif
+}
+
+/** @brief Decode a CONNACK with acknowledge flags @p flags and code @p code. */
+static az_result _decode_connack(uint8_t flags, uint8_t code)
+{
+#if AZ_MQTT_TEST_VERSION == 5
+  uint8_t body[] = { flags, code, 0x00 }; // No properties.
+  az_mqtt5_connack_data connack;
+  memset(&connack, 0, sizeof(connack));
+  return az_mqtt5_codec_decode_connack(AZ_SPAN_FROM_BUFFER(body), &connack);
+#else
+  uint8_t body[] = { flags, code };
+  az_mqtt3_connack_data connack;
+  return az_mqtt3_codec_decode_connack(AZ_SPAN_FROM_BUFFER(body), &connack);
+#endif
+}
+
+static void connack_flags_and_codes_are_checked(void** state)
+{
+  (void)state;
+  assert_int_equal(_decode_connack(0x00, 0x00), AZ_OK);
+  assert_int_equal(_decode_connack(0x01, 0x00), AZ_OK); // Session present.
+  assert_int_equal(_decode_connack(0x02, 0x00), AZ_MQTT_ERROR_MALFORMED_PACKET); // Reserved bit.
+  assert_int_equal(_decode_connack(0x80, 0x00), AZ_MQTT_ERROR_MALFORMED_PACKET);
+#if AZ_MQTT_TEST_VERSION == 5
+  assert_int_equal(_decode_connack(0x00, 0x87), AZ_OK); // Not authorized.
+  assert_int_equal(_decode_connack(0x01, 0x87), AZ_MQTT_ERROR_MALFORMED_PACKET);
+#else
+  assert_int_equal(_decode_connack(0x00, 0x05), AZ_OK); // Not authorized.
+  assert_int_equal(_decode_connack(0x01, 0x05), AZ_MQTT_ERROR_MALFORMED_PACKET);
+  assert_int_equal(_decode_connack(0x00, 0x06), AZ_MQTT_ERROR_MALFORMED_PACKET); // Reserved.
+#endif
+}
+
 static void a_suback_without_codes_is_malformed(void** state)
 {
   (void)state;
@@ -88,11 +168,76 @@ static void a_suback_without_codes_is_malformed(void** state)
 #endif
 }
 
+#if AZ_MQTT_TEST_VERSION == 5
+static void zero_valued_properties_are_protocol_errors(void** state)
+{
+  (void)state;
+  az_mqtt5_connack_data connack;
+  memset(&connack, 0, sizeof(connack));
+  uint8_t receive_maximum_0[] = { 0x00, 0x00, 0x03, 0x21, 0x00, 0x00 };
+  uint8_t maximum_packet_size_0[] = { 0x00, 0x00, 0x05, 0x27, 0x00, 0x00, 0x00, 0x00 };
+  assert_int_equal(
+      az_mqtt5_codec_decode_connack(AZ_SPAN_FROM_BUFFER(receive_maximum_0), &connack),
+      AZ_MQTT_ERROR_PROTOCOL);
+  assert_int_equal(
+      az_mqtt5_codec_decode_connack(AZ_SPAN_FROM_BUFFER(maximum_packet_size_0), &connack),
+      AZ_MQTT_ERROR_PROTOCOL);
+
+  az_mqtt5_publish_data publish;
+  memset(&publish, 0, sizeof(publish));
+  uint8_t topic_alias_0[] = { 0x00, 0x01, 't', 0x03, 0x23, 0x00, 0x00 };
+  uint8_t subscription_identifier_0[] = { 0x00, 0x01, 't', 0x02, 0x0B, 0x00 };
+  uint8_t topic_alias_1[] = { 0x00, 0x01, 't', 0x03, 0x23, 0x00, 0x01 };
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(topic_alias_0), 0x00, &publish),
+      AZ_MQTT_ERROR_PROTOCOL);
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(subscription_identifier_0), 0x00, &publish),
+      AZ_MQTT_ERROR_PROTOCOL);
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(topic_alias_1), 0x00, &publish), AZ_OK);
+  assert_int_equal(publish.topic_alias, 1);
+}
+
+static void one_byte_flag_properties_must_be_0_or_1(void** state)
+{
+  (void)state;
+  // CONNACK: Maximum QoS; Retain, Wildcard, Subscription Identifier, Shared Subscription Available.
+  uint8_t const ids[] = { 0x24, 0x25, 0x28, 0x29, 0x2A };
+  for (size_t i = 0; i < sizeof(ids); i++)
+  {
+    az_mqtt5_connack_data connack;
+    memset(&connack, 0, sizeof(connack));
+    uint8_t one[] = { 0x00, 0x00, 0x02, ids[i], 0x01 };
+    uint8_t two[] = { 0x00, 0x00, 0x02, ids[i], 0x02 };
+    assert_int_equal(az_mqtt5_codec_decode_connack(AZ_SPAN_FROM_BUFFER(one), &connack), AZ_OK);
+    assert_int_equal(
+        az_mqtt5_codec_decode_connack(AZ_SPAN_FROM_BUFFER(two), &connack), AZ_MQTT_ERROR_PROTOCOL);
+  }
+  // PUBLISH: Payload Format Indicator.
+  az_mqtt5_publish_data publish;
+  memset(&publish, 0, sizeof(publish));
+  uint8_t utf8[] = { 0x00, 0x01, 't', 0x02, 0x01, 0x01 };
+  uint8_t two[] = { 0x00, 0x01, 't', 0x02, 0x01, 0x02 };
+  assert_int_equal(az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(utf8), 0x00, &publish), AZ_OK);
+  assert_int_equal(
+      az_mqtt5_codec_decode_publish(AZ_SPAN_FROM_BUFFER(two), 0x00, &publish),
+      AZ_MQTT_ERROR_PROTOCOL);
+}
+#endif
+
 int main(void)
 {
   const struct CMUnitTest tests[] = {
     cmocka_unit_test(a_decoded_ack_has_status_ok),
     cmocka_unit_test(a_publish_with_qos_3_is_malformed),
+    cmocka_unit_test(a_qos1_publish_with_packet_id_0_is_malformed),
+    cmocka_unit_test(connack_flags_and_codes_are_checked),
+    cmocka_unit_test(acknowledgements_with_packet_id_0_are_malformed),
+#if AZ_MQTT_TEST_VERSION == 5
+    cmocka_unit_test(zero_valued_properties_are_protocol_errors),
+    cmocka_unit_test(one_byte_flag_properties_must_be_0_or_1),
+#endif
     cmocka_unit_test(a_suback_without_codes_is_malformed),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);

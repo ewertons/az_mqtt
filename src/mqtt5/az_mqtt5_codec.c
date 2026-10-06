@@ -968,6 +968,13 @@ AZ_NODISCARD az_result az_mqtt5_codec_encode_auth(
 // CONNACK decoding
 // ============================================================================
 
+
+/** @brief Read a one-byte property that must be 0 or 1 (MQTT 5.0 3.2.2.3, 3.3.2.3.2). */
+static az_result _read_flag_byte(az_span* props, uint8_t* out)
+{
+  az_result const rc = _az_mqtt_read_byte(props, out);
+  return az_result_succeeded(rc) && *out > 1 ? AZ_MQTT_ERROR_PROTOCOL : rc;
+}
 static az_result _decode_connack_props(az_span* src, az_mqtt5_connack_data* out)
 {
   int32_t prop_len;
@@ -997,23 +1004,27 @@ static az_result _decode_connack_props(az_span* src, az_mqtt5_connack_data* out)
         break;
       case AZ_MQTT5_PROPERTY_RECEIVE_MAXIMUM:
         rc = _az_mqtt_read_uint16(&props, &out->receive_maximum);
+        if (az_result_succeeded(rc) && out->receive_maximum == 0)
+          rc = AZ_MQTT_ERROR_PROTOCOL; // 3.2.2.3.3
         break;
       case AZ_MQTT5_PROPERTY_MAXIMUM_QOS:
       {
         uint8_t v = 0;
-        rc = _az_mqtt_read_byte(&props, &v);
+        rc = _read_flag_byte(&props, &v);
         out->maximum_qos = v;
         break;
       }
       case AZ_MQTT5_PROPERTY_RETAIN_AVAILABLE:
       {
         uint8_t v = 0;
-        rc = _az_mqtt_read_byte(&props, &v);
+        rc = _read_flag_byte(&props, &v);
         out->retain_available = (v != 0);
         break;
       }
       case AZ_MQTT5_PROPERTY_MAXIMUM_PACKET_SIZE:
         rc = _read_uint32(&props, &out->maximum_packet_size);
+        if (az_result_succeeded(rc) && out->maximum_packet_size == 0)
+          rc = AZ_MQTT_ERROR_PROTOCOL; // 3.2.2.3.6
         break;
       case AZ_MQTT5_PROPERTY_ASSIGNED_CLIENT_IDENTIFIER:
         rc = _az_mqtt_read_utf8_string(&props, &out->assigned_client_identifier);
@@ -1027,21 +1038,21 @@ static az_result _decode_connack_props(az_span* src, az_mqtt5_connack_data* out)
       case AZ_MQTT5_PROPERTY_WILDCARD_SUBSCRIPTION_AVAILABLE:
       {
         uint8_t v = 0;
-        rc = _az_mqtt_read_byte(&props, &v);
+        rc = _read_flag_byte(&props, &v);
         out->wildcard_subscription_available = (v != 0);
         break;
       }
       case AZ_MQTT5_PROPERTY_SUBSCRIPTION_IDENTIFIER_AVAILABLE:
       {
         uint8_t v = 0;
-        rc = _az_mqtt_read_byte(&props, &v);
+        rc = _read_flag_byte(&props, &v);
         out->subscription_identifier_available = (v != 0);
         break;
       }
       case AZ_MQTT5_PROPERTY_SHARED_SUBSCRIPTION_AVAILABLE:
       {
         uint8_t v = 0;
-        rc = _az_mqtt_read_byte(&props, &v);
+        rc = _read_flag_byte(&props, &v);
         out->shared_subscription_available = (v != 0);
         break;
       }
@@ -1133,6 +1144,13 @@ AZ_NODISCARD az_result az_mqtt5_codec_decode_connack(az_span body, az_mqtt5_conn
     return rc;
   out->reason_code = (az_mqtt5_reason_code)reason;
 
+  // MQTT 5.0 3.2.2.1: reserved flag bits are 0; a refusal (0x80 or above) does not report a
+  // session.
+  if ((ack_flags & 0xFE) != 0 || (out->session_present && reason >= 0x80))
+  {
+    return AZ_MQTT_ERROR_MALFORMED_PACKET;
+  }
+
   // Properties
   if (az_span_size(body) > 0)
   {
@@ -1175,7 +1193,7 @@ static az_result _decode_publish_props(az_span* src, az_mqtt5_publish_data* out)
       case AZ_MQTT5_PROPERTY_PAYLOAD_FORMAT_INDICATOR:
       {
         uint8_t v = 0;
-        rc = _az_mqtt_read_byte(&props, &v);
+        rc = _read_flag_byte(&props, &v);
         out->payload_format_indicator = v;
         break;
       }
@@ -1184,6 +1202,8 @@ static az_result _decode_publish_props(az_span* src, az_mqtt5_publish_data* out)
         break;
       case AZ_MQTT5_PROPERTY_TOPIC_ALIAS:
         rc = _az_mqtt_read_uint16(&props, &out->topic_alias);
+        if (az_result_succeeded(rc) && out->topic_alias == 0)
+          rc = AZ_MQTT_ERROR_PROTOCOL; // 3.3.2.3.4
         break;
       case AZ_MQTT5_PROPERTY_RESPONSE_TOPIC:
         rc = _az_mqtt_read_utf8_string(&props, &out->response_topic);
@@ -1200,6 +1220,8 @@ static az_result _decode_publish_props(az_span* src, az_mqtt5_publish_data* out)
         rc = _az_mqtt_read_vbi(&props, &sub_id);
         if (az_result_failed(rc))
           return rc;
+        if (sub_id == 0)
+          return AZ_MQTT_ERROR_PROTOCOL; // 3.3.2.3.8
         if (out->subscription_identifiers != NULL
             && out->subscription_identifier_count < out->subscription_identifier_capacity)
         {
@@ -1290,6 +1312,8 @@ az_mqtt5_codec_decode_publish(az_span body, uint8_t flags, az_mqtt5_publish_data
     rc = _az_mqtt_read_uint16(&body, &out->packet_id);
     if (az_result_failed(rc))
       return rc;
+    if (out->packet_id == 0)
+      return AZ_MQTT_ERROR_MALFORMED_PACKET; // MQTT 5.0 2.2.1: non-zero.
   }
 
   // Properties
@@ -1403,6 +1427,8 @@ AZ_NODISCARD az_result az_mqtt5_codec_decode_ack(az_span body, az_mqtt5_ack_data
   az_result rc = _az_mqtt_read_uint16(&body, &out->packet_id);
   if (az_result_failed(rc))
     return rc;
+  if (out->packet_id == 0)
+    return AZ_MQTT_ERROR_MALFORMED_PACKET; // Packet identifiers are non-zero.
 
   // If remaining length was 2, no reason code / properties
   if (az_span_size(body) == 0)
@@ -1530,6 +1556,8 @@ static az_result _decode_suback_common(az_span body, az_mqtt5_suback_data* out)
   az_result rc = _az_mqtt_read_uint16(&body, &out->packet_id);
   if (az_result_failed(rc))
     return rc;
+  if (out->packet_id == 0)
+    return AZ_MQTT_ERROR_MALFORMED_PACKET; // Packet identifiers are non-zero.
 
   // Properties
   rc = _decode_suback_props(&body, out);
