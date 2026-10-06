@@ -30,7 +30,13 @@ int main(int argc, char** argv)
     }
     size_t const size = fread(input, 1, sizeof(input), file);
     int const more = fgetc(file);
+    int const failed = ferror(file);
     fclose(file);
+    if (failed != 0)
+    {
+      fprintf(stderr, "cannot read %s\n", argv[i]);
+      return 1;
+    }
     if (more != EOF)
     {
       fprintf(stderr, "%s exceeds %zu bytes\n", argv[i], sizeof(input));

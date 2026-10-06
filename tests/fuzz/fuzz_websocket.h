@@ -10,8 +10,10 @@
 #ifndef FUZZ_WEBSOCKET_H
 #define FUZZ_WEBSOCKET_H
 
-#include "az_mqtt_websocket_internal.h"
 #include "test_fake_transport.h"
+
+#ifndef AZ_MQTT_NO_WEBSOCKETS
+#include "az_mqtt_websocket_internal.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -55,5 +57,7 @@ static bool fuzz_feed_upgrade_reply(test_fake_transport* fake, uint8_t const* se
   test_fake_transport_feed(fake, "\r\n\r\n", 4);
   return true;
 }
+
+#endif // AZ_MQTT_NO_WEBSOCKETS
 
 #endif // FUZZ_WEBSOCKET_H

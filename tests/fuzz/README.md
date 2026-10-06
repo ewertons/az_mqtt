@@ -47,6 +47,8 @@ build/fuzz/fuzz-drop/az_mqtt5_fuzz_client.exe -max_total_time=60 build/fuzz/fuzz
 With tests on (and fuzzers off), each target is also built as `<target>_replay`. That is the same
 code with a plain `main()` (`replay_main.c`), which runs every file in `corpus/<seeds>/` and
 `regressions/<seeds>/` once. ctest runs these with every compiler and in the sanitizer jobs.
+A build without WebSockets or the proxy skips the inputs for that layer; with neither, it has no
+`az_mqtt_fuzz_transport_replay`.
 
 ## Fixing an input the service reports
 

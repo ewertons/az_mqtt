@@ -19,7 +19,6 @@
 #include "fuzz_websocket.h"
 #include "test_fake_transport.h"
 
-#include "az_mqtt_websocket_internal.h"
 
 #include <az_mqtt/az_mqtt_websocket.h>
 
@@ -83,7 +82,11 @@ int LLVMFuzzerTestOneInput(uint8_t const* data, size_t size)
   uint8_t const flags = data[0];
   bool const keep_session = (flags & 4) != 0;
   bool const exchange = (flags & 8) != 0;
+#ifndef AZ_MQTT_NO_WEBSOCKETS
   bool const websocket = (flags & 32) != 0;
+#else
+  bool const websocket = false; // Not built: bit 5 is ignored.
+#endif
   s_publish_from_callback = (flags & 16) != 0;
   static int32_t const chunks[] = { 1, 7, 64, INT32_MAX };
 
@@ -95,6 +98,7 @@ int LLVMFuzzerTestOneInput(uint8_t const* data, size_t size)
   // Until the upgrade reply is fed, an empty input means "nothing yet".
   fake.end_of_input = websocket ? AZ_OK : AZ_MQTT_ERROR_CONNECTION_CLOSED;
   az_mqtt_transport* transport = &fake.layer.base;
+#ifndef AZ_MQTT_NO_WEBSOCKETS
   static az_mqtt_websocket ws;
   if (websocket)
   {
@@ -106,6 +110,7 @@ int LLVMFuzzerTestOneInput(uint8_t const* data, size_t size)
     transport = az_mqtt_websocket_get_transport(&ws);
   }
   else
+#endif
   {
     test_fake_transport_feed(&fake, data + 1, (int32_t)size - 1);
   }
@@ -145,7 +150,9 @@ int LLVMFuzzerTestOneInput(uint8_t const* data, size_t size)
     return 0;
   }
 
+#ifndef AZ_MQTT_NO_WEBSOCKETS
   bool upgrade_fed = !websocket;
+#endif
   for (int connects = 0; connects < (websocket ? 1 : 4); connects++)
   {
     if (az_result_failed(_CLIENT(client_connect_start)(&client, -1)))
@@ -155,12 +162,14 @@ int LLVMFuzzerTestOneInput(uint8_t const* data, size_t size)
     bool exchanged = false;
     for (int i = 0; i < 100000; i++)
     {
+#ifndef AZ_MQTT_NO_WEBSOCKETS
       if (!upgrade_fed && fuzz_feed_upgrade_reply(&fake, s_sent))
       {
         test_fake_transport_feed(&fake, data + 1, (int32_t)size - 1);
         fake.end_of_input = AZ_MQTT_ERROR_CONNECTION_CLOSED;
         upgrade_fed = true;
       }
+#endif
       if (exchange && !exchanged
           && _CLIENT(client_get_state)(&client) == AZ_MQTT_CLIENT_STATE_CONNECTED)
       {

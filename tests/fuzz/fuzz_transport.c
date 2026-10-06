@@ -55,21 +55,27 @@ int LLVMFuzzerTestOneInput(uint8_t const* data, size_t size)
     fake.end_of_input = AZ_OK; // Nothing yet, until the reply is fed.
   }
 
+  // A layer that is not built: nothing to fuzz.
   az_mqtt_transport* t;
-  static az_mqtt_websocket ws;
-  static _az_mqtt_proxy_transport proxy;
-  static az_mqtt_proxy_options proxy_options;
   if (websocket)
   {
+#ifndef AZ_MQTT_NO_WEBSOCKETS
+    static az_mqtt_websocket ws;
     az_mqtt_websocket_options const options = az_mqtt_websocket_options_default();
     if (az_result_failed(az_mqtt_websocket_init(&ws, &fake.layer.base, &options)))
     {
       return 0;
     }
     t = az_mqtt_websocket_get_transport(&ws);
+#else
+    return 0;
+#endif
   }
   else
   {
+#ifndef AZ_MQTT_NO_PROXY
+    static _az_mqtt_proxy_transport proxy;
+    static az_mqtt_proxy_options proxy_options;
     if (az_result_failed(_az_mqtt_proxy_transport_init(&proxy, &fake.layer)))
     {
       return 0;
@@ -84,17 +90,22 @@ int LLVMFuzzerTestOneInput(uint8_t const* data, size_t size)
     {
       return 0;
     }
+#else
+    return 0;
+#endif
   }
 
   az_result rc = az_mqtt_transport_connect_start(t, AZ_SPAN_FROM_STR("broker"), 1883, NULL);
   for (int i = 0; i < 100000 && rc == AZ_OK; i++)
   {
+#ifndef AZ_MQTT_NO_WEBSOCKETS
     if (!upgrade_fed && fuzz_feed_upgrade_reply(&fake, s_sent))
     {
       test_fake_transport_feed(&fake, data + 1, (int32_t)size - 1);
       fake.end_of_input = AZ_MQTT_ERROR_CONNECTION_CLOSED;
       upgrade_fed = true;
     }
+#endif
     rc = az_mqtt_transport_connect_poll(t, 0);
     if (rc == AZ_MQTT_ERROR_TIMEOUT)
     {
