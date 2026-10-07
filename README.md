@@ -122,8 +122,8 @@ it instead of `deps/azure-sdk-for-c`.
   then subscription identifiers or reason codes. Declare it with
   `az_mqtt5_user_property buffer[AZ_MQTT5_DECODE_BUFFER_LENGTH(user_properties, codes)]`.
 - `az_mqttN_client_process_loop` called from a callback of a received packet of the same session
-  returns `AZ_MQTT_ERROR_INVALID_STATE` (that packet is still being handled). Reconnecting from a callback
-  is unaffected.
+  returns `AZ_MQTT_ERROR_INVALID_STATE` (that packet is still being handled). Reconnecting from a
+  callback is unaffected.
 - `az_mqtt_inflight_entry` is 6 B (was 4 B): it keeps the filter count of a SUBSCRIBE or
   UNSUBSCRIBE. A SUBACK (MQTT 5: or UNSUBACK) with a different number of codes is a protocol error.
 - Transport failures that were `AZ_MQTT_ERROR_TRANSPORT` may now be one of the specific results
