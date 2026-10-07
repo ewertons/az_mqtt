@@ -174,7 +174,8 @@ typedef struct
   /**
    * @brief What a received packet's user properties, subscription identifiers and reason codes
    * decode to; the arrays a callback receives point into it, valid until it returns. One packet
-   * is decoded at a time, so every packet type shares it.
+   * is decoded at a time, so every packet type shares it. A callback that reconnects (connect
+   * runs the new session) ends that validity at once, as for its spans into receive_buffer.
    *
    * Its first max_user_properties az_mqtt5_user_property hold user properties; the rest holds the
    * subscription identifiers (PUBLISH) or reason codes (SUBACK, UNSUBACK), 4 bytes each. Entries

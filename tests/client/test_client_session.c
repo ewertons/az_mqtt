@@ -219,6 +219,8 @@ static int s_message_storage = 4096;
 
 /** @brief Next _setup() records the init result in s_init_rc instead of asserting success. */
 static bool s_init_may_fail;
+/** @brief After a failed init: whether the transport was left as it was. */
+static bool s_init_left_transport;
 #if AZ_MQTT_TEST_VERSION == 5
 /** @brief _setup: 1 negative max_user_properties, 2 more than fit, 3 a misaligned buffer. */
 static int s_bad_decode_buffer;
@@ -371,11 +373,19 @@ static void _setup(fixture* f, test_server_options const* server_options, uint16
   }
   s_bad_decode_buffer = 0;
 #endif
+  size_t const transport_size = (size_t)az_mqtt_transport_sizeof();
+  uint8_t* const before = s_init_may_fail ? (uint8_t*)malloc(transport_size) : NULL;
+  if (before != NULL)
+  {
+    memcpy(before, f->transport, transport_size);
+  }
   az_result const init_rc = AZ_MQTT_T(client_init)(&f->client, &o);
   if (s_init_may_fail)
   {
     s_init_may_fail = false;
     s_init_rc = init_rc;
+    s_init_left_transport = before != NULL && memcmp(before, f->transport, transport_size) == 0;
+    free(before);
     return;
   }
   assert_int_equal(init_rc, AZ_OK);
@@ -2451,6 +2461,7 @@ static void a_decode_buffer_that_cannot_hold_its_parts_is_refused(void** state)
     s_init_may_fail = true;
     _setup(&f, &so, 30);
     assert_int_equal(s_init_rc, AZ_MQTT_ERROR_INVALID_CONFIG);
+    assert_true(s_init_left_transport); // No callback left registered with the client.
     free(f.transport);
     test_server_stop(f.server);
   }

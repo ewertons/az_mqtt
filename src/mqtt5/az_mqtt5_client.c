@@ -482,6 +482,16 @@ az_mqtt5_client_init(az_mqtt5_client* client, az_mqtt5_client_options const* opt
   _az_PRECONDITION_NOT_NULL(options);
   _az_PRECONDITION_NOT_NULL(options->transport);
 
+  // Before the transport is touched: each part of decode_buffer must fit, and the user
+  // properties be aligned.
+  if (options->max_user_properties < 0
+      || az_span_size(options->decode_buffer)
+          < options->max_user_properties * (int64_t)sizeof(az_mqtt5_user_property)
+      || (uintptr_t)az_span_ptr(options->decode_buffer) % sizeof(void*) != 0)
+  {
+    return AZ_MQTT_ERROR_INVALID_CONFIG;
+  }
+
   _az_RETURN_IF_FAILED(az_mqtt_transport_set_proxy(options->transport, options->proxy_options));
   memset(client, 0, sizeof(*client));
   _CORE(client).transport = options->transport;
@@ -495,14 +505,6 @@ az_mqtt5_client_init(az_mqtt5_client* client, az_mqtt5_client_options const* opt
   _CORE(client).on_transport_error = _on_transport_error;
   _az_mqtt_core_register_transport_errors(&client->_internal.core);
   client->_internal.connect_options = options->connect_options;
-  // Each part of decode_buffer must fit, and the user properties be aligned.
-  if (options->max_user_properties < 0
-      || az_span_size(options->decode_buffer)
-          < options->max_user_properties * (int64_t)sizeof(az_mqtt5_user_property)
-      || (uintptr_t)az_span_ptr(options->decode_buffer) % sizeof(void*) != 0)
-  {
-    return AZ_MQTT_ERROR_INVALID_CONFIG;
-  }
   client->_internal.decode_buffer = options->decode_buffer;
   client->_internal.max_user_properties = options->max_user_properties;
   client->_internal.on_connack = options->on_connack;

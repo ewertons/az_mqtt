@@ -47,13 +47,8 @@ Proposed helper structs:
 
     typedef struct
     {
-      az_span connack_user_properties;            // az_mqtt5_user_property[]
-      az_span publish_user_properties;            // az_mqtt5_user_property[]
-      az_span publish_subscription_identifiers;   // int32_t[]
-      az_span suback_reason_codes;                // az_mqtt5_reason_code[]
-      az_span suback_user_properties;             // az_mqtt5_user_property[]
-      az_span ack_user_properties;                // az_mqtt5_user_property[]
-      az_span disconnect_user_properties;         // az_mqtt5_user_property[]
+      az_span decode_buffer;        // user properties, then subscription ids or reason codes
+      int32_t max_user_properties;  // user properties at the start of decode_buffer
     } az_mqtt5_decode_buffers;
 
     typedef struct
