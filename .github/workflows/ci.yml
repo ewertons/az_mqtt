@@ -199,16 +199,12 @@ jobs:
           Step test { ctest --test-dir build/win -C Debug --output-on-failure --timeout 300 }
           $summary = Select-String -Path step.log -Pattern 'tests passed' | Select-Object -First 1
           "::notice title=schannel::$($summary.Line)"
-      # Fuzz targets with MSVC libFuzzer: built, and each run once over its seeds (no fuzzing).
-      - name: Fuzz targets (MSVC)
+      # Fuzz targets with MSVC libFuzzer: built only. Fuzzing runs in the scheduled fuzzing
+      # service, not here.
+      - name: Build fuzz targets (MSVC)
         shell: pwsh
         run: |
           cmake -S . -B build/winfuzz -A x64 -DAZ_MQTT_BUILD_FUZZERS=ON -DAZ_MQTT_BUILD_TESTS=OFF -DAZ_MQTT_BUILD_SAMPLES=OFF -DAZ_MQTT_WARNINGS_AS_ERRORS=ON
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build build/winfuzz --config RelWithDebInfo
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $drop = "build/winfuzz/fuzz-drop"
-          foreach ($t in @(@('az_mqtt3_fuzz_client', 'client3'), @('az_mqtt5_fuzz_client', 'client5'), @('az_mqtt_fuzz_transport', 'transport'))) {
-            & "$drop/$($t[0]).exe" -runs=0 "$drop/corpus/$($t[1])"
-            if ($LASTEXITCODE -ne 0) { "::error title=fuzz::$($t[0]) failed on its seeds"; exit 1 }
-          }
