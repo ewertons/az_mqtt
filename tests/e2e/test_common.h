@@ -38,13 +38,8 @@ typedef struct
   az_mqtt_websocket websocket;
 
 #if AZ_MQTT_TEST_VERSION == 5
-  AZ_MQTT_T(user_property) connack_props[E2E_MAX_USER_PROPS];
-  AZ_MQTT_T(user_property) publish_props[E2E_MAX_USER_PROPS];
-  AZ_MQTT_T(user_property) suback_props[E2E_MAX_USER_PROPS];
-  AZ_MQTT_T(user_property) ack_props[E2E_MAX_USER_PROPS];
-  AZ_MQTT_T(user_property) disconnect_props[E2E_MAX_USER_PROPS];
-  AZ_MQTT_T(reason_code) suback_reasons[E2E_MAX_REASON_CODES];
-  int32_t publish_subscription_ids[E2E_MAX_USER_PROPS];
+  AZ_MQTT_T(user_property)
+  decode_buffer[AZ_MQTT5_DECODE_BUFFER_LENGTH(E2E_MAX_USER_PROPS, E2E_MAX_REASON_CODES)];
 #endif
 } az_mqtt_e2e_fixture;
 

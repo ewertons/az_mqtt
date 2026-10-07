@@ -50,9 +50,7 @@ static uint8_t s_inflight_messages[2 * (_BUFFER_SIZE + AZ_MQTT_INFLIGHT_MESSAGE_
 static az_mqtt_inflight_entry s_inflight[4];
 static bool s_publish_from_callback;
 #if AZ_MQTT_FUZZ_VERSION == 5
-static az_mqtt5_user_property s_properties[5][4];
-static int32_t s_subscription_ids[4];
-static az_mqtt5_reason_code s_reason_codes[4];
+static az_mqtt5_user_property s_decode_buffer[AZ_MQTT5_DECODE_BUFFER_LENGTH(4, 4)];
 #endif
 
 static void _publish(_CLIENT(client) * client, az_mqtt_qos qos)
@@ -129,13 +127,8 @@ int LLVMFuzzerTestOneInput(uint8_t const* data, size_t size)
 #if AZ_MQTT_FUZZ_VERSION == 5
   options.connect_options.clean_start = !keep_session;
   options.connect_options.session_expiry_interval = keep_session ? 60 : 0;
-  options.buffers.connack_user_properties = _SPAN_OF(s_properties[0]);
-  options.buffers.publish_user_properties = _SPAN_OF(s_properties[1]);
-  options.buffers.suback_user_properties = _SPAN_OF(s_properties[2]);
-  options.buffers.ack_user_properties = _SPAN_OF(s_properties[3]);
-  options.buffers.disconnect_user_properties = _SPAN_OF(s_properties[4]);
-  options.buffers.publish_subscription_identifiers = _SPAN_OF(s_subscription_ids);
-  options.buffers.suback_reason_codes = _SPAN_OF(s_reason_codes);
+  options.decode_buffer = _SPAN_OF(s_decode_buffer);
+  options.max_user_properties = 4;
 #else
   options.connect_options.clean_session = !keep_session;
 #endif

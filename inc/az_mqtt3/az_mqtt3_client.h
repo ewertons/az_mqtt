@@ -252,6 +252,8 @@ az_mqtt3_client_connect_start(az_mqtt3_client* client, int32_t timeout_ms);
  *                    by this.
  * @retval AZ_MQTT_ERROR_KEEP_ALIVE_TIMEOUT A PINGREQ got nothing back within the keep-alive.
  * @retval AZ_MQTT_ERROR_NOT_CONNECTED Called while disconnected.
+ * @retval AZ_MQTT_ERROR_INVALID_STATE Called from a callback of a received packet of this session
+ *         (that packet is still being handled).
  */
 AZ_NODISCARD az_result az_mqtt3_client_process_loop(az_mqtt3_client* client, int32_t timeout_ms);
 

@@ -30,13 +30,8 @@ static az_mqtt_sample_transport_storage s_transport_storage;
 static az_mqtt_inflight_entry s_inflight[8];
 
 // Where received MQTT 5.0 properties are decoded into.
-static az_mqtt5_user_property s_connack_user_properties[8];
-static az_mqtt5_user_property s_publish_user_properties[8];
-static int32_t s_publish_subscription_ids[8];
-static az_mqtt5_reason_code s_suback_reason_codes[8];
-static az_mqtt5_user_property s_suback_user_properties[8];
-static az_mqtt5_user_property s_ack_user_properties[8];
-static az_mqtt5_user_property s_disconnect_user_properties[8];
+// User properties, then subscription identifiers or reason codes, of a received packet.
+static az_mqtt5_user_property s_decode_buffer[AZ_MQTT5_DECODE_BUFFER_LENGTH(8, 8)];
 
 #define TOPIC "az-mqtt-sample/mqtt5/hello"
 
@@ -137,13 +132,8 @@ int main(void)
   options.connect_options.username = settings.username;
   options.connect_options.password = settings.password;
   options.connect_options.keep_alive_seconds = 30;
-  options.buffers.connack_user_properties = SPAN_FROM_ARRAY(s_connack_user_properties);
-  options.buffers.publish_user_properties = SPAN_FROM_ARRAY(s_publish_user_properties);
-  options.buffers.publish_subscription_identifiers = SPAN_FROM_ARRAY(s_publish_subscription_ids);
-  options.buffers.suback_reason_codes = SPAN_FROM_ARRAY(s_suback_reason_codes);
-  options.buffers.suback_user_properties = SPAN_FROM_ARRAY(s_suback_user_properties);
-  options.buffers.ack_user_properties = SPAN_FROM_ARRAY(s_ack_user_properties);
-  options.buffers.disconnect_user_properties = SPAN_FROM_ARRAY(s_disconnect_user_properties);
+  options.decode_buffer = SPAN_FROM_ARRAY(s_decode_buffer);
+  options.max_user_properties = 8;
   options.on_connack = on_connack;
   options.on_suback = on_suback;
   options.on_puback = on_puback;

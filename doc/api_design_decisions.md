@@ -19,13 +19,9 @@ Current call pattern in the sample is effectively:
     client_opts.send_buffer = AZ_SPAN_FROM_BUFFER(s_send_buffer);
     client_opts.receive_buffer = AZ_SPAN_FROM_BUFFER(s_recv_buffer);
 
-    client_opts.buffers.connack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_connack_user_props);
-    client_opts.buffers.publish_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_publish_user_props);
-    client_opts.buffers.publish_subscription_identifiers = AZ_MQTT5_SPAN_FROM_ARRAY(s_publish_sub_ids);
-    client_opts.buffers.suback_reason_codes = AZ_MQTT5_SPAN_FROM_ARRAY(s_suback_reason_codes);
-    client_opts.buffers.suback_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_suback_user_props);
-    client_opts.buffers.ack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_ack_user_props);
-    client_opts.buffers.disconnect_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_disconnect_user_props);
+    // One decode buffer for every received packet type (one packet is decoded at a time).
+    client_opts.decode_buffer = AZ_MQTT5_SPAN_FROM_ARRAY(s_decode_buffer);
+    client_opts.max_user_properties = 8;
 
     az_mqtt5_client_init(&client, &client_opts);
     az_mqtt5_client_connect(&client, 10000);

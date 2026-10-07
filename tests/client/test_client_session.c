@@ -45,9 +45,7 @@ typedef struct
   az_mqtt_websocket ws;
   az_span ws_path;
 #if AZ_MQTT_TEST_VERSION == 5
-  AZ_MQTT_T(user_property) props[4][4];
-  int32_t sub_ids[4];
-  AZ_MQTT_T(reason_code) reasons[4];
+  AZ_MQTT_T(user_property) decode_buffer[AZ_MQTT5_DECODE_BUFFER_LENGTH(4, 4)];
 #endif
 } fixture;
 
@@ -89,6 +87,9 @@ static struct
   /** @brief on_connack publishes a QoS 1 message (the topic "n"). */
   bool publish_on_connack;
   az_result connack_publish_rc;
+  /** @brief on_publish calls process_loop (not allowed there): its result. */
+  bool loop_in_on_publish;
+  az_result loop_in_on_publish_rc;
 } g;
 
 static void _on_connack(AZ_MQTT_T(client)* c, AZ_MQTT_T(connack_data) const* d)
@@ -126,8 +127,11 @@ static void _on_suback(AZ_MQTT_T(client)* c, AZ_MQTT_T(suback_data) const* d)
 
 static void _on_publish(AZ_MQTT_T(client)* c, AZ_MQTT_T(publish_data) const* p)
 {
-  (void)c;
   g.publishes++;
+  if (g.loop_in_on_publish)
+  {
+    g.loop_in_on_publish_rc = AZ_MQTT_T(client_process_loop)(c, 0);
+  }
 #if AZ_MQTT_TEST_VERSION == 5
   g.publish_user_properties = p->user_property_count;
   g.publish_subscription_identifiers = p->subscription_identifier_count;
@@ -215,6 +219,10 @@ static int s_message_storage = 4096;
 
 /** @brief Next _setup() records the init result in s_init_rc instead of asserting success. */
 static bool s_init_may_fail;
+#if AZ_MQTT_TEST_VERSION == 5
+/** @brief _setup: 1 negative max_user_properties, 2 more than fit, 3 a misaligned buffer. */
+static int s_bad_decode_buffer;
+#endif
 static az_result s_init_rc;
 
 static void _on_closed(AZ_MQTT_T(client)* c, az_result reason)
@@ -343,13 +351,25 @@ static void _setup(fixture* f, test_server_options const* server_options, uint16
   }
 #if AZ_MQTT_TEST_VERSION == 5
   o.on_disconnect = _on_disconnect;
-  o.buffers.connack_user_properties = ARRAY_SPAN(f->props[0]);
-  o.buffers.publish_user_properties = ARRAY_SPAN(f->props[1]);
-  o.buffers.publish_subscription_identifiers = ARRAY_SPAN(f->sub_ids);
-  o.buffers.suback_reason_codes = ARRAY_SPAN(f->reasons);
-  o.buffers.suback_user_properties = ARRAY_SPAN(f->props[2]);
-  o.buffers.ack_user_properties = ARRAY_SPAN(f->props[3]);
-  o.buffers.disconnect_user_properties = ARRAY_SPAN(f->props[3]);
+  // Exactly 4 of each: tests rely on the counts stopping there.
+  o.decode_buffer = az_span_create((uint8_t*)f->decode_buffer, AZ_MQTT5_DECODE_BUFFER_SIZE(4, 4));
+  o.max_user_properties = 4;
+  switch (s_bad_decode_buffer)
+  {
+    case 1:
+      o.max_user_properties = -1;
+      break;
+    case 2:
+      o.max_user_properties = 5; // 4 fit.
+      break;
+    case 3:
+      o.decode_buffer = az_span_create((uint8_t*)f->decode_buffer + 4, 64); // Misaligned.
+      o.max_user_properties = 1;
+      break;
+    default:
+      break;
+  }
+  s_bad_decode_buffer = 0;
 #endif
   az_result const init_rc = AZ_MQTT_T(client_init)(&f->client, &o);
   if (s_init_may_fail)
@@ -2388,11 +2408,52 @@ static void publish_properties_never_exceed_the_buffers(void** state)
   assert_int_equal(g.publishes, 1);
   assert_int_equal(g.publish_user_properties, 4);
   assert_int_equal(g.publish_subscription_identifiers, 4);
-  assert_int_equal(f.sub_ids[3], 4);
-  // The arrays that follow the publish buffers are untouched.
-  assert_null(az_span_ptr(f.props[2][0].key));
-  assert_int_equal(f.reasons[0], 0);
+  // decode_buffer: 4 user properties, then the subscription identifiers; nothing written past.
+  int32_t const* const ids = (int32_t const*)(void const*)(f.decode_buffer + 4);
+  assert_int_equal(ids[3], 4);
+  uint8_t const* const bytes = (uint8_t const*)f.decode_buffer;
+  for (size_t i = AZ_MQTT5_DECODE_BUFFER_SIZE(4, 4); i < sizeof(f.decode_buffer); i++)
+  {
+    assert_int_equal(bytes[i], 0);
+  }
   _teardown(&f);
+}
+#endif
+
+static void process_loop_from_a_packet_callback_is_refused(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.burst_publishes = 1;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  g.loop_in_on_publish = true;
+  for (int i = 0; i < 20 && g.publishes == 0; i++)
+  {
+    assert_int_equal(AZ_MQTT_T(client_process_loop)(&f.client, 50), AZ_OK);
+  }
+  assert_int_equal(g.publishes, 1); // Not handled twice by the nested call.
+  assert_int_equal(g.loop_in_on_publish_rc, AZ_MQTT_ERROR_INVALID_STATE);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+  _teardown(&f);
+}
+
+#if AZ_MQTT_TEST_VERSION == 5
+static void a_decode_buffer_that_cannot_hold_its_parts_is_refused(void** state)
+{
+  (void)state;
+  for (int bad = 1; bad <= 3; bad++)
+  {
+    test_server_options so = _plain();
+    fixture f;
+    s_bad_decode_buffer = bad;
+    s_init_may_fail = true;
+    _setup(&f, &so, 30);
+    assert_int_equal(s_init_rc, AZ_MQTT_ERROR_INVALID_CONFIG);
+    free(f.transport);
+    test_server_stop(f.server);
+  }
 }
 #endif
 
@@ -2593,6 +2654,10 @@ int main(void)
     cmocka_unit_test(publish_properties_never_exceed_the_buffers),
 #endif
     cmocka_unit_test(an_auth_packet_is_a_protocol_error),
+    cmocka_unit_test(process_loop_from_a_packet_callback_is_refused),
+#if AZ_MQTT_TEST_VERSION == 5
+    cmocka_unit_test(a_decode_buffer_that_cannot_hold_its_parts_is_refused),
+#endif
     cmocka_unit_test(a_server_disconnect_is_a_protocol_error_only_in_mqttv3),
     cmocka_unit_test(an_explicit_server_keep_alive_of_zero_disables_pings),
     cmocka_unit_test(reconnecting_from_on_connection_closed_is_safe),

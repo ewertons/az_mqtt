@@ -29,7 +29,8 @@ static uint8_t s_receive_buffer[AZ_MQTT_SAMPLE_BUFFER_SIZE];
 static az_mqtt_sample_transport_storage s_transport_storage;
 static az_mqtt_websocket s_websocket;
 static az_mqtt_inflight_entry s_inflight[8];
-static az_mqtt5_user_property s_ack_user_properties[8];
+// User properties, then subscription identifiers or reason codes, of a received packet.
+static az_mqtt5_user_property s_decode_buffer[AZ_MQTT5_DECODE_BUFFER_LENGTH(8, 8)];
 
 static bool s_puback_received;
 static bool s_acknowledged;
@@ -127,7 +128,8 @@ int main(void)
   options.connect_options.client_id = settings.client_id;
   options.connect_options.username = settings.username;
   options.connect_options.password = settings.password;
-  options.buffers.ack_user_properties = SPAN_FROM_ARRAY(s_ack_user_properties);
+  options.decode_buffer = SPAN_FROM_ARRAY(s_decode_buffer);
+  options.max_user_properties = 8;
   options.on_connack = on_connack;
   options.on_puback = on_puback;
   options.on_transport_error = on_transport_error;
