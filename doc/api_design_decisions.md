@@ -87,13 +87,8 @@ Sample usage in that model:
     az_mqtt5_call_buffers buffers = {0};
     buffers.io.send_buffer = AZ_SPAN_FROM_BUFFER(s_send_buffer);
     buffers.io.receive_buffer = AZ_SPAN_FROM_BUFFER(s_recv_buffer);
-    buffers.decode.connack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_connack_user_props);
-    buffers.decode.publish_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_publish_user_props);
-    buffers.decode.publish_subscription_identifiers = AZ_MQTT5_SPAN_FROM_ARRAY(s_publish_sub_ids);
-    buffers.decode.suback_reason_codes = AZ_MQTT5_SPAN_FROM_ARRAY(s_suback_reason_codes);
-    buffers.decode.suback_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_suback_user_props);
-    buffers.decode.ack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_ack_user_props);
-    buffers.decode.disconnect_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_disconnect_user_props);
+    buffers.decode.decode_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_decode_user_properties);
+    buffers.decode.decode_codes = AZ_MQTT5_SPAN_FROM_ARRAY(s_decode_codes);
 
     az_mqtt5_client_connect(&client, &buffers, 10000);
     az_mqtt5_client_process_loop(&client, &buffers, 1000);

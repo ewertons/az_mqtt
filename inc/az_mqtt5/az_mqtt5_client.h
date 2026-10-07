@@ -285,8 +285,9 @@ az_mqtt5_client_connect_start(az_mqtt5_client* client, int32_t timeout_ms);
  * connect (see az_mqtt5_client_connect_start()). Returns early when keep-alive needs
  * attention, so a long @p timeout_ms never delays a PINGREQ.
  *
- * Any failure ends the session: the transport is closed, the state becomes
- * DISCONNECTED and on_connection_closed reports the same result.
+ * Any failure but AZ_MQTT_ERROR_NOT_CONNECTED and AZ_MQTT_ERROR_INVALID_STATE ends the session:
+ * the transport is closed, the state becomes DISCONNECTED and on_connection_closed reports the
+ * same result.
  *
  * @param timeout_ms  Max time to wait for incoming data (or connect progress);
  *                    -1 waits until keep-alive is due. Sends are bounded by
@@ -295,7 +296,7 @@ az_mqtt5_client_connect_start(az_mqtt5_client* client, int32_t timeout_ms);
  * @retval AZ_MQTT_ERROR_KEEP_ALIVE_TIMEOUT A PINGREQ got nothing back within the keep-alive.
  * @retval AZ_MQTT_ERROR_NOT_CONNECTED Called while disconnected.
  * @retval AZ_MQTT_ERROR_INVALID_STATE Called from a callback of a received packet of this session
- *         (that packet is still being handled).
+ *         (that packet is still being handled): nothing done; the session continues.
  */
 AZ_NODISCARD az_result az_mqtt5_client_process_loop(az_mqtt5_client* client, int32_t timeout_ms);
 
