@@ -64,8 +64,8 @@ az_result az_mqtt_e2e_init_client(
 #if AZ_MQTT_TEST_VERSION == 5
   opts.on_disconnect = params->on_disconnect;
 
-  opts.decode_buffer = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->decode_buffer);
-  opts.max_user_properties = E2E_MAX_USER_PROPS;
+  opts.decode_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->decode_user_properties);
+  opts.decode_codes = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->decode_codes);
 #endif
 
   return AZ_MQTT_T(client_init)(client, &opts);

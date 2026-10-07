@@ -36,7 +36,7 @@ static uint8_t s_send3[1024];
 static uint8_t s_recv3[1024];
 static uint8_t s_send5[1024];
 static uint8_t s_recv5[1024];
-static az_mqtt5_user_property s_decode5[AZ_MQTT5_DECODE_BUFFER_LENGTH(0, 4)];
+static int32_t s_decode_codes5[4];
 static az_mqtt_inflight_entry s_inflight3[2];
 static az_mqtt_inflight_entry s_inflight5[2];
 
@@ -82,7 +82,7 @@ static void test_mqtt3_publishes_mqtt5_receives(void** state)
   o5.connect_options.client_id = AZ_SPAN_FROM_STR("test-both-v5");
   o5.on_suback = on_suback;
   o5.on_publish = on_publish;
-  o5.decode_buffer = az_span_create((uint8_t*)s_decode5, AZ_MQTT5_DECODE_BUFFER_SIZE(0, 4));
+  o5.decode_codes = az_span_create((uint8_t*)s_decode_codes5, (int32_t)sizeof(s_decode_codes5));
   az_mqtt5_client c5;
   assert_int_equal(az_mqtt5_client_init(&c5, &o5), AZ_OK);
 

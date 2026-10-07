@@ -38,8 +38,8 @@ typedef struct
   az_mqtt_websocket websocket;
 
 #if AZ_MQTT_TEST_VERSION == 5
-  AZ_MQTT_T(user_property)
-  decode_buffer[AZ_MQTT5_DECODE_BUFFER_LENGTH(E2E_MAX_USER_PROPS, E2E_MAX_REASON_CODES)];
+  AZ_MQTT_T(user_property) decode_user_properties[E2E_MAX_USER_PROPS];
+  int32_t decode_codes[E2E_MAX_REASON_CODES];
 #endif
 } az_mqtt_e2e_fixture;
 

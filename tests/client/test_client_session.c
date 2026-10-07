@@ -45,7 +45,9 @@ typedef struct
   az_mqtt_websocket ws;
   az_span ws_path;
 #if AZ_MQTT_TEST_VERSION == 5
-  AZ_MQTT_T(user_property) decode_buffer[AZ_MQTT5_DECODE_BUFFER_LENGTH(4, 4)];
+  AZ_MQTT_T(user_property) decode_user_properties[4];
+  int32_t decode_codes[4];
+  int32_t after_decode_codes; // Stays 0: nothing is written past decode_codes.
 #endif
 } fixture;
 
@@ -219,12 +221,6 @@ static int s_message_storage = 4096;
 
 /** @brief Next _setup() records the init result in s_init_rc instead of asserting success. */
 static bool s_init_may_fail;
-/** @brief After a failed init: whether the transport was left as it was. */
-static bool s_init_left_transport;
-#if AZ_MQTT_TEST_VERSION == 5
-/** @brief _setup: 1 negative max_user_properties, 2 more than fit, 3 a misaligned buffer. */
-static int s_bad_decode_buffer;
-#endif
 static az_result s_init_rc;
 
 static void _on_closed(AZ_MQTT_T(client)* c, az_result reason)
@@ -353,39 +349,15 @@ static void _setup(fixture* f, test_server_options const* server_options, uint16
   }
 #if AZ_MQTT_TEST_VERSION == 5
   o.on_disconnect = _on_disconnect;
-  // Exactly 4 of each: tests rely on the counts stopping there.
-  o.decode_buffer = az_span_create((uint8_t*)f->decode_buffer, AZ_MQTT5_DECODE_BUFFER_SIZE(4, 4));
-  o.max_user_properties = 4;
-  switch (s_bad_decode_buffer)
-  {
-    case 1:
-      o.max_user_properties = -1;
-      break;
-    case 2:
-      o.max_user_properties = 5; // 4 fit.
-      break;
-    case 3:
-      o.decode_buffer = az_span_create((uint8_t*)f->decode_buffer + 4, 64); // Misaligned.
-      o.max_user_properties = 1;
-      break;
-    default:
-      break;
-  }
-  s_bad_decode_buffer = 0;
+  // 4 of each: tests rely on the counts stopping there.
+  o.decode_user_properties = ARRAY_SPAN(f->decode_user_properties);
+  o.decode_codes = ARRAY_SPAN(f->decode_codes);
 #endif
-  size_t const transport_size = (size_t)az_mqtt_transport_sizeof();
-  uint8_t* const before = s_init_may_fail ? (uint8_t*)malloc(transport_size) : NULL;
-  if (before != NULL)
-  {
-    memcpy(before, f->transport, transport_size);
-  }
   az_result const init_rc = AZ_MQTT_T(client_init)(&f->client, &o);
   if (s_init_may_fail)
   {
     s_init_may_fail = false;
     s_init_rc = init_rc;
-    s_init_left_transport = before != NULL && memcmp(before, f->transport, transport_size) == 0;
-    free(before);
     return;
   }
   assert_int_equal(init_rc, AZ_OK);
@@ -2418,14 +2390,8 @@ static void publish_properties_never_exceed_the_buffers(void** state)
   assert_int_equal(g.publishes, 1);
   assert_int_equal(g.publish_user_properties, 4);
   assert_int_equal(g.publish_subscription_identifiers, 4);
-  // decode_buffer: 4 user properties, then the subscription identifiers; nothing written past.
-  int32_t const* const ids = (int32_t const*)(void const*)(f.decode_buffer + 4);
-  assert_int_equal(ids[3], 4);
-  uint8_t const* const bytes = (uint8_t const*)f.decode_buffer;
-  for (size_t i = AZ_MQTT5_DECODE_BUFFER_SIZE(4, 4); i < sizeof(f.decode_buffer); i++)
-  {
-    assert_int_equal(bytes[i], 0);
-  }
+  assert_int_equal(f.decode_codes[3], 4);
+  assert_int_equal(f.after_decode_codes, 0);
   _teardown(&f);
 }
 #endif
@@ -2448,25 +2414,6 @@ static void process_loop_from_a_packet_callback_is_refused(void** state)
   assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
   _teardown(&f);
 }
-
-#if AZ_MQTT_TEST_VERSION == 5
-static void a_decode_buffer_that_cannot_hold_its_parts_is_refused(void** state)
-{
-  (void)state;
-  for (int bad = 1; bad <= 3; bad++)
-  {
-    test_server_options so = _plain();
-    fixture f;
-    s_bad_decode_buffer = bad;
-    s_init_may_fail = true;
-    _setup(&f, &so, 30);
-    assert_int_equal(s_init_rc, AZ_MQTT_ERROR_INVALID_CONFIG);
-    assert_true(s_init_left_transport); // No callback left registered with the client.
-    free(f.transport);
-    test_server_stop(f.server);
-  }
-}
-#endif
 
 static void an_auth_packet_is_a_protocol_error(void** state)
 {
@@ -2666,9 +2613,6 @@ int main(void)
 #endif
     cmocka_unit_test(an_auth_packet_is_a_protocol_error),
     cmocka_unit_test(process_loop_from_a_packet_callback_is_refused),
-#if AZ_MQTT_TEST_VERSION == 5
-    cmocka_unit_test(a_decode_buffer_that_cannot_hold_its_parts_is_refused),
-#endif
     cmocka_unit_test(a_server_disconnect_is_a_protocol_error_only_in_mqttv3),
     cmocka_unit_test(an_explicit_server_keep_alive_of_zero_disables_pings),
     cmocka_unit_test(reconnecting_from_on_connection_closed_is_safe),

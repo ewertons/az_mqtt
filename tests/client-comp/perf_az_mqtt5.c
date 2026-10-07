@@ -65,8 +65,8 @@ static union
   double align_double;
 } s_transport_buf;
 
-static az_mqtt5_user_property
-    s_decode_buffer[AZ_MQTT5_DECODE_BUFFER_LENGTH(MAX_USER_PROPERTIES, MAX_SUBACK_REASON_CODES)];
+static az_mqtt5_user_property s_decode_user_properties[MAX_USER_PROPERTIES];
+static int32_t s_decode_codes[MAX_SUBACK_REASON_CODES];
 
 static uint8_t s_payload[MAX_PAYLOAD_SIZE];
 
@@ -242,8 +242,8 @@ int main(int argc, char* argv[])
   opts.on_publish = on_publish;
   opts.on_puback = on_puback;
 
-  opts.decode_buffer = AZ_MQTT5_SPAN_FROM_ARRAY(s_decode_buffer);
-  opts.max_user_properties = MAX_USER_PROPERTIES;
+  opts.decode_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_decode_user_properties);
+  opts.decode_codes = AZ_MQTT5_SPAN_FROM_ARRAY(s_decode_codes);
 
   az_mqtt5_client client;
   rc = az_mqtt5_client_init(&client, &opts);

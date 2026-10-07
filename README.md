@@ -117,10 +117,9 @@ it instead of `deps/azure-sdk-for-c`.
   - removed: `buffers`, `on_disconnect`, properties, AUTH.
 - mqttv3: `az_mqtt3_codec_decode_ack` rejects bytes after the packet identifier. An AUTH packet (reserved in 3.1.1) is a protocol error.
 - mqttv5: a received AUTH packet is a protocol error (enhanced authentication is not implemented).
-- mqttv5: `options.buffers` (7 spans) is replaced by `options.decode_buffer` and
-  `options.max_user_properties`: one buffer for every received packet type, user properties first,
-  then subscription identifiers or reason codes. Declare it with
-  `az_mqtt5_user_property buffer[AZ_MQTT5_DECODE_BUFFER_LENGTH(user_properties, codes)]`.
+- mqttv5: `options.buffers` (7 spans) is replaced by `options.decode_user_properties`
+  (`az_mqtt5_user_property[]`) and `options.decode_codes` (`int32_t[]`: subscription identifiers or
+  reason codes), each shared by every received packet type.
 - `az_mqttN_client_process_loop` called from a callback of a received packet of the same session
   returns `AZ_MQTT_ERROR_INVALID_STATE` (that packet is still being handled). Reconnecting from a
   callback is unaffected.

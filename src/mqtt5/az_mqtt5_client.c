@@ -28,22 +28,25 @@
 // Helpers
 // ============================================================================
 
-/** @brief decode_buffer's user property part. */
-static az_mqtt5_user_property* _user_properties(
-    az_mqtt5_client const* client,
-    int32_t* out_capacity)
+/** @brief decode_user_properties as an array; its capacity in *@p out_capacity. */
+static az_mqtt5_user_property*
+_user_properties(az_mqtt5_client const* client, int32_t* out_capacity)
 {
-  *out_capacity = client->_internal.max_user_properties;
-  return (az_mqtt5_user_property*)az_span_ptr(client->_internal.decode_buffer);
+  az_span const span = client->_internal.decode_user_properties;
+  *out_capacity = az_span_size(span) / (int32_t)sizeof(az_mqtt5_user_property);
+  return (az_mqtt5_user_property*)az_span_ptr(span);
 }
 
-/** @brief decode_buffer's 4-byte part (subscription identifiers or reason codes). */
-static void* _codes(az_mqtt5_client const* client, int32_t* out_capacity)
+// Reason codes share decode_codes with subscription identifiers (int32_t).
+typedef char
+    _az_mqtt5_reason_code_is_32_bits[sizeof(az_mqtt5_reason_code) == sizeof(int32_t) ? 1 : -1];
+
+/** @brief decode_codes as an int32_t array; its capacity in *@p out_capacity. */
+static int32_t* _codes(az_mqtt5_client const* client, int32_t* out_capacity)
 {
-  int32_t const used
-      = client->_internal.max_user_properties * (int32_t)sizeof(az_mqtt5_user_property);
-  *out_capacity = (az_span_size(client->_internal.decode_buffer) - used) / (int32_t)sizeof(int32_t);
-  return *out_capacity > 0 ? az_span_ptr(client->_internal.decode_buffer) + used : NULL;
+  az_span const span = client->_internal.decode_codes;
+  *out_capacity = az_span_size(span) / (int32_t)sizeof(int32_t);
+  return (int32_t*)az_span_ptr(span);
 }
 
 static void _on_closed(az_mqtt_core* core, az_result reason)
@@ -178,7 +181,7 @@ static az_result _handle_publish(az_mqtt5_client* client, az_span body, uint8_t 
   publish.user_properties = _user_properties(client, &publish.user_property_capacity);
   publish.user_property_count = 0;
   publish.subscription_identifiers
-      = (int32_t*)_codes(client, &publish.subscription_identifier_capacity);
+      = _codes(client, &publish.subscription_identifier_capacity);
   publish.subscription_identifier_count = 0;
 
   az_result rc = az_mqtt5_codec_decode_publish(body, flags, &publish);
@@ -482,16 +485,6 @@ az_mqtt5_client_init(az_mqtt5_client* client, az_mqtt5_client_options const* opt
   _az_PRECONDITION_NOT_NULL(options);
   _az_PRECONDITION_NOT_NULL(options->transport);
 
-  // Before the transport is touched: each part of decode_buffer must fit, and the user
-  // properties be aligned.
-  if (options->max_user_properties < 0
-      || az_span_size(options->decode_buffer)
-          < options->max_user_properties * (int64_t)sizeof(az_mqtt5_user_property)
-      || (uintptr_t)az_span_ptr(options->decode_buffer) % sizeof(void*) != 0)
-  {
-    return AZ_MQTT_ERROR_INVALID_CONFIG;
-  }
-
   _az_RETURN_IF_FAILED(az_mqtt_transport_set_proxy(options->transport, options->proxy_options));
   memset(client, 0, sizeof(*client));
   _CORE(client).transport = options->transport;
@@ -505,8 +498,8 @@ az_mqtt5_client_init(az_mqtt5_client* client, az_mqtt5_client_options const* opt
   _CORE(client).on_transport_error = _on_transport_error;
   _az_mqtt_core_register_transport_errors(&client->_internal.core);
   client->_internal.connect_options = options->connect_options;
-  client->_internal.decode_buffer = options->decode_buffer;
-  client->_internal.max_user_properties = options->max_user_properties;
+  client->_internal.decode_user_properties = options->decode_user_properties;
+  client->_internal.decode_codes = options->decode_codes;
   client->_internal.on_connack = options->on_connack;
   client->_internal.on_publish = options->on_publish;
   client->_internal.on_suback = options->on_suback;

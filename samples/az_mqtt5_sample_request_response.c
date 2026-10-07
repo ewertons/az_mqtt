@@ -31,8 +31,9 @@ static uint8_t s_send_buffer[AZ_MQTT_SAMPLE_BUFFER_SIZE];
 static uint8_t s_receive_buffer[AZ_MQTT_SAMPLE_BUFFER_SIZE];
 static az_mqtt_sample_transport_storage s_transport_storage;
 static az_mqtt_inflight_entry s_inflight[8];
-// User properties, then subscription identifiers or reason codes, of a received packet.
-static az_mqtt5_user_property s_decode_buffer[AZ_MQTT5_DECODE_BUFFER_LENGTH(8, 8)];
+// Of a received packet: its user properties; its subscription identifiers or reason codes.
+static az_mqtt5_user_property s_decode_user_properties[8];
+static int32_t s_decode_codes[8];
 
 // RESPONSE_TOPIC_PREFIX + client id: only this client's responses arrive there.
 static char s_response_topic_buffer[128];
@@ -163,8 +164,8 @@ int main(void)
   options.connect_options.username = settings.username;
   options.connect_options.password = settings.password;
   // Received User Properties are decoded into this caller storage (extras are dropped).
-  options.decode_buffer = SPAN_FROM_ARRAY(s_decode_buffer);
-  options.max_user_properties = 8;
+  options.decode_user_properties = SPAN_FROM_ARRAY(s_decode_user_properties);
+  options.decode_codes = SPAN_FROM_ARRAY(s_decode_codes);
   options.on_suback = on_suback;
   options.on_puback = on_puback;
   options.on_publish = on_publish;

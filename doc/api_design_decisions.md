@@ -19,9 +19,9 @@ Current call pattern in the sample is effectively:
     client_opts.send_buffer = AZ_SPAN_FROM_BUFFER(s_send_buffer);
     client_opts.receive_buffer = AZ_SPAN_FROM_BUFFER(s_recv_buffer);
 
-    // One decode buffer for every received packet type (one packet is decoded at a time).
-    client_opts.decode_buffer = AZ_MQTT5_SPAN_FROM_ARRAY(s_decode_buffer);
-    client_opts.max_user_properties = 8;
+    // Shared by every received packet type (one packet is decoded at a time).
+    client_opts.decode_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_decode_user_properties);
+    client_opts.decode_codes = AZ_MQTT5_SPAN_FROM_ARRAY(s_decode_codes);
 
     az_mqtt5_client_init(&client, &client_opts);
     az_mqtt5_client_connect(&client, 10000);
@@ -47,8 +47,8 @@ Proposed helper structs:
 
     typedef struct
     {
-      az_span decode_buffer;        // user properties, then subscription ids or reason codes
-      int32_t max_user_properties;  // user properties at the start of decode_buffer
+      az_span decode_user_properties;  // az_mqtt5_user_property[]
+      az_span decode_codes;            // int32_t[]: subscription ids or reason codes
     } az_mqtt5_decode_buffers;
 
     typedef struct
