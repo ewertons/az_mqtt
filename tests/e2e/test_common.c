@@ -64,13 +64,8 @@ az_result az_mqtt_e2e_init_client(
 #if AZ_MQTT_TEST_VERSION == 5
   opts.on_disconnect = params->on_disconnect;
 
-  opts.buffers.connack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->connack_props);
-  opts.buffers.publish_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->publish_props);
-  opts.buffers.publish_subscription_identifiers = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->publish_subscription_ids);
-  opts.buffers.suback_reason_codes = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->suback_reasons);
-  opts.buffers.suback_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->suback_props);
-  opts.buffers.ack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->ack_props);
-  opts.buffers.disconnect_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->disconnect_props);
+  opts.decode_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->decode_user_properties);
+  opts.decode_codes = AZ_MQTT5_SPAN_FROM_ARRAY(fixture->decode_codes);
 #endif
 
   return AZ_MQTT_T(client_init)(client, &opts);

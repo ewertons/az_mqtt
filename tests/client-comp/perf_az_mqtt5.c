@@ -65,13 +65,8 @@ static union
   double align_double;
 } s_transport_buf;
 
-static az_mqtt5_user_property s_connack_up[MAX_USER_PROPERTIES];
-static az_mqtt5_user_property s_pub_up[MAX_USER_PROPERTIES];
-static az_mqtt5_user_property s_sub_up[MAX_USER_PROPERTIES];
-static az_mqtt5_user_property s_ack_up[MAX_USER_PROPERTIES];
-static az_mqtt5_user_property s_disc_up[MAX_USER_PROPERTIES];
-static az_mqtt5_reason_code s_sub_rc[MAX_SUBACK_REASON_CODES];
-static int32_t s_pub_sub_ids[MAX_USER_PROPERTIES];
+static az_mqtt5_user_property s_decode_user_properties[MAX_USER_PROPERTIES];
+static int32_t s_decode_codes[MAX_SUBACK_REASON_CODES];
 
 static uint8_t s_payload[MAX_PAYLOAD_SIZE];
 
@@ -247,13 +242,8 @@ int main(int argc, char* argv[])
   opts.on_publish = on_publish;
   opts.on_puback = on_puback;
 
-  opts.buffers.connack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_connack_up);
-  opts.buffers.publish_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_pub_up);
-  opts.buffers.publish_subscription_identifiers = AZ_MQTT5_SPAN_FROM_ARRAY(s_pub_sub_ids);
-  opts.buffers.suback_reason_codes = AZ_MQTT5_SPAN_FROM_ARRAY(s_sub_rc);
-  opts.buffers.suback_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_sub_up);
-  opts.buffers.ack_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_ack_up);
-  opts.buffers.disconnect_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_disc_up);
+  opts.decode_user_properties = AZ_MQTT5_SPAN_FROM_ARRAY(s_decode_user_properties);
+  opts.decode_codes = AZ_MQTT5_SPAN_FROM_ARRAY(s_decode_codes);
 
   az_mqtt5_client client;
   rc = az_mqtt5_client_init(&client, &opts);
