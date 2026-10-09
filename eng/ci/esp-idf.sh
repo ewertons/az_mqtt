@@ -70,10 +70,20 @@ cafile ${work}/ca.pem
 certfile ${work}/server.pem
 keyfile ${work}/server.key
 EOF
+# As root (e.g. in the espressif/idf container), Mosquitto otherwise switches to a user that
+# cannot read the certificates.
+if [ "$(id -u)" = "0" ]; then
+  echo "user root" >> "${work}/mosquitto.conf"
+fi
 mosquitto -c "${work}/mosquitto.conf" > "${work}/mosquitto.log" 2>&1 &
 broker=$!
 trap 'kill ${broker} 2>/dev/null || true' EXIT
 sleep 1
+if ! kill -0 "${broker}" 2>/dev/null; then
+  echo "Mosquitto did not start:" >&2
+  cat "${work}/mosquitto.log" >&2
+  exit 1
+fi
 
 # The CA path in sdkconfig is relative to the sample project.
 cp "${work}/ca.pem" "${sample}/ci_ca.pem"
@@ -94,7 +104,8 @@ run_variant() {
   if grep -q "${expect}" "${out}/${name}/qemu.log"; then
     echo "PASS ${name}"
   else
-    echo "FAIL ${name} (expected: ${expect})"
+    echo "FAIL ${name} (expected: ${expect}); broker log:"
+    tail -n 20 "${work}/mosquitto.log"
     return 1
   fi
 }
