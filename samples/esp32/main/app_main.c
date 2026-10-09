@@ -13,11 +13,14 @@
 #include <az_mqtt5/az_mqtt5_client.h>
 #define _V(name) az_mqtt5_##name
 #define _CONNACK_CODE(c) ((int)(c)->reason_code)
+// MQTT 5: a PUBACK reason code of 0x80 or more is a rejection.
+#define _ACK_OK(a) (az_result_succeeded((a)->status) && (a)->reason_code < AZ_MQTT5_REASON_UNSPECIFIED_ERROR)
 #define _DISCONNECT(c) az_mqtt5_client_disconnect((c), AZ_MQTT5_REASON_NORMAL_DISCONNECTION)
 #else
 #include <az_mqtt3/az_mqtt3_client.h>
 #define _V(name) az_mqtt3_##name
 #define _CONNACK_CODE(c) ((int)(c)->return_code)
+#define _ACK_OK(a) az_result_succeeded((a)->status)
 #define _DISCONNECT(c) az_mqtt3_client_disconnect((c))
 #endif
 
@@ -73,7 +76,7 @@ static void on_puback(_V(client) * client, _V(ack_data) const* ack)
   (void)client;
   ESP_LOGI(TAG, "PUBACK packet_id=%u status=0x%08X", ack->packet_id, (unsigned)ack->status);
   s_puback_received = true;
-  s_acknowledged = az_result_succeeded(ack->status);
+  s_acknowledged = _ACK_OK(ack);
 }
 
 static void on_transport_error(_V(client) * client, az_mqtt_native_error const* error)
