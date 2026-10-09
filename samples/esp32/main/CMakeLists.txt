@@ -11,3 +11,13 @@ if(CONFIG_AZ_MQTT_SAMPLE_USE_TLS AND NOT CONFIG_AZ_MQTT_SAMPLE_CA_PEM_FILE STREQ
     RENAME_TO az_mqtt_sample_ca_pem)
   target_compile_definitions(${COMPONENT_LIB} PRIVATE AZ_MQTT_SAMPLE_HAS_CA_PEM)
 endif()
+
+if(NOT CONFIG_AZ_MQTT_BUILD_AZ_CORE)
+  # az_mqtt then expects the application to provide the azure-sdk-for-c sources it uses.
+  set(_az_core "${CMAKE_CURRENT_LIST_DIR}/../../../deps/azure-sdk-for-c/sdk/src/azure/core")
+  target_sources(${COMPONENT_LIB} PRIVATE
+    "${_az_core}/az_span.c" "${_az_core}/az_log.c" "${_az_core}/az_precondition.c")
+  if(CONFIG_AZ_MQTT_ENABLE_PROXY OR CONFIG_AZ_MQTT_ENABLE_WEBSOCKETS)
+    target_sources(${COMPONENT_LIB} PRIVATE "${_az_core}/az_base64.c")
+  endif()
+endif()

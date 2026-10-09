@@ -46,4 +46,11 @@ menu "az_mqtt"
             WebSockets) from deps/azure-sdk-for-c. Turn off when another component already
             compiles them, to avoid duplicate symbols.
 
+    config AZ_MQTT_AZ_CORE_COMPONENT
+        string "Component that compiles the azure-sdk-for-c sources"
+        depends on !AZ_MQTT_BUILD_AZ_CORE
+        default ""
+        help
+            az_mqtt links to it, so its archive follows az_mqtt's on the link line.
+
 endmenu

@@ -64,7 +64,7 @@ version, so the other one is not linked.
 | `v3`: mqttv3, mbedTLS, proxy, WebSockets, logging | -Og (ESP-IDF default) | 20,063 B | 565 B | 12 B | 0 |
 | `v5`: as `v3`, mqttv5 | -Og | 26,086 B | 615 B | 12 B | 0 |
 | `v3_tcp`: mqttv3, no TLS, no proxy, no WebSockets | -Og | 13,216 B | 368 B | 12 B | 0 |
-| `v5_min`: mqttv5, mbedTLS, no proxy, WebSockets, logging, preconditions | -Os | 16,397 B | 118 B | 0 | 0 |
+| `v5_min`: mqttv5, mbedTLS, no proxy, no WebSockets, no logging, no preconditions | -Os | 16,397 B | 118 B | 0 | 0 |
 
 DRAM: azure-sdk-for-c `az_log.c` (8 B) and `az_precondition.c` (4 B) callbacks.
 `az_mqtt_transport_sizeof()` (caller storage): 3,296 B with mbedTLS, 64 B without TLS.

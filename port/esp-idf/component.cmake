@@ -4,6 +4,11 @@
 # ESP-IDF component build, included by the top-level CMakeLists.txt under ESP_PLATFORM.
 # Options come from Kconfig (CONFIG_AZ_MQTT_*), not from the CMake options.
 
+# Kconfig values are not set during ESP-IDF's requirement expansion.
+if(NOT CMAKE_BUILD_EARLY_EXPANSION AND NOT CONFIG_AZ_MQTT_ENABLE_MQTTV3 AND NOT CONFIG_AZ_MQTT_ENABLE_MQTTV5)
+  message(FATAL_ERROR "Enable at least one of AZ_MQTT_ENABLE_MQTTV3 and AZ_MQTT_ENABLE_MQTTV5")
+endif()
+
 set(_root "${CMAKE_CURRENT_LIST_DIR}/../..")
 set(_az_core "${_root}/deps/azure-sdk-for-c/sdk")
 
@@ -48,8 +53,8 @@ idf_component_register(
   SRCS ${_srcs} ${_az_core_srcs}
   INCLUDE_DIRS "${_root}/inc" "${_az_core}/inc"
   PRIV_INCLUDE_DIRS "${_root}/src/core" "${_root}/src/platform"
-  REQUIRES mbedtls
-  PRIV_REQUIRES lwip)
+  # Private, and not per Kconfig: requirements are resolved before Kconfig values exist.
+  PRIV_REQUIRES lwip mbedtls)
 
 set(_public_defs)
 if(NOT CONFIG_AZ_MQTT_ENABLE_PROXY)
@@ -67,5 +72,9 @@ endif()
 target_compile_definitions(${COMPONENT_LIB} PUBLIC ${_public_defs})
 if(CONFIG_AZ_MQTT_TLS_MBEDTLS)
   target_compile_definitions(${COMPONENT_LIB} PRIVATE AZ_MQTT_TLS_MBEDTLS)
+endif()
+if(NOT CONFIG_AZ_MQTT_BUILD_AZ_CORE AND NOT CONFIG_AZ_MQTT_AZ_CORE_COMPONENT STREQUAL "")
+  idf_component_get_property(_az_core_lib ${CONFIG_AZ_MQTT_AZ_CORE_COMPONENT} COMPONENT_LIB)
+  target_link_libraries(${COMPONENT_LIB} PUBLIC ${_az_core_lib})
 endif()
 

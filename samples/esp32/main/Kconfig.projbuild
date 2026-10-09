@@ -11,6 +11,7 @@ menu "az_mqtt sample"
 
     config AZ_MQTT_SAMPLE_BROKER_PORT
         int "Broker port"
+        range 1 65535
         default 8883 if AZ_MQTT_SAMPLE_USE_TLS
         default 1883
 

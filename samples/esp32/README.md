@@ -20,6 +20,7 @@ Options (`idf.py menuconfig` → *az_mqtt*):
 | `AZ_MQTT_LOGGING` | y | n: `AZ_NO_LOGGING` |
 | `AZ_MQTT_PRECONDITIONS` | y | n: `AZ_NO_PRECONDITION_CHECKING` |
 | `AZ_MQTT_BUILD_AZ_CORE` | y | n when another component already compiles azure-sdk-for-c `az_span.c`, `az_log.c`, `az_precondition.c`, `az_base64.c` |
+| `AZ_MQTT_AZ_CORE_COMPONENT` | "" | with `AZ_MQTT_BUILD_AZ_CORE=n`: that component; az_mqtt links to it |
 
 The platform layer is the POSIX one, over lwIP sockets; time is `clock_gettime(CLOCK_MONOTONIC)`
 and randomness `getrandom()` (`esp_fill_random()`). TLS trust comes from `ca_cert_pem`, or from
@@ -29,7 +30,7 @@ task stack.
 
 ## Build and run
 
-ESP-IDF v6.0 or later (mbedTLS 4); v5.1+ (mbedTLS 3) should work but is not tested in CI.
+ESP-IDF v6.0 or later (mbedTLS 4).
 
 ```bash
 idf.py set-target esp32
@@ -42,7 +43,8 @@ ESP-IDF certificate bundle.
 
 ## CI and QEMU
 
-[eng/ci/esp-idf.sh](../../eng/ci/esp-idf.sh) `build` builds each [ci/sdkconfig.ci.*](ci) variant;
+[eng/ci/esp-idf.sh](../../eng/ci/esp-idf.sh) `build` builds each [ci/sdkconfig.ci.*](ci) variant
+(`v3_ext_core`: `main` compiles the azure-sdk-for-c sources);
 `qemu` runs the sample in QEMU (OpenCores Ethernet, [ci/sdkconfig.qemu](ci/sdkconfig.qemu)) against
 a local Mosquitto: mqttv3 and mqttv5 over TLS, mqttv3 over TCP, and a server whose CA is not
 trusted (must fail with `AZ_MQTT_ERROR_TLS_VERIFY`).
