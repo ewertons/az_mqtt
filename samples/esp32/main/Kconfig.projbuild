@@ -36,10 +36,11 @@ menu "az_mqtt sample"
 
     config AZ_MQTT_SAMPLE_CLIENT_ID
         string "Client ID prefix"
-        default "az-mqtt-esp32-sample"
+        default "az-esp32"
         help
             "-" and the device's base MAC address (12 hex digits) are appended, so devices
-            sharing a broker do not take over each other's session.
+            sharing a broker do not take over each other's session. MQTT 3.1.1 brokers only
+            have to accept client IDs of up to 23 bytes: keep the prefix to 10 bytes or less.
 
     config AZ_MQTT_SAMPLE_TOPIC
         string "Topic"
