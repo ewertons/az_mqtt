@@ -1,0 +1,49 @@
+menu "az_mqtt sample"
+
+    config AZ_MQTT_SAMPLE_BROKER_HOST
+        string "Broker host name or IP address"
+        default "test.mosquitto.org"
+
+    config AZ_MQTT_SAMPLE_USE_TLS
+        bool "TLS"
+        default y
+        depends on AZ_MQTT_TLS_MBEDTLS
+
+    config AZ_MQTT_SAMPLE_BROKER_PORT
+        int "Broker port"
+        range 1 65535
+        default 8883 if AZ_MQTT_SAMPLE_USE_TLS
+        default 1883
+
+    config AZ_MQTT_SAMPLE_CA_PEM_FILE
+        string "CA certificate (PEM file, relative to the project directory)"
+        default ""
+        depends on AZ_MQTT_SAMPLE_USE_TLS
+        help
+            Empty: the server is verified with the ESP-IDF certificate bundle.
+
+    choice AZ_MQTT_SAMPLE_VERSION
+        prompt "MQTT version"
+        default AZ_MQTT_SAMPLE_MQTTV3
+
+        config AZ_MQTT_SAMPLE_MQTTV3
+            bool "3.1.1"
+            depends on AZ_MQTT_ENABLE_MQTTV3
+        config AZ_MQTT_SAMPLE_MQTTV5
+            bool "5.0"
+            depends on AZ_MQTT_ENABLE_MQTTV5
+    endchoice
+
+    config AZ_MQTT_SAMPLE_CLIENT_ID
+        string "Client ID prefix"
+        default "az-esp32"
+        help
+            "-" and the device's base MAC address (12 hex digits) are appended, so devices
+            sharing a broker do not take over each other's session. MQTT 3.1.1 brokers only
+            have to accept client IDs of up to 23 bytes: keep the prefix to 10 bytes or less.
+
+    config AZ_MQTT_SAMPLE_TOPIC
+        string "Topic"
+        default "az-mqtt-sample/esp32"
+
+endmenu
