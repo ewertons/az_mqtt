@@ -51,6 +51,6 @@ menu "az_mqtt"
         depends on !AZ_MQTT_BUILD_AZ_CORE
         default ""
         help
-            az_mqtt links to it, so its archive follows az_mqtt's on the link line.
+            Required. az_mqtt links to it, so its archive follows az_mqtt's on the link line.
 
 endmenu

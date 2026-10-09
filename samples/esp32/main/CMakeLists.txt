@@ -3,7 +3,7 @@
 
 idf_component_register(
   SRCS "app_main.c"
-  PRIV_REQUIRES az_mqtt protocol_examples_common nvs_flash esp_netif esp_event esp_timer mbedtls)
+  PRIV_REQUIRES az_mqtt protocol_examples_common nvs_flash esp_netif esp_event esp_timer esp_hw_support mbedtls)
 
 if(CONFIG_AZ_MQTT_SAMPLE_USE_TLS AND NOT CONFIG_AZ_MQTT_SAMPLE_CA_PEM_FILE STREQUAL "")
   # The CA path is relative to the project directory.

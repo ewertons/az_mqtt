@@ -23,12 +23,14 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_crt_bundle.h"
 #include "esp_event.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_timer.h"
 #include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
@@ -133,7 +135,21 @@ static bool run_sample(void)
   options.inflight_control_buffer
       = az_span_create((uint8_t*)s_inflight, (int32_t)sizeof(s_inflight));
   options.connect_options = _V(connect_options_default)();
-  options.connect_options.client_id = AZ_SPAN_FROM_STR(CONFIG_AZ_MQTT_SAMPLE_CLIENT_ID);
+  static char client_id[sizeof(CONFIG_AZ_MQTT_SAMPLE_CLIENT_ID) + 13];
+  uint8_t mac[6];
+  if (esp_read_mac(mac, ESP_MAC_BASE) != ESP_OK)
+  {
+    ESP_LOGE(TAG, "cannot read the MAC address");
+    return false;
+  }
+  int const id_len = snprintf(
+      client_id,
+      sizeof(client_id),
+      "%s-%02x%02x%02x%02x%02x%02x",
+      CONFIG_AZ_MQTT_SAMPLE_CLIENT_ID,
+      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  options.connect_options.client_id = az_span_create((uint8_t*)client_id, id_len);
+  ESP_LOGI(TAG, "client ID %s", client_id);
   options.on_connack = on_connack;
   options.on_puback = on_puback;
   options.on_transport_error = on_transport_error;
