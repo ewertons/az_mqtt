@@ -102,6 +102,11 @@ In another CMake project, `add_subdirectory()` this directory and link `az_mqtt:
 `az_mqtt::mqttv5`. If the project already builds azure-sdk-for-c (target `az_core`), az_mqtt uses
 it instead of `deps/azure-sdk-for-c`.
 
+### ESP-IDF
+
+The repository root is also an ESP-IDF component (options in [Kconfig](Kconfig)); see
+[samples/esp32](samples/esp32/README.md).
+
 ### Migrating from the previous `az_mqtt5` / `az_mqtt3` trees
 
 - Names common to both versions moved to the core. Rename `az_mqttN_` / `AZ_MQTTN_` to `az_mqtt_` / `AZ_MQTT_` for:
@@ -171,6 +176,7 @@ Warnings in our code are errors in every job.
 | Subproject | `add_subdirectory()` from a parent project, with the parent's azure-sdk-for-c and with the bundled one; fails if the parent's cache changes ([tests/subproject](tests/subproject/CMakeLists.txt)) |
 | Hardened | Release build with `_FORTIFY_SOURCE=3`, stack protector, CET, full RELRO and PIE, verified on every executable, then all tests |
 | Windows | MSVC `/W4 /WX`, Schannel, all tests |
+| ESP-IDF | ESP-IDF v6.0.3 (esp32): the [ESP32 sample](samples/esp32/README.md) in each `ci/sdkconfig.ci.*` variant, then in QEMU against a local Mosquitto (TLS, TCP, untrusted CA) |
 
 The Linux steps are scripts, so the same run works locally:
 
