@@ -103,4 +103,18 @@ elseif(AZ_MQTT_TLS_BACKEND_RESOLVED STREQUAL "none")
 else()
   # Uses only the library API, so it runs on any TLS backend.
   add_az_mqtt_e2e_test(ssl_posix test_ssl_posix.c E2E_CA_CERT_PATH="${E2E_CA_CERT_PATH}")
+  if(AZ_MQTT_TLS_BACKEND_RESOLVED STREQUAL "mbedtls")
+    add_az_mqtt_e2e_test(tls_mbedtls_verify test_tls_mbedtls_verify.c
+      E2E_CA_CERT_PATH="${E2E_CA_CERT_PATH}")
+    foreach(version 3 5)
+      if(TARGET az_mqtt${version}_test_tls_mbedtls_verify)
+        if(MBEDTLS_INCLUDE_DIR)
+          target_include_directories(az_mqtt${version}_test_tls_mbedtls_verify SYSTEM PRIVATE
+            ${MBEDTLS_INCLUDE_DIR})
+        endif()
+        target_link_libraries(az_mqtt${version}_test_tls_mbedtls_verify PRIVATE
+          ${AZ_MQTT_MBEDTLS_LIBRARIES})
+      endif()
+    endforeach()
+  endif()
 endif()
