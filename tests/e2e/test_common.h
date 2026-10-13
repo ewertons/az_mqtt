@@ -63,6 +63,7 @@ typedef struct
   AZ_MQTT_T(on_unsuback_fn) on_unsuback;
   AZ_MQTT_T(on_puback_fn) on_puback;
   AZ_MQTT_T(on_pubcomp_fn) on_pubcomp;
+  AZ_MQTT_T(on_transport_error_fn) on_transport_error;
 #if AZ_MQTT_TEST_VERSION == 5
   AZ_MQTT_T(on_disconnect_fn) on_disconnect;
 #endif

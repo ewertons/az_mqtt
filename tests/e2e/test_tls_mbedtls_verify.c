@@ -19,6 +19,7 @@
 #include <mbedtls/ssl.h>
 #include <mbedtls/x509.h>
 
+#include "support/test_native_errors.h"
 #include "test_common.h"
 
 #include <string.h>
@@ -29,6 +30,13 @@
 
 static az_mqtt_e2e_fixture s_fixture;
 static int s_verify_calls;
+static test_native_errors s_errors;
+
+static void on_transport_error(AZ_MQTT_T(client)* client, az_mqtt_native_error const* error)
+{
+  (void)client;
+  test_native_errors_record(error, &s_errors);
+}
 
 /** @brief Rejects every certificate, as the certificate bundle does for an unknown root. */
 static int reject_all(void* context, mbedtls_x509_crt* crt, int depth, uint32_t* flags)
@@ -70,6 +78,7 @@ static az_result connect_with(int (*verify)(void*, mbedtls_x509_crt*, int, uint3
   hook.verify = verify;
   az_mqtt_e2e_fixture_reset(&s_fixture);
   s_verify_calls = 0;
+  test_native_errors_clear(&s_errors);
 
   static az_mqtt_tls_options tls_opts;
   tls_opts = az_mqtt_tls_options_default();
@@ -85,6 +94,7 @@ static az_result connect_with(int (*verify)(void*, mbedtls_x509_crt*, int, uint3
   params.keep_alive_seconds = 30;
   params.clean_start = true;
   params.tls_options = &tls_opts;
+  params.on_transport_error = on_transport_error;
 
   static AZ_MQTT_T(client) client;
   az_result rc = az_mqtt_e2e_init_client(&s_fixture, &client, &params);
@@ -112,6 +122,14 @@ static void test_verify_callback_rejection_is_tls_verify(void** state)
   (void)state;
   assert_int_equal(connect_with(reject_all, "test-tls-vrfy-02"), AZ_MQTT_ERROR_TLS_VERIFY);
   assert_true(s_verify_calls > 0);
+  // No verification flags to report; the TLS library's error carries the classification.
+  assert_int_equal(test_native_errors_with_source(&s_errors, AZ_MQTT_NATIVE_ERROR_TLS_VERIFY), 0);
+  assert_int_equal(test_native_errors_with_source(&s_errors, AZ_MQTT_NATIVE_ERROR_TLS), 1);
+  az_mqtt_native_error const* tls = test_native_errors_first_of(&s_errors, AZ_MQTT_ERROR_TLS_VERIFY);
+  assert_non_null(tls);
+  assert_int_equal(tls != NULL ? tls->source : 0, AZ_MQTT_NATIVE_ERROR_TLS);
+  assert_int_equal(tls != NULL ? tls->code : 0, MBEDTLS_ERR_X509_FATAL_ERROR);
+  assert_true(test_native_errors_belong_to(&s_errors, AZ_MQTT_ERROR_TLS_VERIFY, 1));
 }
 
 int main(void)
