@@ -61,6 +61,7 @@ az_result az_mqtt_e2e_init_client(
   opts.on_unsuback = params->on_unsuback;
   opts.on_puback = params->on_puback;
   opts.on_pubcomp = params->on_pubcomp;
+  opts.on_transport_error = params->on_transport_error;
 #if AZ_MQTT_TEST_VERSION == 5
   opts.on_disconnect = params->on_disconnect;
 
