@@ -1,6 +1,12 @@
 # Copyright (c) Microsoft. All rights reserved.
 # Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
+# ESP-IDF component (Kconfig options; see port/esp-idf).
+if(ESP_PLATFORM)
+  include(${CMAKE_CURRENT_LIST_DIR}/port/esp-idf/component.cmake)
+  return()
+endif()
+
 cmake_minimum_required(VERSION 3.14)
 project(az_mqtt LANGUAGES C)
 

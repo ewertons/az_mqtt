@@ -103,6 +103,30 @@ jobs:
       - name: Build as a subproject (parent's and bundled azure-sdk-for-c)
         run: eng/ci/subproject.sh
 
+  esp-idf:
+    name: ESP-IDF v6.0.3 (esp32)
+    runs-on: ubuntu-24.04
+    container: espressif/idf:v6.0.3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Install packages
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq mosquitto openssl
+      - name: Build the sample variants
+        shell: bash
+        run: |
+          git config --global --add safe.directory '*'
+          . "${IDF_PATH}/export.sh"
+          eng/ci/esp-idf.sh build
+      - name: Run in QEMU against a local Mosquitto
+        shell: bash
+        run: |
+          . "${IDF_PATH}/export.sh"
+          eng/ci/esp-idf.sh qemu
+
   sanitizers:
     name: ASan + UBSan
     runs-on: ubuntu-24.04

@@ -1,0 +1,3 @@
+# azure-sdk-for-c sources compiled by the application (samples/esp32/main).
+CONFIG_AZ_MQTT_BUILD_AZ_CORE=n
+CONFIG_AZ_MQTT_AZ_CORE_COMPONENT="main"
