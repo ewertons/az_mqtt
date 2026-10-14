@@ -201,6 +201,7 @@ static void codec_refuses_a_reader_that_changes_or_fails(void** state)
   assert_int_equal(az_mqtt5_codec_encode_publish(&s, &o, 0), AZ_ERROR_NOT_SUPPORTED);
 
   // A result that is neither AZ_OK, the end, nor an error is refused, not taken as the end.
+  // (az_result)0 is such a result: AZ_OK is 0x10000.
   r.passes = 0;
   r.fail_with = (az_result)0;
   s = AZ_SPAN_FROM_BUFFER(buf);
@@ -270,6 +271,51 @@ static void codec_refuses_property_sizes_that_overflow(void** state)
   assert_int_equal(az_mqtt5_codec_encode_publish(&s, &o, 0), AZ_ERROR_NOT_ENOUGH_SPACE);
 }
 
+/* Native property spans whose sizes overflow int32_t together: refused, not wrapped. Never read. */
+static void codec_refuses_native_property_sizes_that_overflow(void** state)
+{
+  (void)state;
+  az_mqtt5_publish_options o = az_mqtt5_publish_options_default();
+  o.topic = AZ_SPAN_FROM_STR("t");
+  o.content_type = az_span_create((uint8_t*)s_big, INT32_MAX);
+  o.correlation_data = az_span_create((uint8_t*)s_big, INT32_MAX);
+  uint8_t buf[64];
+  az_span s = AZ_SPAN_FROM_BUFFER(buf);
+  assert_int_equal(az_mqtt5_codec_encode_publish(&s, &o, 0), AZ_ERROR_NOT_ENOUGH_SPACE);
+}
+
+/* A Topic Name over 65,535 bytes is refused before it is read or sized. Never read. */
+static void codec_refuses_an_oversized_topic(void** state)
+{
+  (void)state;
+  az_mqtt5_publish_options o = az_mqtt5_publish_options_default();
+  o.topic = az_span_create((uint8_t*)s_big, INT32_MAX);
+  uint8_t buf[64];
+  az_span s = AZ_SPAN_FROM_BUFFER(buf);
+  assert_int_equal(az_mqtt5_codec_encode_publish(&s, &o, 0), AZ_ERROR_ARG);
+}
+
+/* A reader returning a property without increasing the cursor would loop forever. */
+static az_result read_stuck(void* context, int32_t* cursor, az_mqtt5_user_property* out)
+{
+  (void)context;
+  (void)cursor;
+  out->key = AZ_SPAN_FROM_STR("k");
+  out->value = AZ_SPAN_FROM_STR("v");
+  return AZ_OK;
+}
+
+static void codec_refuses_a_reader_that_does_not_advance(void** state)
+{
+  (void)state;
+  az_mqtt5_publish_options o = az_mqtt5_publish_options_default();
+  o.topic = AZ_SPAN_FROM_STR("t");
+  o.user_property_next = read_stuck;
+  uint8_t buf[64];
+  az_span s = AZ_SPAN_FROM_BUFFER(buf);
+  assert_int_equal(az_mqtt5_codec_encode_publish(&s, &o, 0), AZ_ERROR_ARG);
+}
+
 int main(void)
 {
   const struct CMUnitTest tests[] = {
@@ -279,6 +325,9 @@ int main(void)
     cmocka_unit_test(codec_refuses_a_reader_that_changes_or_fails),
     cmocka_unit_test(codec_refuses_a_remaining_length_past_the_vbi_maximum),
     cmocka_unit_test(codec_refuses_property_sizes_that_overflow),
+    cmocka_unit_test(codec_refuses_native_property_sizes_that_overflow),
+    cmocka_unit_test(codec_refuses_an_oversized_topic),
+    cmocka_unit_test(codec_refuses_a_reader_that_does_not_advance),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }

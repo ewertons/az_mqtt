@@ -1677,6 +1677,25 @@ static void a_publish_to_an_empty_or_wildcard_topic_is_refused(void** state)
   _teardown(&f);
 }
 
+#if AZ_MQTT_TEST_VERSION == 5
+/* A Topic Name over 65,535 bytes is refused before it is read: the span is never dereferenced. */
+static void a_publish_to_an_oversized_topic_is_refused_unread(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  static uint8_t one[1];
+  AZ_MQTT_T(publish_options) p = _publish_options(AZ_MQTT_QOS_AT_MOST_ONCE);
+  p.topic = az_span_create(one, INT32_MAX);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &p, NULL), AZ_ERROR_ARG);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+  assert_int_equal(test_server_publishes(f.server), 0);
+  _teardown(&f);
+}
+#endif
+
 static void a_second_connack_ends_the_session(void** state)
 {
   (void)state;
@@ -2581,6 +2600,9 @@ int main(void)
     cmocka_unit_test(a_second_connack_ends_the_session),
     cmocka_unit_test(a_subscription_to_an_empty_filter_is_refused),
     cmocka_unit_test(a_publish_to_an_empty_or_wildcard_topic_is_refused),
+#if AZ_MQTT_TEST_VERSION == 5
+    cmocka_unit_test(a_publish_to_an_oversized_topic_is_refused_unread),
+#endif
     cmocka_unit_test(a_pingresp_with_a_body_ends_the_session),
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(an_acknowledgement_with_a_disallowed_reason_ends_the_session),
