@@ -962,7 +962,9 @@ static az_result _check_tls_options(az_mqtt_tls_options const* tls_options)
 
 /**
  * @brief Schannel credentials into @p out, with the client certificate if @p with_cert. Schannel's
- * own server check is off (SCH_CRED_MANUAL_CRED_VALIDATION): _validate_server_certificate().
+ * own server check is off (SCH_CRED_MANUAL_CRED_VALIDATION): _validate_server_certificate(). With a
+ * client certificate, TLS 1.2 only: its server Certificate message, in the clear, is validated
+ * before the client certificate is sent.
  */
 static SECURITY_STATUS _acquire_cred(_tls_transport* transport, bool with_cert, CredHandle* out)
 {
@@ -970,6 +972,10 @@ static SECURITY_STATUS _acquire_cred(_tls_transport* transport, bool with_cert, 
   memset(&cred, 0, sizeof(cred));
   cred.dwVersion = SCHANNEL_CRED_VERSION;
   cred.dwFlags = SCH_CRED_MANUAL_CRED_VALIDATION | SCH_USE_STRONG_CRYPTO | SCH_CRED_NO_DEFAULT_CREDS;
+  if (transport->client_cert != NULL)
+  {
+    cred.grbitEnabledProtocols = SP_PROT_TLS1_2_CLIENT;
+  }
   if (with_cert)
   {
     cred.cCreds = 1;
