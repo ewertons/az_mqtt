@@ -42,15 +42,17 @@ static void reset_state(void)
   s_connack_reason = -1;
 }
 
-static az_result init_tls_client(AZ_MQTT_T(client)* client, az_span client_id, uint16_t port)
+static az_result init_tls_client_with_ca(
+    AZ_MQTT_T(client)* client,
+    az_span client_id,
+    uint16_t port,
+    az_span ca_cert_path)
 {
   az_mqtt_e2e_fixture_reset(&s_fixture);
 
   static az_mqtt_tls_options tls_opts;
   tls_opts = az_mqtt_tls_options_default();
-#if E2E_WIN32_TLS_BACKEND_AVAILABLE
-  tls_opts.ca_cert_path = AZ_SPAN_FROM_STR(E2E_CA_CERT_PATH);
-#endif
+  tls_opts.ca_cert_path = ca_cert_path;
 
   az_mqtt_e2e_client_params params;
   memset(&params, 0, sizeof(params));
@@ -63,6 +65,15 @@ static az_result init_tls_client(AZ_MQTT_T(client)* client, az_span client_id, u
   params.on_connack = on_connack;
 
   return az_mqtt_e2e_init_client(&s_fixture, client, &params);
+}
+
+static az_result init_tls_client(AZ_MQTT_T(client)* client, az_span client_id, uint16_t port)
+{
+#if E2E_WIN32_TLS_BACKEND_AVAILABLE
+  return init_tls_client_with_ca(client, client_id, port, AZ_SPAN_FROM_STR(E2E_CA_CERT_PATH));
+#else
+  return init_tls_client_with_ca(client, client_id, port, AZ_SPAN_EMPTY);
+#endif
 }
 
 static void test_tls_connect_and_disconnect_win32(void** state)
@@ -150,12 +161,60 @@ static void test_tls_client_auth_only_certificate_is_refused_win32(void** state)
   assert_false(s_connack_received);
 }
 
+#if E2E_WIN32_TLS_BACKEND_AVAILABLE
+/** @brief A CA file of many certificates over 64 KiB, the CA last: every one is trusted. */
+static void test_tls_ca_bundle_win32(void** state)
+{
+  (void)state;
+  reset_state();
+  char const* run_tls = getenv("AZ_MQTT_RUN_TLS_E2E");
+  if (run_tls == NULL || strcmp(run_tls, "1") != 0)
+  {
+    return; // Same opt-in as test_tls_connect_and_disconnect_win32.
+  }
+
+  AZ_MQTT_T(client) client;
+  az_result rc = init_tls_client_with_ca(
+      &client, AZ_SPAN_FROM_STR("test-tls-win32-04"), 8883, AZ_SPAN_FROM_STR(E2E_CA_BUNDLE_PATH));
+  assert_int_equal(rc, AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&client, 5000), AZ_OK);
+  assert_true(s_connack_received);
+  assert_int_equal(AZ_MQTT_TEST_DISCONNECT(&client), AZ_OK);
+}
+
+/** @brief The same bundle without the CA: the server is not trusted. */
+static void test_tls_ca_bundle_without_ca_is_refused_win32(void** state)
+{
+  (void)state;
+  reset_state();
+  char const* run_tls = getenv("AZ_MQTT_RUN_TLS_E2E");
+  if (run_tls == NULL || strcmp(run_tls, "1") != 0)
+  {
+    return; // Same opt-in as test_tls_connect_and_disconnect_win32.
+  }
+
+  AZ_MQTT_T(client) client;
+  az_result rc = init_tls_client_with_ca(
+      &client,
+      AZ_SPAN_FROM_STR("test-tls-win32-05"),
+      8883,
+      AZ_SPAN_FROM_STR(E2E_CA_BUNDLE_WITHOUT_CA_PATH));
+  assert_int_equal(rc, AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&client, 5000), AZ_MQTT_ERROR_TLS_VERIFY);
+  assert_false(s_connack_received);
+}
+#endif
+
 int main(void)
 {
   const struct CMUnitTest tests[] = {
     cmocka_unit_test(test_tls_connect_and_disconnect_win32),
     cmocka_unit_test(test_tls_started_connect_win32),
     cmocka_unit_test(test_tls_client_auth_only_certificate_is_refused_win32),
+#if E2E_WIN32_TLS_BACKEND_AVAILABLE
+    cmocka_unit_test(test_tls_ca_bundle_win32),
+    cmocka_unit_test(test_tls_ca_bundle_without_ca_is_refused_win32),
+#endif
   };
 
   return cmocka_run_group_tests(tests, NULL, NULL);

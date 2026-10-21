@@ -9,7 +9,9 @@
 #   eng/ci/start-broker.sh [work-dir]
 #
 # Mints a CA and a server certificate (SAN localhost, 127.0.0.1) and copies the
-# CA to tests/broker/certs/ca.crt, where the e2e tests look for it.
+# CA to tests/broker/certs/ca.crt, where the e2e tests look for it, with two
+# bundles over 64 KiB: ca-bundle.crt (other certificates, then the CA) and
+# ca-bundle-without-ca.crt (the same without the CA).
 # Needs openssl, mosquitto and mosquitto_pub on PATH.
 set -euo pipefail
 
@@ -39,6 +41,10 @@ openssl x509 -req -in "${w}/server.csr" -CA "${w}/ca.crt" -CAkey "${w}/ca.key" \
 
 mkdir -p "${root}/tests/broker/certs"
 cp "${work}/ca.crt" "${root}/tests/broker/certs/ca.crt"
+for _ in $(seq 80); do cat "${work}/client-auth.crt"; done \
+  > "${root}/tests/broker/certs/ca-bundle-without-ca.crt"
+cat "${root}/tests/broker/certs/ca-bundle-without-ca.crt" "${work}/ca.crt" \
+  > "${root}/tests/broker/certs/ca-bundle.crt"
 
 cat > "${work}/mosquitto.conf" <<CONF
 per_listener_settings false
