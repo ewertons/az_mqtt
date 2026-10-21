@@ -219,6 +219,9 @@ static bool s_persistent;
 /** @brief inflight_message_buffer bytes the next _setup() gives (then back to all 4096). */
 static int s_message_storage = 4096;
 
+/** @brief Next _setup() connects with a Will of QoS 3 (then reset). */
+static bool s_will_qos_3;
+
 /** @brief Next _setup() records the init result in s_init_rc instead of asserting success. */
 static bool s_init_may_fail;
 static az_result s_init_rc;
@@ -298,6 +301,14 @@ static void _setup(fixture* f, test_server_options const* server_options, uint16
     o.connect_options.password = AZ_SPAN_FROM_STR("SECRET-PASSWORD");
     o.connect_options.will = &s_will;
     f->ws_path = AZ_SPAN_FROM_STR("/SECRET-PATH");
+  }
+  if (s_will_qos_3)
+  {
+    s_will_qos_3 = false;
+    memset(&s_will, 0, sizeof(s_will));
+    s_will.topic = AZ_SPAN_FROM_STR("w");
+    s_will.qos = (az_mqtt_qos)3;
+    o.connect_options.will = &s_will;
   }
   if (so->websocket)
   {
@@ -732,6 +743,50 @@ static void inflight_slots_bound_requests(void** state)
   assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos0, NULL), AZ_OK);
   PUMP_UNTIL(&f, test_server_publishes(f.server) == 4);
   assert_int_equal(test_server_publishes(f.server), 4); // Refused requests were never sent.
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+  _teardown(&f);
+}
+
+static void a_will_qos_over_2_is_refused_before_connecting(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  s_will_qos_3 = true;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_ERROR_ARG);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_DISCONNECTED);
+  assert_int_equal(test_server_accepted(f.server), 0);
+  _teardown(&f);
+}
+
+static void out_of_range_subscription_options_are_refused_before_sending(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  s_inflight_slots = 1;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  AZ_MQTT_T(subscription) sub;
+  memset(&sub, 0, sizeof(sub));
+  sub.topic_filter = AZ_SPAN_FROM_STR("t");
+  sub.qos = (az_mqtt_qos)3;
+  assert_int_equal(AZ_MQTT_T(client_subscribe)(&f.client, &sub, 1, NULL), AZ_ERROR_ARG);
+#if AZ_MQTT_TEST_VERSION == 5
+  sub.qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
+  sub.retain_handling = (az_mqtt5_retain_handling)3;
+  assert_int_equal(AZ_MQTT_T(client_subscribe)(&f.client, &sub, 1, NULL), AZ_ERROR_ARG);
+  sub.retain_handling = AZ_MQTT5_RETAIN_HANDLING_SEND_AT_SUBSCRIBE;
+  sub.topic_filter = AZ_SPAN_FROM_STR("$share/g/t");
+  sub.no_local = true;
+  assert_int_equal(AZ_MQTT_T(client_subscribe)(&f.client, &sub, 1, NULL), AZ_ERROR_ARG);
+#endif
+  // The refused requests freed the only in-flight entry and sent nothing.
+  assert_int_equal(_subscribe(&f), AZ_OK);
+  PUMP_UNTIL(&f, g.subacks == 1);
+  _ignore(AZ_MQTT_T(client_process_loop)(&f.client, 200));
+  assert_int_equal(g.subacks, 1);
   assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
   _teardown(&f);
 }
@@ -2561,6 +2616,8 @@ int main(void)
     cmocka_unit_test(disconnect_cancels_a_started_connect),
     cmocka_unit_test(inflight_slots_bound_requests),
     cmocka_unit_test(acknowledged_requests_free_their_slots),
+    cmocka_unit_test(a_will_qos_over_2_is_refused_before_connecting),
+    cmocka_unit_test(out_of_range_subscription_options_are_refused_before_sending),
     cmocka_unit_test(a_held_packet_identifier_is_not_reused),
     cmocka_unit_test(a_session_end_abandons_what_is_in_flight),
     cmocka_unit_test(a_resumed_session_resends_pubrel_then_publishes_oldest_first),

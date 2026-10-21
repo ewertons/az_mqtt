@@ -327,7 +327,7 @@ AZ_NODISCARD az_result az_mqtt5_client_publish(
  * @param[out] out_packet_id  Packet ID assigned. Can be NULL.
  * @retval AZ_MQTT_ERROR_FLOW_CONTROL No free in-flight entry.
  * @retval AZ_ERROR_ARG No or over 65,535 Topic Filters, or one empty, with a misplaced wildcard or
- *         not valid UTF-8.
+ *         not valid UTF-8; a QoS or Retain Handling over 2; No Local on a Shared Subscription.
  * @retval AZ_MQTT_ERROR_PACKET_TOO_LARGE Over the server's Maximum Packet Size.
  */
 AZ_NODISCARD az_result az_mqtt5_client_subscribe(

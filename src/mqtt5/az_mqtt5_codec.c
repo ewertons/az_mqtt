@@ -518,6 +518,14 @@ az_mqtt5_codec_encode_connect(az_span* dest, az_mqtt5_connect_options const* opt
   _az_PRECONDITION_NOT_NULL(dest);
   _az_PRECONDITION_NOT_NULL(opts);
 
+  // Will QoS 3 is malformed (3.1.2.6); Authentication Data needs a Method (3.1.2.11.10).
+  if ((opts->will != NULL && !_az_mqtt_qos_valid(opts->will->qos))
+      || (az_span_size(opts->authentication_data) > 0
+          && az_span_size(opts->authentication_method) == 0))
+  {
+    return AZ_ERROR_ARG;
+  }
+
   int32_t remaining = _connect_remaining_length(opts);
 
   // Fixed header
@@ -781,6 +789,14 @@ AZ_NODISCARD az_result az_mqtt5_codec_encode_pubcomp(
 // SUBSCRIBE encoding
 // ============================================================================
 
+/** @brief Whether @p filter is a Shared Subscription's (4.8.2: starts with "$share/"). */
+static bool _is_shared_subscription(az_span filter)
+{
+  az_span const prefix = AZ_SPAN_FROM_STR("$share/");
+  return az_span_size(filter) >= az_span_size(prefix)
+      && az_span_is_content_equal(az_span_slice(filter, 0, az_span_size(prefix)), prefix);
+}
+
 AZ_NODISCARD az_result az_mqtt5_codec_encode_subscribe(
     az_span* dest,
     az_mqtt5_subscription const* subs,
@@ -797,6 +813,14 @@ AZ_NODISCARD az_result az_mqtt5_codec_encode_subscribe(
 
   for (int32_t i = 0; i < sub_count; i++)
   {
+    // 3.8.3.1: QoS and Retain Handling 3 are Protocol Errors, as is No Local on a Shared
+    // Subscription.
+    if (!_az_mqtt_qos_valid(subs[i].qos)
+        || (uint32_t)subs[i].retain_handling > (uint32_t)AZ_MQTT5_RETAIN_HANDLING_DO_NOT_SEND
+        || (subs[i].no_local && _is_shared_subscription(subs[i].topic_filter)))
+    {
+      return AZ_ERROR_ARG;
+    }
     remaining += 2 + az_span_size(subs[i].topic_filter) + 1; // string + options byte
   }
 
@@ -974,6 +998,13 @@ AZ_NODISCARD az_result az_mqtt5_codec_encode_auth(
     az_span authentication_data)
 {
   _az_PRECONDITION_NOT_NULL(dest);
+
+  // 3.15.2.2.2: the Authentication Method is required; only Success may go without Properties.
+  if (az_span_size(authentication_method) == 0
+      && (az_span_size(authentication_data) > 0 || reason_code != AZ_MQTT5_REASON_SUCCESS))
+  {
+    return AZ_ERROR_ARG;
+  }
 
   int32_t prop_len = 0;
   if (az_span_size(authentication_method) > 0)

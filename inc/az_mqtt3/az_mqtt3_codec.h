@@ -31,8 +31,8 @@
 
 /**
  * @brief Encode a CONNECT packet.
- * @retval AZ_ERROR_ARG A string not valid UTF-8 or over 65,535 bytes, or a Will Topic empty or
- * with a wildcard.
+ * @retval AZ_ERROR_ARG A string not valid UTF-8 or over 65,535 bytes, a Will Topic empty or with a
+ * wildcard, or a Will QoS over 2.
  */
 AZ_NODISCARD az_result
 az_mqtt3_codec_encode_connect(az_span* dest, az_mqtt3_connect_options const* opts);
@@ -61,7 +61,8 @@ AZ_NODISCARD az_result az_mqtt3_codec_encode_pubcomp(az_span* dest, uint16_t pac
 
 /**
  * @brief Encode a SUBSCRIBE packet. @pre @p sub_count > 0.
- * @retval AZ_ERROR_ARG A Topic Filter empty, with a misplaced wildcard or not valid UTF-8.
+ * @retval AZ_ERROR_ARG A Topic Filter empty, with a misplaced wildcard or not valid UTF-8, or a QoS
+ * over 2.
  */
 AZ_NODISCARD az_result az_mqtt3_codec_encode_subscribe(
     az_span* dest,
