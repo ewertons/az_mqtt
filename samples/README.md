@@ -26,7 +26,7 @@ The websocket samples are built only with `AZ_MQTT_ENABLE_WEBSOCKETS=ON` (the de
 | `AZ_MQTT_SAMPLE_USERNAME`, `AZ_MQTT_SAMPLE_PASSWORD` | MQTT credentials | none |
 | `AZ_MQTT_SAMPLE_TLS` | `1`: TLS for the websocket samples (wss) | `0` |
 | `AZ_MQTT_SAMPLE_CA_CERT` | CA certificate file (PEM) to trust | system store (OpenSSL, Schannel); mbedTLS has none: required |
-| `AZ_MQTT_SAMPLE_CLIENT_CERT`, `AZ_MQTT_SAMPLE_CLIENT_KEY` | Client certificate and key files (PEM): mutual TLS | none (not supported by Schannel) |
+| `AZ_MQTT_SAMPLE_CLIENT_CERT`, `AZ_MQTT_SAMPLE_CLIENT_KEY` | Client certificate and key files (PEM): mutual TLS | none |
 | `AZ_MQTT_SAMPLE_WEBSOCKET_PATH` | WebSocket request path | `/mqtt` |
 | `AZ_MQTT_SAMPLE_PROXY_HOST`, `AZ_MQTT_SAMPLE_PROXY_PORT` | HTTP CONNECT proxy | none (direct); port 3128 |
 | `AZ_MQTT_SAMPLE_PROXY_USERNAME`, `AZ_MQTT_SAMPLE_PROXY_PASSWORD` | Proxy credentials (HTTP Basic) | none |
