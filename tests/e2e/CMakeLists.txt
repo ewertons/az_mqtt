@@ -97,8 +97,7 @@ if(WIN32)
   add_executable(az_mqtt_test_tls_cert_request_win32 test_tls_cert_request_win32.c)
   target_include_directories(az_mqtt_test_tls_cert_request_win32 PRIVATE ${cmocka_SOURCE_DIR}/include)
   target_compile_definitions(az_mqtt_test_tls_cert_request_win32 PRIVATE
-    E2E_CA_CERT_PATH="${E2E_CA_CERT_PATH}" E2E_CERTS_DIR="${_e2e_certs}"
-    E2E_REQUIRING_SERVER_LOG="${PROJECT_SOURCE_DIR}/tests/broker/s_server_8886.log")
+    E2E_CA_CERT_PATH="${E2E_CA_CERT_PATH}" E2E_CERTS_DIR="${_e2e_certs}")
   target_link_libraries(az_mqtt_test_tls_cert_request_win32 PRIVATE az_mqtt::core cmocka ws2_32)
   az_mqtt_apply_warnings(az_mqtt_test_tls_cert_request_win32)
   add_test(NAME az_mqtt_test_tls_cert_request_win32 COMMAND az_mqtt_test_tls_cert_request_win32)
