@@ -94,7 +94,12 @@ typedef struct
    */
   az_span ca_cert_path;
 
-  /** @brief Client certificate file (PEM), then any chain certificates, for mutual TLS. */
+  /**
+   * @brief Client certificate file (PEM), then any chain certificates, for mutual TLS.
+   * Schannel sends only chain certificates it finds in the system stores: the chain certificates
+   * given (not self-issued ones) are added to the current user's intermediate CA store (CA), and
+   * stay there.
+   */
   az_span client_cert_path;
 
   /**
@@ -108,7 +113,7 @@ typedef struct
   /** @brief CA certificates, PEM in memory. */
   az_span ca_cert_pem;
 
-  /** @brief Client certificate, then any chain certificates, PEM in memory. */
+  /** @brief Client certificate, then any chain certificates, PEM in memory; as client_cert_path. */
   az_span client_cert_pem;
 
   /** @brief Client private key, PEM in memory; Schannel: as client_key_path. */

@@ -739,6 +739,51 @@ static az_result _check_key_matches(_tls_transport* transport)
 }
 
 /**
+ * @brief Add the chain certificates of the client store (all but the leaf and self-issued ones)
+ * to the user's intermediate CA store, where Schannel looks for the chain it sends; they stay.
+ */
+static az_result _publish_chain(_tls_transport* transport)
+{
+  HCERTSTORE user_ca = NULL;
+  DWORD err = ERROR_SUCCESS;
+  PCCERT_CONTEXT cert = NULL;
+  while (err == ERROR_SUCCESS
+         && (cert = CertEnumCertificatesInStore(transport->client_store, cert)) != NULL)
+  {
+    if (CertCompareCertificate(
+            X509_ASN_ENCODING, cert->pCertInfo, transport->client_cert->pCertInfo)
+        || CertCompareCertificateName(
+            X509_ASN_ENCODING, &cert->pCertInfo->Issuer, &cert->pCertInfo->Subject))
+    {
+      continue;
+    }
+    if (user_ca == NULL)
+    {
+      user_ca = CertOpenStore(
+          CERT_STORE_PROV_SYSTEM_W, 0, 0, CERT_SYSTEM_STORE_CURRENT_USER, L"CA");
+      if (user_ca == NULL)
+      {
+        err = GetLastError();
+        break;
+      }
+    }
+    if (!CertAddCertificateContextToStore(user_ca, cert, CERT_STORE_ADD_USE_EXISTING, NULL))
+    {
+      err = GetLastError();
+    }
+  }
+  if (cert != NULL)
+  {
+    CertFreeCertificateContext(cert); // Left early.
+  }
+  if (user_ca != NULL)
+  {
+    CertCloseStore(user_ca, 0);
+  }
+  return err == ERROR_SUCCESS ? AZ_OK : _setup_failure(transport, err);
+}
+
+/**
  * @brief Load the client certificate (with any chain after it) and its key of @p tls_options; the
  * key is imported for the session and tied to the certificate. Freed by _tls_free().
  */
@@ -753,6 +798,10 @@ static az_result _load_client_identity(
     rc = az_span_size(tls_options->client_cert_path) > 0
         ? _add_cert_file(transport, tls_options->client_cert_path, store, &transport->client_cert)
         : _add_cert_pem(transport, tls_options->client_cert_pem, store, &transport->client_cert);
+  }
+  if (az_result_succeeded(rc))
+  {
+    rc = _publish_chain(transport);
   }
   if (az_result_failed(rc))
   {
