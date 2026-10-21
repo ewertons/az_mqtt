@@ -90,7 +90,9 @@ if(WIN32)
   add_az_mqtt_e2e_test(ssl_win32 test_ssl_win32.c
     E2E_WIN32_TLS_BACKEND_AVAILABLE=1 E2E_CA_CERT_PATH="${E2E_CA_CERT_PATH}"
     E2E_CA_BUNDLE_PATH="${_e2e_certs}/ca-bundle.crt"
-    E2E_CA_BUNDLE_WITHOUT_CA_PATH="${_e2e_certs}/ca-bundle-without-ca.crt")
+    E2E_CA_BUNDLE_WITHOUT_CA_PATH="${_e2e_certs}/ca-bundle-without-ca.crt"
+    E2E_CA_BUNDLE_TRUNCATED_PATH="${_e2e_certs}/ca-bundle-truncated.crt"
+    E2E_CA_BUNDLE_OVERSIZED_PATH="${_e2e_certs}/ca-bundle-oversized.crt")
   if(AZ_MQTT_ENABLE_PROXY)
     # Transport only (no MQTT version); the proxy observes the TLS records.
     add_executable(az_mqtt_test_close_notify_win32 test_close_notify_win32.c e2e_proxy.c)

@@ -11,7 +11,9 @@
 # Mints a CA and a server certificate (SAN localhost, 127.0.0.1) and copies the
 # CA to tests/broker/certs/ca.crt, where the e2e tests look for it, with two
 # bundles over 64 KiB: ca-bundle.crt (other certificates, then the CA) and
-# ca-bundle-without-ca.crt (the same without the CA).
+# ca-bundle-without-ca.crt (the same without the CA); and two the CA cannot be
+# loaded from: the CA, then a truncated certificate (ca-bundle-truncated.crt) or
+# one over 32 KiB of PEM (ca-bundle-oversized.crt).
 # Needs openssl, mosquitto and mosquitto_pub on PATH.
 set -euo pipefail
 
@@ -45,6 +47,14 @@ for _ in $(seq 80); do cat "${work}/client-auth.crt"; done \
   > "${root}/tests/broker/certs/ca-bundle-without-ca.crt"
 cat "${root}/tests/broker/certs/ca-bundle-without-ca.crt" "${work}/ca.crt" \
   > "${root}/tests/broker/certs/ca-bundle.crt"
+{ cat "${work}/ca.crt"; head -c 600 "${work}/client-auth.crt"; } \
+  > "${root}/tests/broker/certs/ca-bundle-truncated.crt"
+{
+  cat "${work}/ca.crt"
+  echo "-----BEGIN CERTIFICATE-----"
+  for _ in $(seq 640); do printf '%064d\n' 0 | tr 0 A; done
+  echo "-----END CERTIFICATE-----"
+} > "${root}/tests/broker/certs/ca-bundle-oversized.crt"
 
 cat > "${work}/mosquitto.conf" <<CONF
 per_listener_settings false

@@ -203,6 +203,39 @@ static void test_tls_ca_bundle_without_ca_is_refused_win32(void** state)
   assert_int_equal(AZ_MQTT_T(client_connect)(&client, 5000), AZ_MQTT_ERROR_TLS_VERIFY);
   assert_false(s_connack_received);
 }
+
+/** @brief A CA file that does not load whole fails setup, though it starts with the CA. */
+static void assert_ca_file_refused(char const* client_id, char const* ca_path)
+{
+  reset_state();
+  char const* run_tls = getenv("AZ_MQTT_RUN_TLS_E2E");
+  if (run_tls == NULL || strcmp(run_tls, "1") != 0)
+  {
+    return; // Same opt-in as test_tls_connect_and_disconnect_win32.
+  }
+
+  AZ_MQTT_T(client) client;
+  az_result rc = init_tls_client_with_ca(
+      &client, az_span_create_from_str((char*)(uintptr_t)client_id), 8883,
+      az_span_create_from_str((char*)(uintptr_t)ca_path));
+  assert_int_equal(rc, AZ_OK);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&client, 5000), AZ_MQTT_ERROR_TRANSPORT);
+  assert_false(s_connack_received);
+}
+
+/** @brief The CA, then a certificate cut short. */
+static void test_tls_ca_bundle_truncated_is_refused_win32(void** state)
+{
+  (void)state;
+  assert_ca_file_refused("test-tls-win32-06", E2E_CA_BUNDLE_TRUNCATED_PATH);
+}
+
+/** @brief The CA, then a certificate over 32 KiB of PEM. */
+static void test_tls_ca_bundle_oversized_is_refused_win32(void** state)
+{
+  (void)state;
+  assert_ca_file_refused("test-tls-win32-07", E2E_CA_BUNDLE_OVERSIZED_PATH);
+}
 #endif
 
 int main(void)
@@ -214,6 +247,8 @@ int main(void)
 #if E2E_WIN32_TLS_BACKEND_AVAILABLE
     cmocka_unit_test(test_tls_ca_bundle_win32),
     cmocka_unit_test(test_tls_ca_bundle_without_ca_is_refused_win32),
+    cmocka_unit_test(test_tls_ca_bundle_truncated_is_refused_win32),
+    cmocka_unit_test(test_tls_ca_bundle_oversized_is_refused_win32),
 #endif
   };
 
