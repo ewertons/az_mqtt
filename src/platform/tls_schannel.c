@@ -62,6 +62,9 @@ typedef struct
   bool cert_request_answered;
   /** @brief ISC_REQ_* of InitializeSecurityContext(): _REQUEST_FLAGS, then USE_SUPPLIED_CREDS. */
   unsigned long request_flags;
+  /** @brief The credentials without the client certificate, once replaced by those with it. */
+  CredHandle cred_initial;
+  bool has_cred_initial;
   uint8_t stage;
   /** @brief close_notify sent (or tried) on this connection. */
   bool closing;
@@ -892,6 +895,11 @@ static void _tls_free(_tls_transport* transport)
   {
     FreeCredentialsHandle(&transport->cred);
   }
+  if (transport->has_cred_initial)
+  {
+    FreeCredentialsHandle(&transport->cred_initial);
+    transport->has_cred_initial = false;
+  }
   if (transport->custom_root != NULL)
   {
     CertCloseStore(transport->custom_root, 0);
@@ -1104,8 +1112,8 @@ static az_result _received_server_certificate(_tls_transport* transport, PCCERT_
       &transport->context, SECPKG_ATTR_REMOTE_CERT_CONTEXT, (PVOID)out);
   if (sec != SEC_E_OK || *out == NULL)
   {
-    _report(transport, AZ_MQTT_NATIVE_ERROR_TLS, (DWORD)sec, AZ_MQTT_ERROR_TLS_HANDSHAKE);
-    return AZ_MQTT_ERROR_TLS_HANDSHAKE;
+    _report(transport, AZ_MQTT_NATIVE_ERROR_TLS_VERIFY, (DWORD)sec, AZ_MQTT_ERROR_TLS_VERIFY);
+    return AZ_MQTT_ERROR_TLS_VERIFY;
   }
   az_result const rc = _validate_server_certificate(transport, *out);
   if (az_result_failed(rc))
@@ -1136,7 +1144,8 @@ static az_result _present_client_certificate(_tls_transport* transport)
     _report(transport, AZ_MQTT_NATIVE_ERROR_TLS, (DWORD)sec, AZ_MQTT_ERROR_TLS_HANDSHAKE);
     return AZ_MQTT_ERROR_TLS_HANDSHAKE;
   }
-  FreeCredentialsHandle(&transport->cred);
+  transport->cred_initial = transport->cred; // The context may still refer to it.
+  transport->has_cred_initial = true;
   transport->cred = cred;
   return AZ_OK;
 }
