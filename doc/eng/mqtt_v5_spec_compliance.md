@@ -78,7 +78,7 @@ to the current implementation status of `az_mqttv5` (on `az_mqtt_core`).
 | 63 | Packet Identifier must be unique across all in-flight packets | [[MQTT-2.2.1-3]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | An identifier is skipped while an outgoing request holds it in the caller's `inflight_control_buffer` entries; with no free entry, QoS > 0 PUBLISH, SUBSCRIBE and UNSUBSCRIBE fail with `AZ_MQTT_ERROR_FLOW_CONTROL` | [src/core/az_mqtt_core.c](../../src/core/az_mqtt_core.c) |
 | 64 | DUP flag on received PUBLISH decoded | [§3.3.1.1](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `publish_data.dup` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 65 | Retain flag encoded/decoded | [§3.3.1.3](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `publish_options.retain` / `publish_data.retain` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
-| 66 | Retain flag must be 0 when forwarding (server responsibility; client receives them correctly) | [§3.3.1.3](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | Client only receives; retain bit from server in received PUBLISH | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
+| 66 | RETAIN on forwarded PUBLISH (server responsibility): 0 if Retain As Published=0, the publisher's flag if 1; retained messages sent for a new subscription have it set to 1 | [[MQTT-3.3.1-12]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html), [[MQTT-3.3.1-13]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html), [§3.3.1.3](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | Client only receives; the flag is decoded as sent (`publish_data.retain`) | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 67 | Topic Name: must not contain wildcard characters in send | [[MQTT-3.3.2-2]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `az_mqtt5_codec_encode_publish` and `az_mqtt5_client_publish`: a wildcard, or empty without a Topic Alias, is AZ_ERROR_ARG | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 68 | Payload Format Indicator property | [§3.3.2.3.2](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `publish_options.payload_format_indicator` / `publish_data.payload_format_indicator` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 69 | Message Expiry Interval property | [§3.3.2.3.3](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `publish_options.message_expiry_interval` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
@@ -115,7 +115,7 @@ to the current implementation status of `az_mqttv5` (on `az_mqtt_core`).
 | 97 | Subscription Options: Retain Handling | [§3.8.3.1](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `subscription.retain_handling` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 98 | Subscription Identifier property (SUBSCRIBE send) | [§3.8.2.1.2](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | Not supported in `az_mqtt5_codec_encode_subscribe`; no field in the struct | |
 | 99 | User Property (SUBSCRIBE) | [§3.8.2.1.3](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | Not supported in `az_mqtt5_codec_encode_subscribe` | |
-| 100 | Bits 6 and 7 of Subscription Options reserved, must be 0 | [[MQTT-3.8.3-5]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | Options byte built only from known bits; `qos` and `retain_handling` are not range-checked | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
+| 100 | Bits 6 and 7 of Subscription Options reserved, must be 0 | [[MQTT-3.8.3-5]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Partial | Bits 6-7 are 0 for valid `qos` and `retain_handling` values. Neither is range-checked: e.g. `retain_handling` 4 sets bit 6 | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | **SUBACK ([§3.9](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html))** |||||
 | 101 | SUBACK decoded — packet identifier, reason codes, user properties | [§3.9](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `az_mqtt5_codec_decode_suback`; a code count other than the SUBSCRIBE's filters is AZ_MQTT_ERROR_PROTOCOL | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c), [src/mqtt5/az_mqtt5_client.c](../../src/mqtt5/az_mqtt5_client.c) |
 | 102 | SUBACK reason string decoded | [§3.9.2.1.2](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `suback_data.reason_string` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
@@ -163,8 +163,8 @@ to the current implementation status of `az_mqttv5` (on `az_mqtt_core`).
 
 | Status | Count |
 |--------|-------|
-| Yes | 121 |
-| Partial | 2 |
+| Yes | 120 |
+| Partial | 3 |
 | No | 10 |
 
 ### Key gaps (client-facing impact)

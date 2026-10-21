@@ -63,7 +63,7 @@ to the current implementation status of `az_mqttv3` (on `az_mqtt_core`).
 | 45 | SUBSCRIBE encoded with fixed flags = 0x02 | [§3.8.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | `0x02` hard-coded in `az_mqtt3_codec_encode_subscribe` | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | 46 | SUBSCRIBE contains at least one Topic Filter | [§3.8.3](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | `az_mqtt3_client_subscribe`: a count of 0 or less is AZ_ERROR_ARG (the codec requires it as a precondition) | [src/mqtt3/az_mqtt3_client.c](../../src/mqtt3/az_mqtt3_client.c) |
 | 47 | Requested QoS (0, 1, or 2) | [§3.8.3](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | `subscription.qos` | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
-| 48 | Requested QoS: upper 6 bits reserved, must be 0 | [§3.8.3](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | Only QoS bits (0–1) set; bits 2–7 left as 0 (`qos` is not range-checked) | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
+| 48 | Requested QoS: upper 6 bits reserved, must be 0 | [§3.8.3](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Partial | Bits 2–7 are 0 for valid `qos` values (0–2). `qos` is not range-checked: e.g. 4 sets bit 2 | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | **SUBACK ([§3.9](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html))** |||||
 | 49 | SUBACK decoded — packet identifier and return codes (one per topic) | [§3.9](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | `az_mqtt3_codec_decode_suback`; a count other than the SUBSCRIBE's filters is AZ_MQTT_ERROR_PROTOCOL | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c), [src/mqtt3/az_mqtt3_client.c](../../src/mqtt3/az_mqtt3_client.c) |
 | 50 | SUBACK return codes: 0x00 (max QoS 0), 0x01 (max QoS 1), 0x02 (max QoS 2), 0x80 (failure) | [§3.9.3](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | Decoded and returned to caller | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
@@ -96,8 +96,8 @@ to the current implementation status of `az_mqttv3` (on `az_mqtt_core`).
 
 | Status | Count |
 |--------|-------|
-| Yes | 64 |
-| Partial | 1 |
+| Yes | 63 |
+| Partial | 2 |
 | No | 2 |
 
 ### Key gaps (client-facing impact)
