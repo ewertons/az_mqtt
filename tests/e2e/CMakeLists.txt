@@ -93,6 +93,14 @@ if(WIN32)
     E2E_CA_BUNDLE_WITHOUT_CA_PATH="${_e2e_certs}/ca-bundle-without-ca.crt"
     E2E_CA_BUNDLE_TRUNCATED_PATH="${_e2e_certs}/ca-bundle-truncated.crt"
     E2E_CA_BUNDLE_OVERSIZED_PATH="${_e2e_certs}/ca-bundle-oversized.crt")
+  # Transport only: a server that requests, or requires, a client certificate.
+  add_executable(az_mqtt_test_tls_cert_request_win32 test_tls_cert_request_win32.c)
+  target_include_directories(az_mqtt_test_tls_cert_request_win32 PRIVATE ${cmocka_SOURCE_DIR}/include)
+  target_compile_definitions(az_mqtt_test_tls_cert_request_win32 PRIVATE
+    E2E_CA_CERT_PATH="${E2E_CA_CERT_PATH}")
+  target_link_libraries(az_mqtt_test_tls_cert_request_win32 PRIVATE az_mqtt::core cmocka ws2_32)
+  az_mqtt_apply_warnings(az_mqtt_test_tls_cert_request_win32)
+  add_test(NAME az_mqtt_test_tls_cert_request_win32 COMMAND az_mqtt_test_tls_cert_request_win32)
   if(AZ_MQTT_ENABLE_PROXY)
     # Transport only (no MQTT version); the proxy observes the TLS records.
     add_executable(az_mqtt_test_close_notify_win32 test_close_notify_win32.c e2e_proxy.c)

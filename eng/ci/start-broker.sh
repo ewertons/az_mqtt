@@ -4,7 +4,8 @@
 #
 # Start a local Mosquitto for the e2e tests: plain MQTT on 1883, TLS on 8883,
 # MQTT over WebSockets on 8080 (ws) and 8081 (wss), and TLS on 8884 with a server
-# certificate whose Extended Key Usage is clientAuth only (clients must refuse it).
+# certificate whose Extended Key Usage is clientAuth only (clients must refuse it);
+# and TLS servers without MQTT that request (8885) or require (8886) a client certificate.
 #
 #   eng/ci/start-broker.sh [work-dir]
 #
@@ -83,11 +84,22 @@ if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet mosquitto
 fi
 
 nohup mosquitto -c "${w}/mosquitto.conf" > "${work}/mosquitto.log" 2>&1 &
+# TLS only (no MQTT): 8885 requests a client certificate (-verify), 8886 requires one (-Verify),
+# over TLS 1.2 so that the refusal ends the handshake (TLS 1.3 refuses after the client finished).
+tls_server() {
+  local port="$1"
+  shift
+  nohup openssl s_server -accept "${port}" -cert "${w}/server.crt" -key "${w}/server.key" \
+    -CAfile "${w}/ca.crt" "$@" -www -quiet < /dev/null > "${work}/s_server_${port}.log" 2>&1 &
+}
+tls_server 8885 -verify 1
+tls_server 8886 -Verify 1 -tls1_2
 
 for _ in $(seq 1 30); do
   if mosquitto_pub -h 127.0.0.1 -p 1883 -t ci/ready -m ok 2>/dev/null \
-    && mosquitto_pub -h localhost -p 8883 --cafile "${w}/ca.crt" -t ci/ready -m ok 2>/dev/null; then
-    echo "Mosquitto ready (1883, 8883, 8080, 8081, 8884)"
+    && mosquitto_pub -h localhost -p 8883 --cafile "${w}/ca.crt" -t ci/ready -m ok 2>/dev/null \
+    && openssl s_client -connect 127.0.0.1:8885 -brief < /dev/null > /dev/null 2>&1; then
+    echo "Mosquitto ready (1883, 8883, 8080, 8081, 8884); openssl s_server (8885, 8886)"
     exit 0
   fi
   sleep 1
