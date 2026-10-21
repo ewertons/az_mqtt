@@ -60,6 +60,8 @@ typedef struct
   bool handshake_done;
   /** @brief The server's certificate request was answered (client certificate, or none). */
   bool cert_request_answered;
+  /** @brief ISC_REQ_* of InitializeSecurityContext(): _REQUEST_FLAGS, then USE_SUPPLIED_CREDS. */
+  unsigned long request_flags;
   uint8_t stage;
   /** @brief close_notify sent (or tried) on this connection. */
   bool closing;
@@ -91,13 +93,14 @@ typedef struct
 #define _LOWER_T(transport) (&(transport)->lower->base)
 
 /**
- * @brief ISC_REQ_* of every InitializeSecurityContext() call. USE_SUPPLIED_CREDS: no client
- * certificate is ever picked from the user's store; a server that requests one gets none.
+ * @brief ISC_REQ_* of InitializeSecurityContext() until the server requests a client certificate.
+ * Without USE_SUPPLIED_CREDS, that request returns SEC_I_INCOMPLETE_CREDENTIALS (credentials have
+ * SCH_CRED_NO_DEFAULT_CREDS: none is picked from the user's store), so it can be answered; from
+ * then on with USE_SUPPLIED_CREDS (_tls_transport.request_flags).
  */
 #define _REQUEST_FLAGS                                                       \
   (ISC_REQ_SEQUENCE_DETECT | ISC_REQ_REPLAY_DETECT | ISC_REQ_CONFIDENTIALITY \
-   | ISC_REQ_EXTENDED_ERROR | ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_STREAM       \
-   | ISC_REQ_USE_SUPPLIED_CREDS)
+   | ISC_REQ_EXTENDED_ERROR | ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_STREAM)
 
 static az_result _span_to_cstr(az_span src, char* buf, int32_t buf_size)
 {
@@ -914,6 +917,7 @@ static void _tls_free(_tls_transport* transport)
   transport->needs_read = false;
   transport->handshake_done = false;
   transport->cert_request_answered = false;
+  transport->request_flags = _REQUEST_FLAGS;
   transport->in_len = 0;
   transport->plain_pos = 0;
   transport->plain_len = 0;
@@ -1173,7 +1177,7 @@ static az_result _tls_handshake(_tls_transport* transport, int64_t deadline)
         &transport->cred,
         transport->has_context ? &transport->context : NULL,
         transport->host,
-        _REQUEST_FLAGS,
+        transport->request_flags,
         0,
         SECURITY_NATIVE_DREP,
         transport->has_context ? &in_desc : NULL,
@@ -1201,11 +1205,12 @@ static az_result _tls_handshake(_tls_transport* transport, int64_t deadline)
       continue;
     }
     // The server requested a client certificate: call again, with the same input, holding it (if
-    // any). Without one, a server that requires one then refuses the handshake.
+    // any) and with USE_SUPPLIED_CREDS. Without one, a server that requires one then refuses.
     if (status == SEC_I_INCOMPLETE_CREDENTIALS && transport->has_context
         && !transport->cert_request_answered)
     {
       transport->cert_request_answered = true;
+      transport->request_flags = _REQUEST_FLAGS | ISC_REQ_USE_SUPPLIED_CREDS;
       if (transport->client_cert != NULL)
       {
         rc = _present_client_certificate(transport);
@@ -1279,7 +1284,7 @@ static void _send_close_notify(_tls_transport* transport)
         &transport->cred,
         &transport->context,
         transport->host,
-        _REQUEST_FLAGS,
+        transport->request_flags,
         0,
         SECURITY_NATIVE_DREP,
         NULL,
