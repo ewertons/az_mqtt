@@ -5,7 +5,8 @@
 # Start a local Mosquitto for the e2e tests: plain MQTT on 1883, TLS on 8883,
 # MQTT over WebSockets on 8080 (ws) and 8081 (wss), and TLS on 8884 with a server
 # certificate whose Extended Key Usage is clientAuth only (clients must refuse it);
-# and TLS servers without MQTT that request (8885) or require (8886) a client certificate.
+# and TLS servers without MQTT that request (8885) or require (8886) a client certificate, or
+# request one only by renegotiating (8887, Python with pyOpenSSL, installed here).
 #
 #   eng/ci/start-broker.sh [work-dir]
 #
@@ -19,7 +20,7 @@
 # .pkcs1.key, .encrypted.key with password "secret"), client-chain.crt (a leaf
 # under an intermediate CA, then the intermediate; key client-leaf.key), and the
 # self-signed client-untrusted (.crt, .key).
-# Needs openssl, mosquitto and mosquitto_pub on PATH.
+# Needs openssl, mosquitto, mosquitto_pub and Python 3 with pip on PATH.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -135,16 +136,31 @@ tls_server() {
 }
 tls_server 8885 -verify 1
 tls_server 8886 -Verify 2 -verify_return_error -tls1_2
+# 8887: TLS 1.2, a client certificate requested only by renegotiating (eng/ci/reneg_server.py).
+py=""
+for c in python python3; do
+  if "${c}" -c 'import sys; sys.exit(sys.version_info[0] != 3)' 2>/dev/null; then
+    py="${c}"
+    break
+  fi
+done
+[ -n "${py}" ] || { echo "Python 3 not found" >&2; exit 1; }
+"${py}" -m pip install --quiet --disable-pip-version-check --target "${w}/pylib" pyopenssl \
+  || { echo "pyOpenSSL install failed" >&2; exit 1; }
+PYTHONPATH="${w}/pylib" nohup "${py}" "$(native "${root}/eng/ci/reneg_server.py")" 8887 \
+  "${w}/server.crt" "${w}/server.key" "${w}/ca.crt" > "${work}/reneg_server.log" 2>&1 &
 
 for _ in $(seq 1 30); do
   if mosquitto_pub -h 127.0.0.1 -p 1883 -t ci/ready -m ok 2>/dev/null \
     && mosquitto_pub -h localhost -p 8883 --cafile "${w}/ca.crt" -t ci/ready -m ok 2>/dev/null \
-    && openssl s_client -connect 127.0.0.1:8885 -brief < /dev/null > /dev/null 2>&1; then
-    echo "Mosquitto ready (1883, 8883, 8080, 8081, 8884); openssl s_server (8885, 8886)"
+    && openssl s_client -connect 127.0.0.1:8885 -brief < /dev/null > /dev/null 2>&1 \
+    && openssl s_client -connect 127.0.0.1:8887 -brief < /dev/null > /dev/null 2>&1; then
+    echo "Mosquitto ready (1883, 8883, 8080, 8081, 8884); openssl s_server (8885, 8886);" \
+      "renegotiating server (8887)"
     exit 0
   fi
   sleep 1
 done
-echo "Mosquitto did not start:" >&2
-cat "${work}/mosquitto.log" >&2
+echo "Mosquitto or the TLS servers did not start:" >&2
+cat "${work}/mosquitto.log" "${work}/reneg_server.log" >&2
 exit 1

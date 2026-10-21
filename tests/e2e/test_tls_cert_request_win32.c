@@ -6,7 +6,8 @@
  * @brief Windows platform transport: servers that request, or require, a client certificate.
  *
  * eng/ci/start-broker.sh runs `openssl s_server` on 8885 (requests a certificate) and 8886
- * (requires one the CA issued), and mints the client certificates in tests/broker/certs.
+ * (requires one the CA issued), eng/ci/reneg_server.py on 8887 (requests one by renegotiating),
+ * and mints the client certificates in tests/broker/certs.
  */
 
 #include <setjmp.h>
@@ -168,6 +169,52 @@ static void an_untrusted_server_gets_no_certificate(void** state)
   assert_int_equal(connect_tls(8886, &tls), AZ_MQTT_ERROR_TLS_VERIFY);
 }
 
+/**
+ * @brief Ask the server on 8887 to renegotiate, requesting a client certificate; its one-line
+ * answer (the certificate it received, if any) into @p answer.
+ */
+static void renegotiate(az_mqtt_tls_options const* tls, char* answer, int32_t size)
+{
+  assert_int_equal(
+      az_mqtt_transport_connect(s_transport, AZ_SPAN_FROM_STR("localhost"), 8887, tls), AZ_OK);
+  assert_int_equal(az_mqtt_transport_send(s_transport, AZ_SPAN_FROM_STR("RENEG\n")), AZ_OK);
+  int32_t len = 0;
+  for (int i = 0; i < 100 && (len == 0 || answer[len - 1] != '\n'); i++)
+  {
+    az_span got;
+    if (az_result_failed(az_mqtt_transport_receive(
+            s_transport, az_span_create((uint8_t*)answer + len, size - 1 - len), 100, &got)))
+    {
+      break;
+    }
+    len += az_span_size(got);
+  }
+  answer[len] = '\0';
+  az_mqtt_transport_close(s_transport);
+}
+
+/** @brief A certificate requested by renegotiation, after the handshake, is presented. */
+static void a_certificate_requested_by_renegotiation_is_presented(void** state)
+{
+  (void)state;
+  char answer[128];
+  az_mqtt_tls_options tls = tls_default();
+  tls.client_cert_path = AZ_SPAN_FROM_STR(CERT("client-ec.crt"));
+  tls.client_key_path = AZ_SPAN_FROM_STR(CERT("client-ec.key"));
+  renegotiate(&tls, answer, (int32_t)sizeof(answer));
+  assert_string_equal(answer, "client certificate: client-ec\n");
+}
+
+/** @brief Without a client certificate, a renegotiation requesting one continues without it. */
+static void a_renegotiation_without_a_certificate_continues(void** state)
+{
+  (void)state;
+  char answer[128];
+  az_mqtt_tls_options const tls = tls_default();
+  renegotiate(&tls, answer, (int32_t)sizeof(answer));
+  assert_string_equal(answer, "no client certificate\n");
+}
+
 /** @brief Refused before connecting: another certificate's key, an encrypted key, no key. */
 static void an_unusable_key_is_refused(void** state)
 {
@@ -240,6 +287,8 @@ int main(void)
     cmocka_unit_test(the_chain_is_sent),
     cmocka_unit_test(an_untrusted_certificate_is_refused),
     cmocka_unit_test(an_untrusted_server_gets_no_certificate),
+    cmocka_unit_test(a_certificate_requested_by_renegotiation_is_presented),
+    cmocka_unit_test(a_renegotiation_without_a_certificate_continues),
     cmocka_unit_test(an_unusable_key_is_refused),
     cmocka_unit_test(the_imported_key_is_deleted),
   };
