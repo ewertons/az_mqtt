@@ -48,7 +48,7 @@ to the current implementation status of `az_mqttv5` (on `az_mqtt_core`).
 | 35 | Assigned Client Identifier decoded from CONNACK | [§3.2.2.3.7](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `connack_data.assigned_client_identifier` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | **CONNACK ([§3.2](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html))** |||||
 | 36 | Session Present flag decoded | [§3.2.2.1.1](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `connack_data.session_present`; reserved Acknowledge Flags bits 7-1 set ([MQTT-3.2.2-1](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html)) is a malformed packet | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
-| 37 | A client without Session State that receives Session Present=1 must close the Network Connection | [[MQTT-3.2.2-4]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | Not implemented: Session Present is not checked against the client's session state. Session Present=1 with a reason ≥ 0x80 ([MQTT-3.2.2-6](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html)) is a malformed packet | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
+| 37 | A client without Session State that receives Session Present=1 must close the Network Connection | [[MQTT-3.2.2-4]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | After Clean Start=1, Session Present=1 sends DISCONNECT 0x82 (Protocol Error) and closes with `AZ_MQTT_ERROR_PROTOCOL`. Session Present=1 with a reason ≥ 0x80 ([MQTT-3.2.2-6](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html)) is a malformed packet | [src/mqtt5/az_mqtt5_client.c](../../src/mqtt5/az_mqtt5_client.c), [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 38 | Session Expiry Interval property (CONNACK) decoded | [§3.2.2.3.2](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `connack_data.session_expiry_interval` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 39 | Receive Maximum property (CONNACK) decoded | [§3.2.2.3.3](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `connack_data.receive_maximum` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 40 | Receive Maximum from CONNACK must be honoured (flow control) | [[MQTT-3.3.4-7]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | Outgoing QoS > 0 PUBLISH (and PUBREL awaiting PUBCOMP) are counted against the CONNACK Receive Maximum; past it, `az_mqtt5_client_publish` fails with `AZ_MQTT_ERROR_FLOW_CONTROL` | [src/mqtt5/az_mqtt5_client.c](../../src/mqtt5/az_mqtt5_client.c) |
@@ -163,9 +163,9 @@ to the current implementation status of `az_mqttv5` (on `az_mqtt_core`).
 
 | Status | Count |
 |--------|-------|
-| Yes | 123 |
+| Yes | 124 |
 | Partial | 2 |
-| No | 8 |
+| No | 7 |
 
 ### Key gaps (client-facing impact)
 
@@ -174,5 +174,4 @@ to the current implementation status of `az_mqttv5` (on `az_mqtt_core`).
 | A QoS 1/2 PUBLISH given an expiry interval is dropped instead of resent once it elapsed (opt-in; MQTT itself would resend it) | [[MQTT-4.4.0-1]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) |
 | Enhanced authentication (AUTH exchange) not implemented | [§4.12](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) |
 | Topic Alias mapping table not maintained | [§3.3.2.3.4](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) |
-| Session Present=1 without client Session State is not detected | [[MQTT-3.2.2-4]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) |
 | Reason codes not checked against the per-packet set: DISCONNECT and AUTH; PUBACK, PUBREC, PUBREL and PUBCOMP in `az_mqtt5_codec_decode_ack` (`az_mqtt5_client` checks them). CONNACK, SUBACK and UNSUBACK are checked | [§3.4.2.1](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html)–[§3.7.2.1](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html), [§3.14.2.1](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html), [§3.15.2.1](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) |

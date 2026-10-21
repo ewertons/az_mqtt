@@ -55,6 +55,7 @@ static struct
 {
   int connacks;
   int connack_reason;
+  bool connack_session_present;
   int subacks;
   int32_t suback_count;
   int publishes;
@@ -98,6 +99,7 @@ static void _on_connack(AZ_MQTT_T(client)* c, AZ_MQTT_T(connack_data) const* d)
 {
   g.connacks++;
   g.connack_reason = AZ_MQTT_TEST_CONNACK_CODE(d);
+  g.connack_session_present = d->session_present;
   if (g.publish_on_connack)
   {
     g.publish_on_connack = false;
@@ -1778,6 +1780,39 @@ static void a_connack_over_the_maximum_packet_size_fails_the_connect(void** stat
   assert_int_equal(_client_disconnect_reason(&f), 0x95);
   _teardown(&f);
 }
+
+static void session_present_after_clean_start_ends_the_session(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.session_present_after_clean_start = true;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_true(f.client._internal.connect_options.clean_start);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_MQTT_ERROR_PROTOCOL);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_DISCONNECTED);
+  assert_int_equal(g.connacks, 0);
+  assert_int_equal(g.closed, 1);
+  assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_PROTOCOL);
+  assert_int_equal(_client_disconnect_reason(&f), 0x82); // Protocol Error
+  _teardown(&f);
+}
+
+static void session_present_without_clean_start_resumes(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.session_present_after_clean_start = true; // Not used: Clean Start is 0.
+  s_persistent = true;
+  fixture f;
+  _setup(&f, &so, 30);
+  test_server_set_session_present(f.server, true);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  assert_int_equal(g.connacks, 1);
+  assert_true(g.connack_session_present);
+  assert_int_equal(g.closed, 0);
+  _teardown(&f);
+}
 #endif
 
 static void a_pingresp_with_a_body_ends_the_session(void** state)
@@ -2773,6 +2808,8 @@ int main(void)
     cmocka_unit_test(a_packet_over_the_maximum_packet_size_is_refused_before_its_body),
     cmocka_unit_test(without_a_maximum_packet_size_the_receive_buffer_bounds_packets),
     cmocka_unit_test(a_connack_over_the_maximum_packet_size_fails_the_connect),
+    cmocka_unit_test(session_present_after_clean_start_ends_the_session),
+    cmocka_unit_test(session_present_without_clean_start_resumes),
 #endif
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(an_auth_with_a_malformed_string_ends_the_session),
