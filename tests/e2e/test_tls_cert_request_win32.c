@@ -242,12 +242,26 @@ static void the_imported_key_is_deleted(void** state)
   az_mqtt_transport_close(s_transport);
   assert_int_equal(count_user_keys(), before);
 
-  assert_int_equal(
-      connect_with(CERT("client-untrusted.crt"), CERT("client-untrusted.key")),
-      AZ_MQTT_ERROR_TLS_HANDSHAKE);
-  assert_int_equal(
-      connect_with(CERT("client-ec.crt"), CERT("client-rsa.key")), AZ_MQTT_ERROR_TRANSPORT);
-  assert_int_equal(count_user_keys(), before);
+  // A failed connect deletes it itself (counted before any close).
+  static struct
+  {
+    char const* cert;
+    char const* key;
+    az_result result;
+  } const failures[] = {
+    { CERT("client-untrusted.crt"), CERT("client-untrusted.key"), AZ_MQTT_ERROR_TLS_HANDSHAKE },
+    { CERT("client-ec.crt"), CERT("client-rsa.key"), AZ_MQTT_ERROR_TRANSPORT },
+  };
+  for (size_t i = 0; i < sizeof(failures) / sizeof(failures[0]); i++)
+  {
+    tls.client_cert_path = az_span_create_from_str((char*)(uintptr_t)failures[i].cert);
+    tls.client_key_path = az_span_create_from_str((char*)(uintptr_t)failures[i].key);
+    assert_int_equal(
+        az_mqtt_transport_connect(s_transport, AZ_SPAN_FROM_STR("localhost"), 8886, &tls),
+        failures[i].result);
+    assert_int_equal(count_user_keys(), before);
+    az_mqtt_transport_close(s_transport);
+  }
 }
 
 /** @brief Print each native error: the cause behind a failed assertion. */
