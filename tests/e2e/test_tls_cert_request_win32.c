@@ -232,10 +232,26 @@ static void the_imported_key_is_deleted(void** state)
   assert_int_equal(count_user_keys(), before);
 }
 
+/** @brief Print each native error: the cause behind a failed assertion. */
+static void on_error(az_mqtt_native_error const* error, void* context)
+{
+  (void)context;
+  print_message(
+      "native error: source %d, code 0x%08lx, result 0x%08lx\n",
+      (int)error->source,
+      (unsigned long)(uint32_t)error->code,
+      (unsigned long)(uint32_t)error->result);
+}
+
 static int setup(void** state)
 {
   (void)state;
-  return az_mqtt_transport_init(s_transport) == AZ_OK ? 0 : -1;
+  if (az_mqtt_transport_init(s_transport) != AZ_OK)
+  {
+    return -1;
+  }
+  az_mqtt_transport_set_error_callback(s_transport, on_error, NULL);
+  return 0;
 }
 
 int main(void)
