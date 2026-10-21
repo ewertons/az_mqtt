@@ -18,7 +18,8 @@
 # signed by the CA: client-ec and client-rsa (.crt; key: .key PKCS#8, .sec1.key or
 # .pkcs1.key, .encrypted.key with password "secret"), client-chain.crt (a leaf
 # under an intermediate CA, then the intermediate; key client-leaf.key), and the
-# self-signed client-untrusted (.crt, .key).
+# self-signed client-untrusted (.crt, .key). The openssl s_server logs (one line per
+# client certificate received) go to tests/broker/s_server_<port>.log.
 # Needs openssl, mosquitto and mosquitto_pub on PATH.
 set -euo pipefail
 
@@ -131,7 +132,8 @@ tls_server() {
   local port="$1"
   shift
   nohup openssl s_server -accept "${port}" -cert "${w}/server.crt" -key "${w}/server.key" \
-    -CAfile "${w}/ca.crt" "$@" -www -quiet < /dev/null > "${work}/s_server_${port}.log" 2>&1 &
+    -CAfile "${w}/ca.crt" "$@" -www -quiet < /dev/null \
+    > "${root}/tests/broker/s_server_${port}.log" 2>&1 &
 }
 tls_server 8885 -verify 1
 tls_server 8886 -Verify 2 -verify_return_error -tls1_2

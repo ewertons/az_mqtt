@@ -6,7 +6,8 @@
  * @brief Windows platform transport: servers that request, or require, a client certificate.
  *
  * eng/ci/start-broker.sh runs `openssl s_server` on 8885 (requests a certificate) and 8886
- * (requires one the CA issued), and mints the client certificates in tests/broker/certs.
+ * (requires one the CA issued; logs each one received), and mints the client certificates in
+ * tests/broker/certs.
  */
 
 #include <setjmp.h>
@@ -73,6 +74,32 @@ static az_span read_file(char const* path, char* buf, DWORD size)
   CloseHandle(h);
   assert_true(len < size);
   return az_span_create((uint8_t*)buf, (int32_t)len);
+}
+
+/** @brief Occurrences of @p text in the log of the server requiring a certificate. */
+static int count_in_server_log(char const* text)
+{
+  Sleep(300); // Let the server write what it received.
+  static char log[256 * 1024];
+  HANDLE h = CreateFileA(
+      E2E_REQUIRING_SERVER_LOG,
+      GENERIC_READ,
+      FILE_SHARE_READ | FILE_SHARE_WRITE,
+      NULL,
+      OPEN_EXISTING,
+      0,
+      NULL);
+  assert_true(h != INVALID_HANDLE_VALUE);
+  DWORD len = 0;
+  assert_true(ReadFile(h, log, sizeof(log) - 1, &len, NULL));
+  CloseHandle(h);
+  log[len] = '\0';
+  int count = 0;
+  for (char const* at = strstr(log, text); at != NULL; at = strstr(at + 1, text))
+  {
+    count++;
+  }
+  return count;
 }
 
 /** @brief Files in the user's CNG key store (Microsoft Software Key Storage Provider). */
@@ -153,6 +180,23 @@ static void an_untrusted_certificate_is_refused(void** state)
       AZ_MQTT_ERROR_TLS_HANDSHAKE);
 }
 
+/** @brief A server that fails validation gets no client certificate, though it requests one. */
+static void an_untrusted_server_gets_no_certificate(void** state)
+{
+  (void)state;
+  int const before = count_in_server_log("CN = client-ec");
+  assert_int_equal(connect_with(CERT("client-ec.crt"), CERT("client-ec.key")), AZ_OK);
+  int const after_trusted = count_in_server_log("CN = client-ec");
+  assert_true(after_trusted > before); // The log shows certificates received.
+
+  az_mqtt_tls_options tls = az_mqtt_tls_options_default();
+  tls.ca_cert_path = AZ_SPAN_FROM_STR(CERT("ca-bundle-without-ca.crt"));
+  tls.client_cert_path = AZ_SPAN_FROM_STR(CERT("client-ec.crt"));
+  tls.client_key_path = AZ_SPAN_FROM_STR(CERT("client-ec.key"));
+  assert_int_equal(connect_tls(8886, &tls), AZ_MQTT_ERROR_TLS_VERIFY);
+  assert_int_equal(count_in_server_log("CN = client-ec"), after_trusted);
+}
+
 /** @brief Refused before connecting: another certificate's key, an encrypted key, no key. */
 static void an_unusable_key_is_refused(void** state)
 {
@@ -208,6 +252,7 @@ int main(void)
     cmocka_unit_test(pem_in_memory_is_accepted),
     cmocka_unit_test(the_chain_is_sent),
     cmocka_unit_test(an_untrusted_certificate_is_refused),
+    cmocka_unit_test(an_untrusted_server_gets_no_certificate),
     cmocka_unit_test(an_unusable_key_is_refused),
     cmocka_unit_test(the_imported_key_is_deleted),
   };

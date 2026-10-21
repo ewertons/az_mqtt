@@ -1,2 +1,3 @@
 build/
 tests/broker/certs/
+tests/broker/s_server_*.log
