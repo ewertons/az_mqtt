@@ -65,6 +65,13 @@ typedef struct
   /** @brief The credentials without the client certificate, once replaced by those with it. */
   CredHandle cred_initial;
   bool has_cred_initial;
+  /**
+   * @brief Server bytes recorded in plain (idle until open) until the certificate request, with a
+   * client certificate to present: Schannel gives no server certificate before the handshake ends.
+   */
+  bool capturing;
+  bool capture_overflow;
+  int32_t captured;
   uint8_t stage;
   /** @brief close_notify sent (or tried) on this connection. */
   bool closing;
@@ -926,6 +933,9 @@ static void _tls_free(_tls_transport* transport)
   transport->handshake_done = false;
   transport->cert_request_answered = false;
   transport->request_flags = _REQUEST_FLAGS;
+  transport->capturing = false;
+  transport->capture_overflow = false;
+  transport->captured = 0;
   transport->in_len = 0;
   transport->plain_pos = 0;
   transport->plain_len = 0;
@@ -993,6 +1003,7 @@ static az_result _tls_prepare(
   }
 
   // Without the client certificate: it is given only to a server that passed validation.
+  transport->capturing = transport->client_cert != NULL;
   SECURITY_STATUS const sec = _acquire_cred(transport, false, &transport->cred);
   if (sec != SEC_E_OK)
   {
@@ -1080,6 +1091,19 @@ static az_result _fill(_tls_transport* transport, int64_t deadline)
     }
     if (az_span_size(received) > 0)
     {
+      if (transport->capturing)
+      {
+        int32_t const n = az_span_size(received);
+        if (n > (int32_t)sizeof(transport->plain) - transport->captured)
+        {
+          transport->capture_overflow = true;
+        }
+        else
+        {
+          memcpy(transport->plain + transport->captured, az_span_ptr(received), (size_t)n);
+          transport->captured += n;
+        }
+      }
       transport->in_len += az_span_size(received);
       return AZ_OK;
     }
@@ -1124,19 +1148,109 @@ static az_result _received_server_certificate(_tls_transport* transport, PCCERT_
   return rc;
 }
 
+/** @brief Big-endian unsigned integer of @p n bytes at @p p. */
+static int32_t _be(uint8_t const* p, int n)
+{
+  int32_t v = 0;
+  for (int i = 0; i < n; i++)
+  {
+    v = (v << 8) | p[i];
+  }
+  return v;
+}
+
+/**
+ * @brief The certificates of the server's Certificate message, from the handshake records captured
+ * (TLS 1.2: in the clear), into a new *@p out_store; *@p out the first (the server's). Without one
+ * (TLS 1.3: encrypted), reported, and AZ_MQTT_ERROR_TLS_VERIFY. Consumes the capture.
+ */
+static az_result _captured_server_certificate(
+    _tls_transport* transport,
+    HCERTSTORE* out_store,
+    PCCERT_CONTEXT* out)
+{
+  uint8_t* const buf = transport->plain;
+  int32_t const len = transport->capture_overflow ? 0 : transport->captured;
+  // Join the fragments of the leading handshake records (type 22), in place.
+  int32_t hs_len = 0;
+  for (int32_t at = 0; at + 5 <= len && buf[at] == 22;)
+  {
+    int32_t const frag = _be(buf + at + 3, 2);
+    if (frag > len - at - 5)
+    {
+      break;
+    }
+    memmove(buf + hs_len, buf + at + 5, (size_t)frag);
+    hs_len += frag;
+    at += 5 + frag;
+  }
+  transport->captured = 0;
+  // Handshake messages: type (1), length (3), body. Certificate (11): list length (3), then each
+  // certificate: length (3), DER.
+  for (int32_t at = 0; at + 4 <= hs_len;)
+  {
+    int32_t const msg_len = _be(buf + at + 1, 3);
+    if (msg_len > hs_len - at - 4)
+    {
+      break;
+    }
+    uint8_t const* const body = buf + at + 4;
+    if (buf[at] == 11 && msg_len >= 3 && _be(body, 3) == msg_len - 3)
+    {
+      az_result rc = _new_store(transport, out_store);
+      for (int32_t c = 3; az_result_succeeded(rc) && c < msg_len;)
+      {
+        int32_t const cert_len = c + 3 <= msg_len ? _be(body + c, 3) : -1;
+        if (cert_len <= 0 || cert_len > msg_len - c - 3)
+        {
+          rc = AZ_MQTT_ERROR_TLS_VERIFY;
+          break;
+        }
+        rc = _add_der(transport, *out_store, body + c + 3, (DWORD)cert_len, out);
+        c += 3 + cert_len;
+      }
+      if (az_result_succeeded(rc) && *out != NULL)
+      {
+        return AZ_OK;
+      }
+      break;
+    }
+    at += 4 + msg_len;
+  }
+  _report(
+      transport,
+      AZ_MQTT_NATIVE_ERROR_TLS_VERIFY,
+      (DWORD)SEC_E_ILLEGAL_MESSAGE,
+      AZ_MQTT_ERROR_TLS_VERIFY);
+  return AZ_MQTT_ERROR_TLS_VERIFY;
+}
+
 /**
  * @brief Answer the server's certificate request with the client certificate: validate the server
  * first (nothing about the client is sent to an untrusted one), then use credentials holding it.
  */
 static az_result _present_client_certificate(_tls_transport* transport)
 {
+  HCERTSTORE store = NULL;
   PCCERT_CONTEXT server_cert = NULL;
-  az_result const rc = _received_server_certificate(transport, &server_cert);
+  transport->capturing = false;
+  az_result rc = _captured_server_certificate(transport, &store, &server_cert);
+  if (az_result_succeeded(rc))
+  {
+    rc = _validate_server_certificate(transport, server_cert);
+  }
+  if (server_cert != NULL)
+  {
+    CertFreeCertificateContext(server_cert);
+  }
+  if (store != NULL)
+  {
+    CertCloseStore(store, 0);
+  }
   if (az_result_failed(rc))
   {
     return rc;
   }
-  CertFreeCertificateContext(server_cert);
   CredHandle cred;
   SECURITY_STATUS const sec = _acquire_cred(transport, true, &cred);
   if (sec != SEC_E_OK)
@@ -1248,6 +1362,8 @@ static az_result _tls_handshake(_tls_transport* transport, int64_t deadline)
     transport->needs_read = status == SEC_I_CONTINUE_NEEDED && transport->in_len == 0;
   }
 
+  transport->capturing = false; // plain holds decrypted data from here on.
+  transport->captured = 0;
   SECURITY_STATUS const sec
       = QueryContextAttributesA(&transport->context, SECPKG_ATTR_STREAM_SIZES, &transport->sizes);
   if (sec != SEC_E_OK)
