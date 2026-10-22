@@ -2483,6 +2483,24 @@ static void logs_never_contain_credentials_topics_or_payloads(void** state)
   assert_non_null(strstr(s_log, "closed 0x00010000\n"));
   assert_null(strstr(s_log, "SECRET"));
 }
+
+#if AZ_MQTT_TEST_VERSION == 5
+static void session_present_after_clean_start_is_logged(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.session_present_after_clean_start = true;
+  fixture f;
+  _setup(&f, &so, 30);
+  s_log_size = 0;
+  s_log[0] = '\0';
+  az_log_set_message_callback(_on_log);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_MQTT_ERROR_PROTOCOL);
+  az_log_set_message_callback(NULL);
+  _teardown(&f);
+  assert_non_null(strstr(s_log, "CONNACK Session Present after Clean Start\nsent DISCONNECT "));
+}
+#endif
 #endif // AZ_NO_LOGGING
 
 static void reconnect_after_a_lost_session_works(void** state)
@@ -2826,6 +2844,9 @@ int main(void)
     cmocka_unit_test(a_peer_close_is_reported_as_connection_closed),
 #ifndef AZ_NO_LOGGING
     cmocka_unit_test(logs_never_contain_credentials_topics_or_payloads),
+#if AZ_MQTT_TEST_VERSION == 5
+    cmocka_unit_test(session_present_after_clean_start_is_logged),
+#endif
 #endif
     cmocka_unit_test(reconnect_after_a_lost_session_works),
     cmocka_unit_test(a_refused_connack_code_is_reported_verbatim),

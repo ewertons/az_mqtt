@@ -12,6 +12,7 @@
 #include "az_mqtt_codec_internal.h"
 #include "az_mqtt_core_internal.h"
 
+#include <azure/core/internal/az_log_internal.h>
 #include <azure/core/internal/az_precondition_internal.h>
 #include <azure/core/internal/az_result_internal.h>
 #include <azure/core/az_result.h>
@@ -144,6 +145,8 @@ static az_result _handle_connack(az_mqtt5_client* client, az_span body)
     // MQTT-3.2.2-4: after Clean Start 1 the client has no Session State to resume.
     if (connack.session_present && client->_internal.connect_options.clean_start)
     {
+      _az_LOG_WRITE(
+          AZ_LOG_MQTT_CONNECTION, AZ_SPAN_FROM_STR("CONNACK Session Present after Clean Start"));
       return _disconnect_with(client, AZ_MQTT5_REASON_PROTOCOL_ERROR, AZ_MQTT_ERROR_PROTOCOL);
     }
     client->_internal.server_receive_maximum = connack.receive_maximum;
