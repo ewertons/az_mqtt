@@ -169,31 +169,34 @@ jobs:
     name: Schannel / MSVC
     runs-on: windows-2022
     timeout-minutes: 30
+    env:
+      MOSQUITTO_PREFIX: C:\mosquitto
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
-      - name: Install Mosquitto
+      # Built from pinned GitHub sources by eng/ci/install-mosquitto.ps1, then cached. Saved right
+      # after the build, so a later failing step does not discard it.
+      - name: Restore Mosquitto
+        id: mosquitto-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.MOSQUITTO_PREFIX }}
+          key: mosquitto-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('eng/ci/install-mosquitto.ps1') }}
+      - name: Build Mosquitto
+        if: steps.mosquitto-cache.outputs.cache-hit != 'true'
         shell: pwsh
-        timeout-minutes: 5
-        run: |
-          $ProgressPreference = 'SilentlyContinue' # the progress bar slows Invoke-WebRequest badly
-          # Official NSIS installer, unpacked with 7-Zip (the Chocolatey package is gone, and
-          # the installer does not finish unattended). Newest 2.0.x release; 2.0.9x are snapshots.
-          $base = "https://mosquitto.org/files/binary/win64/"
-          $list = (Invoke-WebRequest -UseBasicParsing $base).Content
-          $all = [regex]::Matches($list, 'mosquitto-2\.0\.(\d+)-install-windows-x64\.exe') |
-            Where-Object { [int]$_.Groups[1].Value -lt 90 } | Sort-Object { [int]$_.Groups[1].Value }
-          $file = $all | Select-Object -Last 1 -ExpandProperty Value
-          if (-not $file) { "::error::No mosquitto 2.0.x release installer found at $base"; exit 1 }
-          "::notice::Using $file"
-          Invoke-WebRequest -UseBasicParsing "$base$file" -OutFile mosquitto-setup.exe
-          7z x mosquitto-setup.exe "-oC:\Program Files\mosquitto" -y *> 7z.log
-          if ($LASTEXITCODE -ne 0 -or -not (Test-Path "C:\Program Files\mosquitto\mosquitto.exe")) {
-            Get-Content 7z.log -Tail 10 | ForEach-Object { "::error::$_" }
-            exit 1
-          }
-          "C:\Program Files\mosquitto" | Out-File -FilePath $env:GITHUB_PATH -Append
+        timeout-minutes: 15
+        run: ./eng/ci/install-mosquitto.ps1 $env:MOSQUITTO_PREFIX
+      - name: Save Mosquitto
+        if: steps.mosquitto-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.MOSQUITTO_PREFIX }}
+          key: ${{ steps.mosquitto-cache.outputs.cache-primary-key }}
+      - name: Add Mosquitto to PATH
+        shell: pwsh
+        run: $env:MOSQUITTO_PREFIX | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Start broker
         shell: bash
         run: |
