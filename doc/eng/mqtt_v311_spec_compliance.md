@@ -22,7 +22,7 @@ to the current implementation status of `az_mqttv3` (on `az_mqtt_core`).
 | 9 | Clean Session flag in Connect Flags | [§3.1.2.4](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | Flags byte bit set from `connect_options.clean_session` | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | 10 | Will Flag, Will QoS, Will Retain encoded in Connect Flags | [§3.1.2.5](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html), [§3.1.2.6](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html), [§3.1.2.7](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | `opts->will` checked; flags byte set accordingly | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | 11 | If Will Flag is 0, Will QoS and Will Retain must be 0 | [§3.1.2.5](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html), [§3.1.2.6](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html), [§3.1.2.7](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | Will QoS and Will Retain bits are set only when `will` is non-NULL | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
-| 12 | Will QoS must be 0, 1, or 2 | [§3.1.2.6](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | No | No validation; caller can pass invalid QoS without error | |
+| 12 | Will QoS must be 0, 1, or 2 | [§3.1.2.6](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | A Will QoS of 3 is `AZ_ERROR_ARG` (`az_mqtt3_codec_encode_connect`) | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | 13 | Username and Password flags set appropriately | [§3.1.2.8](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html), [§3.1.2.9](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | Flags byte tested against `username`/`password` span emptiness | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | 14 | Keep Alive field (0 = disabled; 1–65535 seconds) | [§3.1.2.10](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | `connect_options.keep_alive_seconds` | [inc/az_mqtt3/az_mqtt3_types.h](../../inc/az_mqtt3/az_mqtt3_types.h) |
 | 15 | Client Identifier: may be 1–23 bytes (or empty for server assignment) | [§3.1.3.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Partial | No length validation; accepts any span size | |
@@ -63,7 +63,7 @@ to the current implementation status of `az_mqttv3` (on `az_mqtt_core`).
 | 45 | SUBSCRIBE encoded with fixed flags = 0x02 | [§3.8.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | `0x02` hard-coded in `az_mqtt3_codec_encode_subscribe` | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | 46 | SUBSCRIBE contains at least one Topic Filter | [§3.8.3](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | `az_mqtt3_client_subscribe`: a count of 0 or less is AZ_ERROR_ARG (the codec requires it as a precondition) | [src/mqtt3/az_mqtt3_client.c](../../src/mqtt3/az_mqtt3_client.c) |
 | 47 | Requested QoS (0, 1, or 2) | [§3.8.3](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | `subscription.qos` | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
-| 48 | Requested QoS: upper 6 bits reserved, must be 0 | [§3.8.3](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Partial | Bits 2–7 are 0 for valid `qos` values (0–2). `qos` is not range-checked: e.g. 4 sets bit 2 | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
+| 48 | Requested QoS: upper 6 bits reserved, must be 0 | [§3.8.3](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | Only QoS bits (0–1) set; `qos` above 2 is `AZ_ERROR_ARG` | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | **SUBACK ([§3.9](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html))** |||||
 | 49 | SUBACK decoded — packet identifier and return codes (one per topic) | [§3.9](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | `az_mqtt3_codec_decode_suback`; a count other than the SUBSCRIBE's filters is AZ_MQTT_ERROR_PROTOCOL | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c), [src/mqtt3/az_mqtt3_client.c](../../src/mqtt3/az_mqtt3_client.c) |
 | 50 | SUBACK return codes: 0x00 (max QoS 0), 0x01 (max QoS 1), 0x02 (max QoS 2), 0x80 (failure) | [§3.9.3](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | Decoded and returned to caller | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
@@ -96,13 +96,12 @@ to the current implementation status of `az_mqttv3` (on `az_mqtt_core`).
 
 | Status | Count |
 |--------|-------|
-| Yes | 63 |
-| Partial | 2 |
-| No | 2 |
+| Yes | 65 |
+| Partial | 1 |
+| No | 1 |
 
 ### Key gaps (client-facing impact)
 
 | Gap | Spec reference |
 |-----|---------------|
 | A QoS 1/2 PUBLISH given an expiry interval is dropped instead of resent once it elapsed (opt-in; MQTT itself would resend it) | [§4.4](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) |
-| Will QoS not validated (3 is accepted) | [§3.1.2.6](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) |

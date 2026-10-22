@@ -24,7 +24,7 @@ to the current implementation status of `az_mqttv5` (on `az_mqtt_core`).
 | 11 | CONNECT must be the first packet sent after the Network Connection is opened | [[MQTT-3.1.0-1]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `az_mqtt5_client_connect` opens transport then immediately sends CONNECT | [src/core/az_mqtt_core.c](../../src/core/az_mqtt_core.c) |
 | 12 | Clean Start flag | [[MQTT-3.1.2-4]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `connect_options.clean_start` | [inc/az_mqtt5/az_mqtt5_types.h](../../inc/az_mqtt5/az_mqtt5_types.h) |
 | 13 | Will Flag, Will QoS, Will Retain encoded in Connect Flags | [[MQTT-3.1.2-9]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `opts->will` checked; flags byte set accordingly | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
-| 14 | Will QoS must not be 3 | [[MQTT-3.1.2-12]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | No validation; caller can pass QoS=3 without error | |
+| 14 | Will QoS must not be 3 | [[MQTT-3.1.2-12]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | A Will QoS of 3 is `AZ_ERROR_ARG` (`az_mqtt5_codec_encode_connect`, so also `az_mqtt5_client_connect_start`) | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 15 | If Will Flag is 0, Will QoS and Will Retain must be 0 | [[MQTT-3.1.2-11]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html), [[MQTT-3.1.2-13]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | Will QoS and Will Retain bits are set only when `will` is non-NULL | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 16 | Username and Password flags set appropriately | [[MQTT-3.1.2-16]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | Flags byte tested against `username`/`password` span emptiness | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 17 | Keep Alive field (0 = disabled) | [§3.1.2.10](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `connect_options.keep_alive_seconds` | [inc/az_mqtt5/az_mqtt5_types.h](../../inc/az_mqtt5/az_mqtt5_types.h) |
@@ -36,7 +36,7 @@ to the current implementation status of `az_mqttv5` (on `az_mqtt_core`).
 | 23 | Request Problem Information property (CONNECT) | [§3.1.2.11.7](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `connect_options.request_problem_information`; written as `0` only when false | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 24 | User Property (CONNECT) | [§3.1.2.11.8](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `connect_options.user_properties[]` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 25 | Authentication Method property (CONNECT) | [§3.1.2.11.9](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `connect_options.authentication_method` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
-| 26 | Authentication Data must not be present without Authentication Method | [§3.1.2.11.10](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | Both fields written independently; no validation that method is present when data is present | |
+| 26 | Authentication Data must not be present without Authentication Method | [§3.1.2.11.10](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | Authentication Data without an Authentication Method is `AZ_ERROR_ARG` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 27 | Will Properties: Will Delay Interval | [§3.1.3.2.2](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `will_options.will_delay_interval` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 28 | Will Properties: Payload Format Indicator | [§3.1.3.2.3](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `will_options.payload_format_indicator` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 29 | Will Properties: Message Expiry Interval | [§3.1.3.2.4](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `will_options.message_expiry_interval` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
@@ -115,7 +115,7 @@ to the current implementation status of `az_mqttv5` (on `az_mqtt_core`).
 | 97 | Subscription Options: Retain Handling | [§3.8.3.1](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `subscription.retain_handling` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | 98 | Subscription Identifier property (SUBSCRIBE send) | [§3.8.2.1.2](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | Not supported in `az_mqtt5_codec_encode_subscribe`; no field in the struct | |
 | 99 | User Property (SUBSCRIBE) | [§3.8.2.1.3](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | Not supported in `az_mqtt5_codec_encode_subscribe` | |
-| 100 | Bits 6 and 7 of Subscription Options reserved, must be 0 | [[MQTT-3.8.3-5]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Partial | Bits 6-7 are 0 for valid `qos` and `retain_handling` values. Neither is range-checked: e.g. `retain_handling` 4 sets bit 6 | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
+| 100 | Bits 6 and 7 of Subscription Options reserved, must be 0 | [[MQTT-3.8.3-5]](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | Options byte built only from known bits; `qos` or `retain_handling` above 2 is `AZ_ERROR_ARG` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
 | **SUBACK ([§3.9](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html))** |||||
 | 101 | SUBACK decoded — packet identifier, reason codes, user properties | [§3.9](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `az_mqtt5_codec_decode_suback`; a code count other than the SUBSCRIBE's filters is AZ_MQTT_ERROR_PROTOCOL | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c), [src/mqtt5/az_mqtt5_client.c](../../src/mqtt5/az_mqtt5_client.c) |
 | 102 | SUBACK reason string decoded | [§3.9.2.1.2](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `suback_data.reason_string` | [src/mqtt5/az_mqtt5_codec.c](../../src/mqtt5/az_mqtt5_codec.c) |
@@ -155,7 +155,7 @@ to the current implementation status of `az_mqttv5` (on `az_mqtt_core`).
 | 130 | Client should close the Network Connection on receipt of a Malformed Packet | [§4.13.1](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `process_loop` closes the transport and reports the error via `on_connection_closed` | [src/core/az_mqtt_core.c](../../src/core/az_mqtt_core.c) |
 | 131 | Client should close the Network Connection on receipt of a Protocol Error | [§4.13.1](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Yes | `process_loop` closes the transport and reports the error via `on_connection_closed` | [src/core/az_mqtt_core.c](../../src/core/az_mqtt_core.c) |
 | 132 | On receipt of CONNACK with reason code 0x9C (Use Another Server) or 0x9D (Server Moved), use Server Reference | [§4.11](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | No | `server_reference` decoded but no redirect logic or callback for it | |
-| 133 | Shared Subscriptions: topic filter begins with `$share/` | [§4.8.2](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Partial | Codec will encode any topic filter string; no `$share/` validation or special handling | |
+| 133 | Shared Subscriptions: topic filter begins with `$share/` | [§4.8.2](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html) | Partial | No Local on a `$share/` filter is `AZ_ERROR_ARG`; no other `$share/` validation or special handling | |
 
 ---
 
@@ -163,9 +163,9 @@ to the current implementation status of `az_mqttv5` (on `az_mqtt_core`).
 
 | Status | Count |
 |--------|-------|
-| Yes | 120 |
-| Partial | 3 |
-| No | 10 |
+| Yes | 123 |
+| Partial | 2 |
+| No | 8 |
 
 ### Key gaps (client-facing impact)
 
