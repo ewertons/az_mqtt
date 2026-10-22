@@ -140,7 +140,9 @@ The repository root is also an ESP-IDF component (options in [Kconfig](Kconfig))
   it is retained and Retain Available is 0, or when `topic_alias` exceeds the server's Topic Alias
   Maximum (0 if not sent); with `AZ_MQTT_ERROR_FLOW_CONTROL` at its Receive Maximum; and with
   `AZ_MQTT_ERROR_PACKET_TOO_LARGE` above its Maximum Packet Size (also subscribe and unsubscribe;
-  an acknowledgement above it closes the session with that result).
+  an acknowledgement above it closes the session with that result). A received packet above the
+  client's own `connect_options.maximum_packet_size` (when non-zero) closes the session with
+  `AZ_MQTT_ERROR_PACKET_TOO_LARGE`, after a best-effort DISCONNECT 0x95 (Packet too large).
 - CMake:
   - targets: `az_mqtt::mqttv5` / `az_mqtt::mqttv3` (were `az_mqtt5::client` / `az_mqtt3::client`);
   - options: `AZ_MQTT_*` (were `AZ_MQTT5_*` / `AZ_MQTT3_*`).

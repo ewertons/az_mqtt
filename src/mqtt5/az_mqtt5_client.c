@@ -171,6 +171,13 @@ _disconnect_with(az_mqtt5_client* client, az_mqtt5_reason_code reason, az_result
   return result;
 }
 
+/** @brief _az_mqtt_core_on_packet_too_large_fn: DISCONNECT with Packet too large (3.1.2.11.4). */
+static void _on_packet_too_large(az_mqtt_core* core)
+{
+  (void)_disconnect_with(
+      (az_mqtt5_client*)core, AZ_MQTT5_REASON_PACKET_TOO_LARGE, AZ_MQTT_ERROR_PACKET_TOO_LARGE);
+}
+
 static az_result _handle_publish(az_mqtt5_client* client, az_span body, uint8_t flags)
 {
   az_mqtt5_publish_data publish;
@@ -492,6 +499,8 @@ az_mqtt5_client_init(az_mqtt5_client* client, az_mqtt5_client_options const* opt
   _CORE(client).proxy = options->proxy_options;
   _CORE(client).on_closed = _on_closed;
   _CORE(client).on_transport_error = _on_transport_error;
+  _CORE(client).on_packet_too_large = _on_packet_too_large;
+  _CORE(client).client_maximum_packet_size = options->connect_options.maximum_packet_size;
   _az_mqtt_core_register_transport_errors(&client->_internal.core);
   client->_internal.connect_options = options->connect_options;
   client->_internal.decode_user_properties = options->decode_user_properties;

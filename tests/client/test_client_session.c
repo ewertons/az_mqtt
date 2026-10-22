@@ -258,6 +258,8 @@ static int s_inflight_slots = 4;
 #if AZ_MQTT_TEST_VERSION == 5
 /** @brief Receive Maximum the next _setup() advertises (0: the default). */
 static uint16_t s_receive_maximum;
+/** @brief Maximum Packet Size the next _setup() advertises (then 0: none). */
+static uint32_t s_maximum_packet_size;
 #endif
 
 /** @brief Next _setup() connects with credentials, a will and a client id that must never be logged. */
@@ -341,6 +343,8 @@ static void _setup(fixture* f, test_server_options const* server_options, uint16
     o.connect_options.receive_maximum = s_receive_maximum;
     s_receive_maximum = 0;
   }
+  o.connect_options.maximum_packet_size = s_maximum_packet_size;
+  s_maximum_packet_size = 0;
 #endif
   o.on_connection_closed = _on_closed;
   o.proxy_options = s_proxy;
@@ -1675,6 +1679,105 @@ static void a_topic_alias_above_the_advertised_maximum_ends_the_session(void** s
   assert_int_equal(test_server_client_disconnect_reason(f.server), 0x94); // Topic Alias invalid
   _teardown(&f);
 }
+
+/** @brief Wait for the client's DISCONNECT reason as the server thread records it. */
+static int _client_disconnect_reason(fixture* f)
+{
+  int64_t const end = _now_ms() + 2000;
+  while (test_server_client_disconnect_reason(f->server) < 0 && _now_ms() < end)
+  {
+    _sleep_ms(10);
+  }
+  return test_server_client_disconnect_reason(f->server);
+}
+
+/**
+ * @brief The server sends @p bytes after CONNACK to a client advertising @p maximum_packet_size;
+ * the session must close with @p expected. @p publishes delivered first.
+ */
+static void _expect_closed_after_raw(
+    uint8_t const* bytes,
+    int size,
+    uint32_t maximum_packet_size,
+    az_result expected,
+    int publishes)
+{
+  test_server_options so = _plain();
+  so.raw_after_connack = bytes;
+  so.raw_after_connack_size = size;
+  s_maximum_packet_size = maximum_packet_size;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  az_result rc = AZ_OK;
+  for (int i = 0; i < 150 && az_result_succeeded(rc); i++)
+  {
+    rc = AZ_MQTT_T(client_process_loop)(&f.client, 20);
+  }
+  assert_int_equal(rc, expected);
+  assert_int_equal(g.closed, 1);
+  assert_int_equal(g.closed_reason, expected);
+  assert_int_equal(g.publishes, publishes);
+  if (expected == AZ_MQTT_ERROR_PACKET_TOO_LARGE)
+  {
+    assert_int_equal(_client_disconnect_reason(&f), 0x95); // Packet too large
+  }
+  _teardown(&f);
+}
+
+static void a_packet_over_the_advertised_maximum_packet_size_ends_the_session(void** state)
+{
+  (void)state;
+  // QoS 0 PUBLISH "t" of 16 bytes (at the limit: delivered), then one of 17 bytes.
+  static const uint8_t publishes[] = {
+    0x30, 0x0E, 0x00, 0x01, 't', 0x00, '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+    0x30, 0x0F, 0x00, 0x01, 't', 0x00, '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a',
+  };
+  _expect_closed_after_raw(
+      publishes, (int)sizeof(publishes), 16, AZ_MQTT_ERROR_PACKET_TOO_LARGE, 1);
+}
+
+static void a_packet_over_the_maximum_packet_size_is_refused_before_its_body(void** state)
+{
+  (void)state;
+  // PUBLISH announcing 16,383 bytes (over the receive buffer too); none of them follow.
+  static const uint8_t header[] = { 0x30, 0xFF, 0x7F };
+  _expect_closed_after_raw(header, (int)sizeof(header), 2048, AZ_MQTT_ERROR_PACKET_TOO_LARGE, 0);
+}
+
+static void without_a_maximum_packet_size_the_receive_buffer_bounds_packets(void** state)
+{
+  (void)state;
+  // PUBLISH of 1,043 bytes: over the 1,024-byte receive buffer.
+  static uint8_t publish[1043];
+  memset(publish, 'p', sizeof(publish));
+  publish[0] = 0x30;
+  publish[1] = 0x90; // Remaining Length 1,040.
+  publish[2] = 0x08;
+  publish[3] = 0x00;
+  publish[4] = 0x01;
+  publish[5] = 't';
+  publish[6] = 0x00;
+  _expect_closed_after_raw(publish, (int)sizeof(publish), 0, AZ_ERROR_NOT_ENOUGH_SPACE, 0);
+}
+
+static void a_connack_over_the_maximum_packet_size_fails_the_connect(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  so.maximum_packet_size = 1024; // Its property makes the CONNACK 10 bytes.
+  s_maximum_packet_size = 9;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(
+      AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_MQTT_ERROR_PACKET_TOO_LARGE);
+  assert_int_equal(g.connacks, 0);
+  assert_int_equal(g.closed, 1);
+  assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_PACKET_TOO_LARGE);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_DISCONNECTED);
+  assert_int_equal(_client_disconnect_reason(&f), 0x95);
+  _teardown(&f);
+}
 #endif
 
 static void a_pingresp_with_a_body_ends_the_session(void** state)
@@ -2666,6 +2769,10 @@ int main(void)
 #endif
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(a_topic_alias_above_the_advertised_maximum_ends_the_session),
+    cmocka_unit_test(a_packet_over_the_advertised_maximum_packet_size_ends_the_session),
+    cmocka_unit_test(a_packet_over_the_maximum_packet_size_is_refused_before_its_body),
+    cmocka_unit_test(without_a_maximum_packet_size_the_receive_buffer_bounds_packets),
+    cmocka_unit_test(a_connack_over_the_maximum_packet_size_fails_the_connect),
 #endif
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(an_auth_with_a_malformed_string_ends_the_session),
