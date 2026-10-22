@@ -439,6 +439,150 @@ static void topics_and_filters_are_checked_when_encoding(void** state)
 #endif
 }
 
+/** @brief Encode CONNECT with a Will of @p qos; on success, @p flags gets the Connect Flags. */
+static az_result _encode_connect_will_qos(az_mqtt_qos qos, uint8_t* flags)
+{
+  uint8_t buf[64] = { 0 };
+  az_span dest = AZ_SPAN_FROM_BUFFER(buf);
+  _V(will_options) will;
+  memset(&will, 0, sizeof(will));
+  will.topic = AZ_SPAN_FROM_STR("w");
+  will.qos = qos;
+  _V(connect_options) connect = _V(connect_options_default)();
+  connect.client_id = AZ_SPAN_FROM_STR("c");
+  connect.will = &will;
+  az_result const rc = _V(codec_encode_connect)(&dest, &connect);
+  if (az_result_failed(rc))
+  {
+    assert_int_equal(az_span_size(dest), sizeof(buf)); // Refused before writing.
+  }
+  *flags = buf[9]; // Type, Remaining Length, "MQTT", Protocol Level, then Connect Flags.
+  return rc;
+}
+
+static void a_will_qos_over_2_is_refused(void** state)
+{
+  (void)state;
+  uint8_t flags = 0;
+  assert_int_equal(_encode_connect_will_qos(AZ_MQTT_QOS_EXACTLY_ONCE, &flags), AZ_OK);
+  assert_int_equal(flags & 0x3C, 0x14); // Will Flag, Will QoS 2; no Will Retain.
+  assert_int_equal(_encode_connect_will_qos((az_mqtt_qos)3, &flags), AZ_ERROR_ARG);
+  // 4 would have set Will Retain, 16 User Name.
+  assert_int_equal(_encode_connect_will_qos((az_mqtt_qos)4, &flags), AZ_ERROR_ARG);
+  assert_int_equal(_encode_connect_will_qos((az_mqtt_qos)16, &flags), AZ_ERROR_ARG);
+}
+
+/** @brief Encode SUBSCRIBE; on success, @p options gets the last Subscription Options. */
+static az_result _encode_subscribe(_V(subscription) const* subs, int32_t count, uint8_t* options)
+{
+  uint8_t buf[64];
+  az_span dest = AZ_SPAN_FROM_BUFFER(buf);
+  az_result const rc = _V(codec_encode_subscribe)(&dest, subs, count, 1);
+  if (az_result_failed(rc))
+  {
+    assert_int_equal(az_span_size(dest), sizeof(buf)); // Refused before writing.
+  }
+  else
+  {
+    *options = buf[sizeof(buf) - az_span_size(dest) - 1];
+  }
+  return rc;
+}
+
+static void subscription_options_out_of_range_are_refused(void** state)
+{
+  (void)state;
+  _V(subscription) subs[2];
+  memset(subs, 0, sizeof(subs));
+  subs[0].topic_filter = AZ_SPAN_FROM_STR("a");
+  subs[1].topic_filter = AZ_SPAN_FROM_STR("b");
+  uint8_t options = 0xFF;
+  for (uint32_t qos = 0; qos <= 2; qos++)
+  {
+    subs[1].qos = (az_mqtt_qos)qos;
+    assert_int_equal(_encode_subscribe(subs, 2, &options), AZ_OK);
+    assert_int_equal(options, qos);
+  }
+  // Any subscription out of range refuses the whole packet.
+  subs[1].qos = (az_mqtt_qos)3;
+  assert_int_equal(_encode_subscribe(subs, 2, &options), AZ_ERROR_ARG);
+  subs[1].qos = (az_mqtt_qos)4;
+  assert_int_equal(_encode_subscribe(subs, 2, &options), AZ_ERROR_ARG);
+  subs[1].qos = AZ_MQTT_QOS_AT_LEAST_ONCE;
+
+#if AZ_MQTT_TEST_VERSION == 5
+  subs[1].retain_handling = AZ_MQTT5_RETAIN_HANDLING_DO_NOT_SEND;
+  assert_int_equal(_encode_subscribe(subs, 2, &options), AZ_OK);
+  assert_int_equal(options, 0x21);
+  subs[1].retain_handling = (az_mqtt5_retain_handling)3;
+  assert_int_equal(_encode_subscribe(subs, 2, &options), AZ_ERROR_ARG);
+  subs[1].retain_handling = (az_mqtt5_retain_handling)4; // Would set reserved bit 6.
+  assert_int_equal(_encode_subscribe(subs, 2, &options), AZ_ERROR_ARG);
+  subs[1].retain_handling = AZ_MQTT5_RETAIN_HANDLING_SEND_AT_SUBSCRIBE;
+
+  // No Local on a Shared Subscription.
+  subs[1].no_local = true;
+  assert_int_equal(_encode_subscribe(subs, 2, &options), AZ_OK);
+  assert_int_equal(options, 0x05);
+  subs[1].topic_filter = AZ_SPAN_FROM_STR("$share/g/b");
+  assert_int_equal(_encode_subscribe(subs, 2, &options), AZ_ERROR_ARG);
+  subs[1].no_local = false;
+  assert_int_equal(_encode_subscribe(subs, 2, &options), AZ_OK);
+  subs[1].topic_filter = AZ_SPAN_FROM_STR("$shared/b"); // Not a Shared Subscription.
+  subs[1].no_local = true;
+  assert_int_equal(_encode_subscribe(subs, 2, &options), AZ_OK);
+#endif
+}
+
+#if AZ_MQTT_TEST_VERSION == 5
+static void authentication_data_needs_a_method(void** state)
+{
+  (void)state;
+  uint8_t buf[64];
+  az_span dest = AZ_SPAN_FROM_BUFFER(buf);
+  az_mqtt5_connect_options connect = az_mqtt5_connect_options_default();
+  connect.client_id = AZ_SPAN_FROM_STR("c");
+  connect.authentication_data = AZ_SPAN_FROM_STR("d");
+  assert_int_equal(az_mqtt5_codec_encode_connect(&dest, &connect), AZ_ERROR_ARG);
+  assert_int_equal(az_span_size(dest), sizeof(buf));
+  connect.authentication_method = AZ_SPAN_FROM_STR("m");
+  assert_int_equal(az_mqtt5_codec_encode_connect(&dest, &connect), AZ_OK);
+  dest = AZ_SPAN_FROM_BUFFER(buf);
+  connect.authentication_data = AZ_SPAN_EMPTY;
+  assert_int_equal(az_mqtt5_codec_encode_connect(&dest, &connect), AZ_OK);
+
+  // AUTH: only Success may go without Properties, hence without a Method.
+  az_span const m = AZ_SPAN_FROM_STR("m");
+  az_span const d = AZ_SPAN_FROM_STR("d");
+  struct
+  {
+    az_mqtt5_reason_code reason;
+    az_span method;
+    az_span data;
+    az_result expected;
+  } const cases[] = {
+    { AZ_MQTT5_REASON_SUCCESS, AZ_SPAN_EMPTY, AZ_SPAN_EMPTY, AZ_OK },
+    { AZ_MQTT5_REASON_SUCCESS, AZ_SPAN_EMPTY, d, AZ_ERROR_ARG },
+    { AZ_MQTT5_REASON_CONTINUE_AUTHENTICATION, AZ_SPAN_EMPTY, AZ_SPAN_EMPTY, AZ_ERROR_ARG },
+    { AZ_MQTT5_REASON_RE_AUTHENTICATE, AZ_SPAN_EMPTY, d, AZ_ERROR_ARG },
+    { AZ_MQTT5_REASON_CONTINUE_AUTHENTICATION, m, AZ_SPAN_EMPTY, AZ_OK },
+    { AZ_MQTT5_REASON_CONTINUE_AUTHENTICATION, m, d, AZ_OK },
+    { AZ_MQTT5_REASON_SUCCESS, m, d, AZ_OK },
+  };
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+  {
+    dest = AZ_SPAN_FROM_BUFFER(buf);
+    assert_int_equal(
+        az_mqtt5_codec_encode_auth(&dest, cases[i].reason, cases[i].method, cases[i].data),
+        cases[i].expected);
+    if (cases[i].expected != AZ_OK)
+    {
+      assert_int_equal(az_span_size(dest), sizeof(buf));
+    }
+  }
+}
+#endif
+
 static void topic_names_are_checked(void** state)
 {
   (void)state;
@@ -508,7 +652,10 @@ int main(void)
     cmocka_unit_test(topic_names_are_checked),
     cmocka_unit_test(topics_and_filters_are_checked_when_encoding),
     cmocka_unit_test(a_qos0_publish_with_dup_is_malformed),
+    cmocka_unit_test(a_will_qos_over_2_is_refused),
+    cmocka_unit_test(subscription_options_out_of_range_are_refused),
 #if AZ_MQTT_TEST_VERSION == 5
+    cmocka_unit_test(authentication_data_needs_a_method),
     cmocka_unit_test(zero_valued_properties_are_protocol_errors),
     cmocka_unit_test(one_byte_flag_properties_must_be_0_or_1),
     cmocka_unit_test(single_use_properties_must_not_repeat),
