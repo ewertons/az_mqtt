@@ -12,6 +12,7 @@
 #include "az_mqtt_codec_internal.h"
 #include "az_mqtt_core_internal.h"
 
+#include <azure/core/internal/az_log_internal.h>
 #include <azure/core/internal/az_precondition_internal.h>
 #include <azure/core/internal/az_result_internal.h>
 #include <azure/core/az_result.h>
@@ -116,6 +117,19 @@ static void _publish_dropped(az_mqtt_core* core, uint16_t packet_id, bool qos1, 
   }
 }
 
+/** @brief Send DISCONNECT with @p reason (best effort); return @p result. */
+static az_result
+_disconnect_with(az_mqtt5_client* client, az_mqtt5_reason_code reason, az_result result)
+{
+  az_span disconnect = _SEND_BUFFER(client);
+  if (az_result_succeeded(az_mqtt5_codec_encode_disconnect(&disconnect, reason, 0)))
+  {
+    az_result const send_rc = _az_mqtt_core_send(&client->_internal.core, disconnect);
+    (void)send_rc;
+  }
+  return result;
+}
+
 static az_result _handle_connack(az_mqtt5_client* client, az_span body)
 {
   az_mqtt5_connack_data connack;
@@ -128,6 +142,13 @@ static az_result _handle_connack(az_mqtt5_client* client, az_span body)
 
   if (connack.reason_code == AZ_MQTT5_REASON_SUCCESS)
   {
+    // MQTT-3.2.2-4: after Clean Start 1 the client has no Session State to resume.
+    if (connack.session_present && client->_internal.connect_options.clean_start)
+    {
+      _az_LOG_WRITE(
+          AZ_LOG_MQTT_CONNECTION, AZ_SPAN_FROM_STR("CONNACK Session Present after Clean Start"));
+      return _disconnect_with(client, AZ_MQTT5_REASON_PROTOCOL_ERROR, AZ_MQTT_ERROR_PROTOCOL);
+    }
     client->_internal.server_receive_maximum = connack.receive_maximum;
     client->_internal.server_maximum_qos = connack.maximum_qos;
     client->_internal.server_retain_available = connack.retain_available;
@@ -156,19 +177,6 @@ static az_result _handle_connack(az_mqtt5_client* client, az_span body)
   }
 
   return AZ_OK;
-}
-
-/** @brief Send DISCONNECT with @p reason (best effort); return @p result. */
-static az_result
-_disconnect_with(az_mqtt5_client* client, az_mqtt5_reason_code reason, az_result result)
-{
-  az_span disconnect = _SEND_BUFFER(client);
-  if (az_result_succeeded(az_mqtt5_codec_encode_disconnect(&disconnect, reason, 0)))
-  {
-    az_result const send_rc = _az_mqtt_core_send(&client->_internal.core, disconnect);
-    (void)send_rc;
-  }
-  return result;
 }
 
 /** @brief _az_mqtt_core_on_packet_too_large_fn: DISCONNECT with Packet too large (3.1.2.11.4). */

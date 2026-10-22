@@ -80,6 +80,8 @@ typedef struct
   int burst_publishes;
   /** @brief CONNACK reason (MQTT 5) or return code (MQTT 3.1.1); 0 accepts. */
   uint8_t connack_code;
+  /** @brief Set Session Present in accepted CONNACKs to a clean CONNECT (servers must not). */
+  bool session_present_after_clean_start;
   /** @brief Reason codes per SUBACK; 0 answers SUBSCRIBE with one granted QoS 0. */
   int suback_codes;
   /** @brief MQTT 5: after CONNACK, send one PUBLISH with this many user properties and subscription identifiers (max 12). */

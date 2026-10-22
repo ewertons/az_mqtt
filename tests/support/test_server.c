@@ -618,8 +618,8 @@ static void _serve(test_server* s, conn* c)
   // CONNECT variable header: 00 04 'M' 'Q' 'T' 'T' <level>
   bool const v5 = body[6] == 5;
   bool const keep_session = (body[7] & 0x02) == 0; // Clean Session / Clean Start 0.
-  uint8_t const present
-      = s->options.connack_code == 0 && keep_session && _get_present(s) ? 0x01 : 0x00;
+  bool const sp = keep_session ? _get_present(s) : s->options.session_present_after_clean_start;
+  uint8_t const present = s->options.connack_code == 0 && sp ? 0x01 : 0x00;
   uint8_t const connack_v3[] = { 0x20, 0x02, present, s->options.connack_code };
   uint8_t props[24];
   int p = 0;
