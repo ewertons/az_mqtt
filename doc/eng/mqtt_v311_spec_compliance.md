@@ -36,7 +36,7 @@ to the current implementation status of `az_mqttv3` (on `az_mqtt_core`).
 | **PUBLISH ([§3.3](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html))** |||||
 | 22 | PUBLISH encoded with DUP, QoS, RETAIN in first byte flags | [§3.3.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | `az_mqtt3_codec_encode_publish` | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | 23 | DUP flag must be 0 for QoS 0 | [§3.3.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | Received QoS 0 PUBLISH with DUP: AZ_MQTT_ERROR_MALFORMED_PACKET. Sent: DUP is set only on QoS 1/2 resends | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
-| 24 | QoS must be 0, 1, or 2 | [§3.3.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | No | No validation | |
+| 24 | QoS must be 0, 1, or 2 | [[MQTT-3.3.1-4]](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | Sent: a QoS above 2 is `AZ_ERROR_ARG` (`az_mqtt3_codec_encode_publish`, `az_mqtt3_client_publish`). Received QoS 3: AZ_MQTT_ERROR_MALFORMED_PACKET | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c), [src/mqtt3/az_mqtt3_client.c](../../src/mqtt3/az_mqtt3_client.c) |
 | 25 | Topic Name field: must not contain wildcard characters in send | [§3.3.2.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | `az_mqtt3_codec_encode_publish` and `az_mqtt3_client_publish`: an empty or wildcard Topic Name is AZ_ERROR_ARG | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | 26 | Packet Identifier present when QoS > 0 | [§3.3.2.2](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | Encoder writes `packet_id` when QoS>0 | [src/mqtt3/az_mqtt3_codec.c](../../src/mqtt3/az_mqtt3_codec.c) |
 | 27 | Packet Identifier must not be 0 for QoS > 0 | [§3.3.2.2](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/errata01/os/mqtt-v3.1.1-errata01-os-complete.html) | Yes | The next identifier skips 0 | [src/core/az_mqtt_core.c](../../src/core/az_mqtt_core.c) |
@@ -96,9 +96,9 @@ to the current implementation status of `az_mqttv3` (on `az_mqtt_core`).
 
 | Status | Count |
 |--------|-------|
-| Yes | 65 |
+| Yes | 66 |
 | Partial | 1 |
-| No | 1 |
+| No | 0 |
 
 ### Key gaps (client-facing impact)
 

@@ -311,7 +311,8 @@ AZ_NODISCARD az_result az_mqtt5_client_process_loop(az_mqtt5_client* client, int
  *         (QoS 1/2) an earlier PUBLISH still awaits its resend after a resume.
  * @retval AZ_MQTT_ERROR_OUT_OF_STORAGE, AZ_MQTT_ERROR_INVALID_CONFIG See inflight_message_buffer.
  * @retval AZ_ERROR_ARG Topic over 65,535 bytes, with a wildcard ('+', '#'), not valid UTF-8, or
- *         empty without topic_alias; response_topic with a wildcard or not valid UTF-8.
+ *         empty without topic_alias; response_topic with a wildcard or not valid UTF-8; a QoS
+ *         over 2.
  * @retval AZ_MQTT_ERROR_NOT_SUPPORTED QoS above the server's Maximum QoS, retain without
  *         Retain Available, a Topic Alias above its Topic Alias Maximum, or (QoS 1/2) one on a
  *         session that outlives the connection.

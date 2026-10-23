@@ -164,8 +164,9 @@ AZ_NODISCARD az_result az_mqtt3_codec_encode_publish(
   _az_PRECONDITION_NOT_NULL(dest);
   _az_PRECONDITION_NOT_NULL(opts);
 
-  // 4.7.3: a Topic Name has at least one character and no wildcards.
-  if (az_span_size(opts->topic) == 0 || _az_mqtt_topic_has_wildcard(opts->topic))
+  // 4.7.3: a Topic Name has at least one character and no wildcards. 3.3.1.2: QoS 3 is malformed.
+  if (az_span_size(opts->topic) == 0 || _az_mqtt_topic_has_wildcard(opts->topic)
+      || !_az_mqtt_qos_valid(opts->qos))
   {
     return AZ_ERROR_ARG;
   }

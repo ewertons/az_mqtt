@@ -797,6 +797,31 @@ static void out_of_range_subscription_options_are_refused_before_sending(void** 
   _teardown(&f);
 }
 
+static void a_publish_qos_over_2_is_refused_before_sending(void** state)
+{
+  (void)state;
+  test_server_options so = _plain();
+  s_inflight_slots = 1;
+  fixture f;
+  _setup(&f, &so, 30);
+  assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_OK);
+  // 256 truncates to QoS 0 if cast to a byte.
+  static uint32_t const bad[] = { 3, 4, 256 };
+  for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++)
+  {
+    AZ_MQTT_T(publish_options) const p = _publish_options((az_mqtt_qos)bad[i]);
+    assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &p, NULL), AZ_ERROR_ARG);
+  }
+  // Nothing was sent and the only in-flight entry is free.
+  AZ_MQTT_T(publish_options) const qos1 = _publish_options(AZ_MQTT_QOS_AT_LEAST_ONCE);
+  assert_int_equal(AZ_MQTT_T(client_publish)(&f.client, &qos1, NULL), AZ_OK);
+  PUMP_UNTIL(&f, test_server_publishes(f.server) == 1);
+  _ignore(AZ_MQTT_T(client_process_loop)(&f.client, 200));
+  assert_int_equal(test_server_publishes(f.server), 1);
+  assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_CONNECTED);
+  _teardown(&f);
+}
+
 static void acknowledged_requests_free_their_slots(void** state)
 {
   (void)state;
@@ -2774,6 +2799,7 @@ int main(void)
     cmocka_unit_test(acknowledged_requests_free_their_slots),
     cmocka_unit_test(a_will_qos_over_2_is_refused_before_connecting),
     cmocka_unit_test(out_of_range_subscription_options_are_refused_before_sending),
+    cmocka_unit_test(a_publish_qos_over_2_is_refused_before_sending),
     cmocka_unit_test(a_held_packet_identifier_is_not_reused),
     cmocka_unit_test(a_session_end_abandons_what_is_in_flight),
     cmocka_unit_test(a_resumed_session_resends_pubrel_then_publishes_oldest_first),
