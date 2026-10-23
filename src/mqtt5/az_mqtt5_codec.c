@@ -999,6 +999,14 @@ AZ_NODISCARD az_result az_mqtt5_codec_encode_auth(
 {
   _az_PRECONDITION_NOT_NULL(dest);
 
+  // MQTT-3.15.2-1: only the Authenticate Reason Codes may be sent.
+  if (reason_code != AZ_MQTT5_REASON_SUCCESS
+      && reason_code != AZ_MQTT5_REASON_CONTINUE_AUTHENTICATION
+      && reason_code != AZ_MQTT5_REASON_RE_AUTHENTICATE)
+  {
+    return AZ_ERROR_ARG;
+  }
+
   // 3.15.2.2.2: the Authentication Method is required; only Success may go without Properties.
   if (az_span_size(authentication_method) == 0
       && (az_span_size(authentication_data) > 0 || reason_code != AZ_MQTT5_REASON_SUCCESS))

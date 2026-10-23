@@ -115,6 +115,7 @@ AZ_NODISCARD az_result az_mqtt5_codec_encode_disconnect(
 
 /**
  * @brief Encode an AUTH packet.
+ * @retval AZ_ERROR_ARG @p reason_code is not Success, Continue authentication or Re-authenticate.
  * @retval AZ_ERROR_ARG No @p authentication_method, unless @p reason_code is Success and there is
  * no @p authentication_data.
  */
