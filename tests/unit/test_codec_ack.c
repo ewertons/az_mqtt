@@ -581,6 +581,31 @@ static void authentication_data_needs_a_method(void** state)
     }
   }
 }
+
+static void auth_reason_codes_are_checked(void** state)
+{
+  (void)state;
+  uint8_t buf[64];
+  az_span const m = AZ_SPAN_FROM_STR("m");
+  for (int32_t code = 0; code <= 0xFF; code++)
+  {
+    bool const valid = code == AZ_MQTT5_REASON_SUCCESS
+        || code == AZ_MQTT5_REASON_CONTINUE_AUTHENTICATION
+        || code == AZ_MQTT5_REASON_RE_AUTHENTICATE;
+    az_span dest = AZ_SPAN_FROM_BUFFER(buf);
+    assert_int_equal(
+        az_mqtt5_codec_encode_auth(&dest, (az_mqtt5_reason_code)code, m, AZ_SPAN_EMPTY),
+        valid ? AZ_OK : AZ_ERROR_ARG);
+    if (valid)
+    {
+      assert_int_equal(buf[2], code);
+    }
+    else
+    {
+      assert_int_equal(az_span_size(dest), sizeof(buf));
+    }
+  }
+}
 #endif
 
 static void topic_names_are_checked(void** state)
@@ -656,6 +681,7 @@ int main(void)
     cmocka_unit_test(subscription_options_out_of_range_are_refused),
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(authentication_data_needs_a_method),
+    cmocka_unit_test(auth_reason_codes_are_checked),
     cmocka_unit_test(zero_valued_properties_are_protocol_errors),
     cmocka_unit_test(one_byte_flag_properties_must_be_0_or_1),
     cmocka_unit_test(single_use_properties_must_not_repeat),
