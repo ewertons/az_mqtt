@@ -340,8 +340,9 @@ AZ_NODISCARD az_result az_mqtt3_client_publish(
   {
     return AZ_MQTT_ERROR_NOT_CONNECTED;
   }
-  // 4.7.3: a Topic Name has at least one character and no wildcards.
-  if (az_span_size(options->topic) == 0 || _az_mqtt_topic_has_wildcard(options->topic))
+  // 4.7.3: a Topic Name has at least one character and no wildcards. 3.3.1.2: QoS 3 is malformed.
+  if (az_span_size(options->topic) == 0 || _az_mqtt_topic_has_wildcard(options->topic)
+      || !_az_mqtt_qos_valid(options->qos))
   {
     return AZ_ERROR_ARG;
   }

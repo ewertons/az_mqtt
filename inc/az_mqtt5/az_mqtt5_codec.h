@@ -42,7 +42,7 @@ AZ_NODISCARD az_result az_mqtt5_codec_encode_connect(az_span* dest, az_mqtt5_con
  * @param[in]     opts      Publish options.
  * @param[in]     packet_id Packet identifier (must be non-zero for QoS>0).
  * @retval AZ_ERROR_ARG Topic over 65,535 bytes, with a wildcard, or empty without a Topic Alias;
- * Response Topic with a wildcard; either not valid UTF-8.
+ * Response Topic with a wildcard; either not valid UTF-8; a QoS over 2.
  */
 AZ_NODISCARD az_result az_mqtt5_codec_encode_publish(
     az_span* dest,

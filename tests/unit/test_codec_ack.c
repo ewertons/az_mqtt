@@ -472,6 +472,39 @@ static void a_will_qos_over_2_is_refused(void** state)
   assert_int_equal(_encode_connect_will_qos((az_mqtt_qos)16, &flags), AZ_ERROR_ARG);
 }
 
+/** @brief Encode PUBLISH of @p qos; on success, @p first_byte gets the first byte of the packet. */
+static az_result _encode_publish_qos(az_mqtt_qos qos, uint8_t* first_byte)
+{
+  uint8_t buf[64] = { 0 };
+  az_span dest = AZ_SPAN_FROM_BUFFER(buf);
+  _V(publish_options) publish = _V(publish_options_default)();
+  publish.topic = AZ_SPAN_FROM_STR("t");
+  publish.qos = qos;
+  az_result const rc = _V(codec_encode_publish)(&dest, &publish, 1);
+  if (az_result_failed(rc))
+  {
+    assert_int_equal(az_span_size(dest), sizeof(buf)); // Refused before writing.
+  }
+  *first_byte = buf[0];
+  return rc;
+}
+
+static void a_publish_qos_over_2_is_refused(void** state)
+{
+  (void)state;
+  uint8_t first_byte = 0;
+  for (uint32_t qos = 0; qos <= 2; qos++)
+  {
+    assert_int_equal(_encode_publish_qos((az_mqtt_qos)qos, &first_byte), AZ_OK);
+    assert_int_equal(first_byte, 0x30 | (qos << 1));
+  }
+  assert_int_equal(_encode_publish_qos((az_mqtt_qos)3, &first_byte), AZ_ERROR_ARG);
+  // 4 would have set DUP, 8 the packet type; 256 truncates to QoS 0.
+  assert_int_equal(_encode_publish_qos((az_mqtt_qos)4, &first_byte), AZ_ERROR_ARG);
+  assert_int_equal(_encode_publish_qos((az_mqtt_qos)8, &first_byte), AZ_ERROR_ARG);
+  assert_int_equal(_encode_publish_qos((az_mqtt_qos)256, &first_byte), AZ_ERROR_ARG);
+}
+
 /** @brief Encode SUBSCRIBE; on success, @p options gets the last Subscription Options. */
 static az_result _encode_subscribe(_V(subscription) const* subs, int32_t count, uint8_t* options)
 {
@@ -678,6 +711,7 @@ int main(void)
     cmocka_unit_test(topics_and_filters_are_checked_when_encoding),
     cmocka_unit_test(a_qos0_publish_with_dup_is_malformed),
     cmocka_unit_test(a_will_qos_over_2_is_refused),
+    cmocka_unit_test(a_publish_qos_over_2_is_refused),
     cmocka_unit_test(subscription_options_out_of_range_are_refused),
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(authentication_data_needs_a_method),

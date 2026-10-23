@@ -40,7 +40,7 @@ az_mqtt3_codec_encode_connect(az_span* dest, az_mqtt3_connect_options const* opt
 /**
  * @brief Encode a PUBLISH packet.
  * @param[in] packet_id Non-zero for QoS > 0; ignored for QoS 0.
- * @retval AZ_ERROR_ARG Topic empty, with a wildcard or not valid UTF-8.
+ * @retval AZ_ERROR_ARG Topic empty, with a wildcard or not valid UTF-8, or a QoS over 2.
  */
 AZ_NODISCARD az_result az_mqtt3_codec_encode_publish(
     az_span* dest,
