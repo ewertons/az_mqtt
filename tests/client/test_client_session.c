@@ -1805,6 +1805,7 @@ static void a_connack_over_the_maximum_packet_size_fails_the_connect(void** stat
   assert_int_equal(_client_disconnect_reason(&f), 0x95);
   _teardown(&f);
 }
+#endif
 
 static void session_present_after_clean_start_ends_the_session(void** state)
 {
@@ -1813,13 +1814,19 @@ static void session_present_after_clean_start_ends_the_session(void** state)
   so.session_present_after_clean_start = true;
   fixture f;
   _setup(&f, &so, 30);
+#if AZ_MQTT_TEST_VERSION == 5
   assert_true(f.client._internal.connect_options.clean_start);
+#else
+  assert_true(f.client._internal.connect_options.clean_session);
+#endif
   assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_MQTT_ERROR_PROTOCOL);
   assert_int_equal(AZ_MQTT_T(client_get_state)(&f.client), AZ_MQTT_CLIENT_STATE_DISCONNECTED);
   assert_int_equal(g.connacks, 0);
   assert_int_equal(g.closed, 1);
   assert_int_equal(g.closed_reason, AZ_MQTT_ERROR_PROTOCOL);
+#if AZ_MQTT_TEST_VERSION == 5
   assert_int_equal(_client_disconnect_reason(&f), 0x82); // Protocol Error
+#endif
   _teardown(&f);
 }
 
@@ -1838,7 +1845,6 @@ static void session_present_without_clean_start_resumes(void** state)
   assert_int_equal(g.closed, 0);
   _teardown(&f);
 }
-#endif
 
 static void a_pingresp_with_a_body_ends_the_session(void** state)
 {
@@ -2509,7 +2515,6 @@ static void logs_never_contain_credentials_topics_or_payloads(void** state)
   assert_null(strstr(s_log, "SECRET"));
 }
 
-#if AZ_MQTT_TEST_VERSION == 5
 static void session_present_after_clean_start_is_logged(void** state)
 {
   (void)state;
@@ -2523,9 +2528,12 @@ static void session_present_after_clean_start_is_logged(void** state)
   assert_int_equal(AZ_MQTT_T(client_connect)(&f.client, 3000), AZ_MQTT_ERROR_PROTOCOL);
   az_log_set_message_callback(NULL);
   _teardown(&f);
+#if AZ_MQTT_TEST_VERSION == 5
   assert_non_null(strstr(s_log, "CONNACK Session Present after Clean Start\nsent DISCONNECT "));
-}
+#else
+  assert_non_null(strstr(s_log, "CONNACK Session Present after Clean Session\nclosed "));
 #endif
+}
 #endif // AZ_NO_LOGGING
 
 static void reconnect_after_a_lost_session_works(void** state)
@@ -2852,9 +2860,9 @@ int main(void)
     cmocka_unit_test(a_packet_over_the_maximum_packet_size_is_refused_before_its_body),
     cmocka_unit_test(without_a_maximum_packet_size_the_receive_buffer_bounds_packets),
     cmocka_unit_test(a_connack_over_the_maximum_packet_size_fails_the_connect),
+#endif
     cmocka_unit_test(session_present_after_clean_start_ends_the_session),
     cmocka_unit_test(session_present_without_clean_start_resumes),
-#endif
 #if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(an_auth_with_a_malformed_string_ends_the_session),
 #endif
@@ -2870,9 +2878,7 @@ int main(void)
     cmocka_unit_test(a_peer_close_is_reported_as_connection_closed),
 #ifndef AZ_NO_LOGGING
     cmocka_unit_test(logs_never_contain_credentials_topics_or_payloads),
-#if AZ_MQTT_TEST_VERSION == 5
     cmocka_unit_test(session_present_after_clean_start_is_logged),
-#endif
 #endif
     cmocka_unit_test(reconnect_after_a_lost_session_works),
     cmocka_unit_test(a_refused_connack_code_is_reported_verbatim),

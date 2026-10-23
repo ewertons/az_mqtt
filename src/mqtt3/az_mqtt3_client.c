@@ -12,6 +12,7 @@
 #include "az_mqtt_codec_internal.h"
 #include "az_mqtt_core_internal.h"
 
+#include <azure/core/internal/az_log_internal.h>
 #include <azure/core/internal/az_precondition_internal.h>
 #include <azure/core/internal/az_result_internal.h>
 #include <azure/core/az_result.h>
@@ -82,6 +83,13 @@ static az_result _handle_connack(az_mqtt3_client* client, az_span body)
 
   if (connack.return_code == AZ_MQTT3_CONNACK_ACCEPTED)
   {
+    // 3.2.2.2: after Clean Session 1 the client has no Session state to resume.
+    if (connack.session_present && client->_internal.connect_options.clean_session)
+    {
+      _az_LOG_WRITE(
+          AZ_LOG_MQTT_CONNECTION, AZ_SPAN_FROM_STR("CONNACK Session Present after Clean Session"));
+      return AZ_MQTT_ERROR_PROTOCOL;
+    }
     _CORE(client).state = AZ_MQTT_CLIENT_STATE_CONNECTED;
     _CORE(client).keep_alive_seconds = client->_internal.connect_options.keep_alive_seconds;
     uint32_t const generation = _CORE(client).session_generation;
