@@ -20,7 +20,7 @@ Options (`idf.py menuconfig` → *az_mqtt*):
 | `AZ_MQTT_LOGGING` | y | n: `AZ_NO_LOGGING` |
 | `AZ_MQTT_PRECONDITIONS` | y | n: `AZ_NO_PRECONDITION_CHECKING` |
 | `AZ_MQTT_BUILD_AZ_CORE` | y | n when another component already compiles azure-sdk-for-c `az_span.c`, `az_log.c`, `az_precondition.c`, `az_base64.c` |
-| `AZ_MQTT_AZ_CORE_COMPONENT` | "" | with `AZ_MQTT_BUILD_AZ_CORE=n`: that component; az_mqtt links to it |
+| `AZ_MQTT_AZ_CORE_COMPONENT` | "" | with `AZ_MQTT_BUILD_AZ_CORE=n`: that component, which also provides the azure-sdk-for-c headers (`sdk/inc`); az_mqtt links to it |
 
 The platform layer is the POSIX one, over lwIP sockets; time is `clock_gettime(CLOCK_MONOTONIC)`
 and randomness `getrandom()` (`esp_fill_random()`). TLS trust comes from `ca_cert_pem`, or from
