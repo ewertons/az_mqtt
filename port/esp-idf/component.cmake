@@ -44,7 +44,9 @@ if(CONFIG_AZ_MQTT_ENABLE_MQTTV5)
 endif()
 
 set(_az_core_srcs)
+set(_include_dirs "${_root}/inc")
 if(CONFIG_AZ_MQTT_BUILD_AZ_CORE)
+  list(APPEND _include_dirs "${_az_core}/inc")
   list(APPEND _az_core_srcs
     "${_az_core}/src/azure/core/az_span.c"
     "${_az_core}/src/azure/core/az_log.c"
@@ -56,7 +58,7 @@ endif()
 
 idf_component_register(
   SRCS ${_srcs} ${_az_core_srcs}
-  INCLUDE_DIRS "${_root}/inc" "${_az_core}/inc"
+  INCLUDE_DIRS ${_include_dirs}
   PRIV_INCLUDE_DIRS "${_root}/src/core" "${_root}/src/platform"
   # Private, and not per Kconfig: requirements are resolved before Kconfig values exist.
   PRIV_REQUIRES lwip mbedtls)

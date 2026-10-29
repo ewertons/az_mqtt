@@ -35,6 +35,14 @@ if [ "${mode}" = "build" ]; then
   for cfg in "${sample}"/ci/sdkconfig.ci.*; do
     build_variant "${cfg##*.}" "${cfg}"
   done
+  # With AZ_MQTT_BUILD_AZ_CORE=n the component must not need deps/azure-sdk-for-c, which a
+  # project that compiles azure-sdk-for-c itself may not have.
+  python3 - "${out}/v3_ext_core/project_description.json" <<'PY'
+import json, sys
+dirs = json.load(open(sys.argv[1]))["build_component_info"]["az_mqtt"]["include_dirs"]
+if any("azure-sdk-for-c" in d for d in dirs):
+    sys.exit(f"az_mqtt include dirs reference deps/azure-sdk-for-c: {dirs}")
+PY
   exit 0
 fi
 
