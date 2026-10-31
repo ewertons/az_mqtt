@@ -142,7 +142,7 @@ static mbedtls_svc_key_id_t _import_client_key(fixture const* f)
 }
 #endif
 
-#if defined(AZ_MQTT_TEST_WRAP_PSA)
+#if defined(AZ_MQTT_TEST_WRAP_PSA) && MBEDTLS_VERSION_MAJOR >= 4
 // Link-time wrappers (-Wl,--wrap, tests/transport/CMakeLists.txt): one PSA key refuses to export
 // its public key, as the ESP32 Digital Signature peripheral's does, and mbedtls_pk_wrap_psa()
 // calls are observed. Both call through otherwise.
@@ -174,7 +174,6 @@ psa_status_t __wrap_psa_export_public_key(
   return __real_psa_export_public_key(key, data, data_size, data_length);
 }
 
-#if MBEDTLS_VERSION_MAJOR >= 4
 static int s_wrap_calls;
 static int s_first_wrap_result;
 static int s_retry_result; ///< The second call returns it without calling through; 0: call through.
@@ -218,7 +217,6 @@ static void _skip_unless_export_was_refused(fixture* f, mbedtls_svc_key_id_t key
     skip();
   }
 }
-#endif
 #endif
 
 // ──────────────────────── In-memory PEM ──────────────────────

@@ -17,10 +17,20 @@ elseif(MBEDTLS_INCLUDE_DIR)
   target_link_libraries(az_mqtt_test_transport_credentials PRIVATE
     ${MBEDTLS_SSL_LIB} ${MBEDTLS_X509_LIB} ${MBEDTLS_CRYPTO_LIB})
 endif()
-# mbedTLS: link-time wrappers make one PSA key refuse public-key export, as the ESP32 DS
-# peripheral's does (GNU ld and lld; macOS ld and MSVC have no --wrap). Tests skip when mbedTLS
-# is a shared library, which --wrap cannot reach.
-if((TARGET MbedTLS::mbedtls OR MBEDTLS_INCLUDE_DIR) AND NOT MSVC AND NOT APPLE)
+# mbedTLS 4.x: link-time wrappers make one PSA key refuse public-key export, as the ESP32 DS
+# peripheral's does (GNU ld and lld; macOS ld and MSVC have no --wrap). Not on 3.x, whose PSA
+# crypto is optional. Tests skip when mbedTLS is a shared library, which --wrap cannot reach.
+set(_az_mqtt_mbedtls_major "")
+if(AZ_MQTT_TLS_BACKEND_RESOLVED STREQUAL "mbedtls")
+  if(MbedTLS_VERSION)
+    string(REGEX MATCH "^[0-9]+" _az_mqtt_mbedtls_major "${MbedTLS_VERSION}")
+  elseif(MBEDTLS_INCLUDE_DIR AND EXISTS "${MBEDTLS_INCLUDE_DIR}/mbedtls/build_info.h")
+    file(STRINGS "${MBEDTLS_INCLUDE_DIR}/mbedtls/build_info.h" _az_mqtt_mbedtls_major
+      REGEX "^#define MBEDTLS_VERSION_MAJOR +[0-9]+")
+    string(REGEX MATCH "[0-9]+$" _az_mqtt_mbedtls_major "${_az_mqtt_mbedtls_major}")
+  endif()
+endif()
+if(_az_mqtt_mbedtls_major GREATER_EQUAL 4 AND NOT MSVC AND NOT APPLE)
   target_compile_definitions(az_mqtt_test_transport_credentials PRIVATE AZ_MQTT_TEST_WRAP_PSA)
   target_link_options(az_mqtt_test_transport_credentials PRIVATE
     -Wl,--wrap=psa_export_public_key -Wl,--wrap=mbedtls_pk_wrap_psa)
