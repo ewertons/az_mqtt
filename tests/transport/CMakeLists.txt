@@ -17,6 +17,14 @@ elseif(MBEDTLS_INCLUDE_DIR)
   target_link_libraries(az_mqtt_test_transport_credentials PRIVATE
     ${MBEDTLS_SSL_LIB} ${MBEDTLS_X509_LIB} ${MBEDTLS_CRYPTO_LIB})
 endif()
+# mbedTLS: link-time wrappers make one PSA key refuse public-key export, as the ESP32 DS
+# peripheral's does (GNU ld and lld; macOS ld and MSVC have no --wrap). Tests skip when mbedTLS
+# is a shared library, which --wrap cannot reach.
+if((TARGET MbedTLS::mbedtls OR MBEDTLS_INCLUDE_DIR) AND NOT MSVC AND NOT APPLE)
+  target_compile_definitions(az_mqtt_test_transport_credentials PRIVATE AZ_MQTT_TEST_WRAP_PSA)
+  target_link_options(az_mqtt_test_transport_credentials PRIVATE
+    -Wl,--wrap=psa_export_public_key -Wl,--wrap=mbedtls_pk_wrap_psa)
+endif()
 if(AZ_MQTT_ENABLE_PROXY)
   add_az_mqtt_local_test(az_mqtt_test_transport_proxy test_transport_proxy.c)
 endif()
