@@ -109,6 +109,116 @@ static test_server_options _mutual(void)
   return o;
 }
 
+#if defined(AZ_MQTT_TEST_BACKEND_MBEDTLS) \
+    && (MBEDTLS_VERSION_MAJOR >= 4 || defined(MBEDTLS_USE_PSA_CRYPTO))
+/** @brief Imports the fixture's client key into PSA, signing only, as an HSM, secure element or
+ * ESP32 DS driver would hold it. */
+static mbedtls_svc_key_id_t _import_client_key(fixture const* f)
+{
+  assert_int_equal(psa_crypto_init(), PSA_SUCCESS);
+  mbedtls_pk_context pk;
+  mbedtls_pk_init(&pk);
+#if MBEDTLS_VERSION_MAJOR >= 4
+  assert_int_equal(
+      mbedtls_pk_parse_key(&pk, (unsigned char const*)f->key, strlen(f->key) + 1, NULL, 0), 0);
+#else
+  assert_int_equal(
+      mbedtls_pk_parse_key(
+          &pk,
+          (unsigned char const*)f->key,
+          strlen(f->key) + 1,
+          NULL,
+          0,
+          mbedtls_psa_get_random,
+          MBEDTLS_PSA_RANDOM_STATE),
+      0);
+#endif
+  psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+  assert_int_equal(mbedtls_pk_get_psa_attributes(&pk, PSA_KEY_USAGE_SIGN_HASH, &attr), 0);
+  mbedtls_svc_key_id_t id = MBEDTLS_SVC_KEY_ID_INIT;
+  assert_int_equal(mbedtls_pk_import_into_psa(&pk, &attr, &id), 0);
+  mbedtls_pk_free(&pk);
+  return id;
+}
+#endif
+
+#if defined(AZ_MQTT_TEST_WRAP_PSA) && MBEDTLS_VERSION_MAJOR >= 4
+// Link-time wrappers (-Wl,--wrap, tests/transport/CMakeLists.txt): one PSA key refuses to export
+// its public key, as the ESP32 Digital Signature peripheral's does, and mbedtls_pk_wrap_psa()
+// calls are observed. Both call through otherwise.
+static mbedtls_svc_key_id_t s_unexportable_key = MBEDTLS_SVC_KEY_ID_INIT;
+static int s_refused_exports;
+
+psa_status_t __real_psa_export_public_key(
+    mbedtls_svc_key_id_t key,
+    uint8_t* data,
+    size_t data_size,
+    size_t* data_length);
+psa_status_t __wrap_psa_export_public_key(
+    mbedtls_svc_key_id_t key,
+    uint8_t* data,
+    size_t data_size,
+    size_t* data_length);
+psa_status_t __wrap_psa_export_public_key(
+    mbedtls_svc_key_id_t key,
+    uint8_t* data,
+    size_t data_size,
+    size_t* data_length)
+{
+  if (!mbedtls_svc_key_id_is_null(s_unexportable_key)
+      && mbedtls_svc_key_id_equal(key, s_unexportable_key))
+  {
+    s_refused_exports++;
+    return PSA_ERROR_NOT_SUPPORTED;
+  }
+  return __real_psa_export_public_key(key, data, data_size, data_length);
+}
+
+static int s_wrap_calls;
+static int s_first_wrap_result;
+static int s_retry_result; ///< The second call returns it without calling through; 0: call through.
+
+int __real_mbedtls_pk_wrap_psa(mbedtls_pk_context* ctx, const mbedtls_svc_key_id_t key);
+int __wrap_mbedtls_pk_wrap_psa(mbedtls_pk_context* ctx, const mbedtls_svc_key_id_t key);
+int __wrap_mbedtls_pk_wrap_psa(mbedtls_pk_context* ctx, const mbedtls_svc_key_id_t key)
+{
+  s_wrap_calls++;
+  if (s_wrap_calls > 1 && s_retry_result != 0)
+  {
+    return s_retry_result;
+  }
+  int const ret = __real_mbedtls_pk_wrap_psa(ctx, key);
+  if (s_wrap_calls == 1)
+  {
+    s_first_wrap_result = ret;
+  }
+  return ret;
+}
+
+/** @brief Makes @p key refuse public-key export and resets the observations. */
+static void _refuse_public_key_export(mbedtls_svc_key_id_t key, int retry_result)
+{
+  s_unexportable_key = key;
+  s_refused_exports = 0;
+  s_wrap_calls = 0;
+  s_first_wrap_result = 0;
+  s_retry_result = retry_result;
+}
+
+/** @brief Skips the test when the refusal cannot reach mbedTLS (a shared library: --wrap sees
+ * only references from the objects linked here). */
+static void _skip_unless_export_was_refused(fixture* f, mbedtls_svc_key_id_t key)
+{
+  if (s_refused_exports == 0)
+  {
+    _refuse_public_key_export(MBEDTLS_SVC_KEY_ID_INIT, 0);
+    (void)psa_destroy_key(key);
+    _teardown(f);
+    skip();
+  }
+}
+#endif
+
 // ──────────────────────── In-memory PEM ──────────────────────
 
 static void ca_from_memory_is_trusted(void** state)
@@ -418,31 +528,8 @@ static void a_psa_key_is_used_or_refused(void** state)
   t.client_cert_pem = _pem(f.cert);
 #if defined(AZ_MQTT_TEST_BACKEND_MBEDTLS) \
     && (MBEDTLS_VERSION_MAJOR >= 4 || defined(MBEDTLS_USE_PSA_CRYPTO))
-  // Import the key into PSA and hand over only its id, as an HSM, secure
-  // element or ESP32 DS driver would.
-  assert_int_equal(psa_crypto_init(), PSA_SUCCESS);
-  mbedtls_pk_context pk;
-  mbedtls_pk_init(&pk);
-#if MBEDTLS_VERSION_MAJOR >= 4
-  assert_int_equal(
-      mbedtls_pk_parse_key(&pk, (unsigned char const*)f.key, strlen(f.key) + 1, NULL, 0), 0);
-#else
-  assert_int_equal(
-      mbedtls_pk_parse_key(
-          &pk,
-          (unsigned char const*)f.key,
-          strlen(f.key) + 1,
-          NULL,
-          0,
-          mbedtls_psa_get_random,
-          MBEDTLS_PSA_RANDOM_STATE),
-      0);
-#endif
-  psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
-  assert_int_equal(mbedtls_pk_get_psa_attributes(&pk, PSA_KEY_USAGE_SIGN_HASH, &attr), 0);
-  mbedtls_svc_key_id_t id = MBEDTLS_SVC_KEY_ID_INIT;
-  assert_int_equal(mbedtls_pk_import_into_psa(&pk, &attr, &id), 0);
-  mbedtls_pk_free(&pk);
+  // Hand over only the key's PSA id.
+  mbedtls_svc_key_id_t const id = _import_client_key(&f);
   t.client_key_psa_id = (uint32_t)id;
   assert_int_equal(_connect(&f, &t), AZ_OK);
   assert_true(_exchange(&f));
@@ -456,6 +543,65 @@ static void a_psa_key_is_used_or_refused(void** state)
 #endif
   _teardown(&f);
 }
+
+#if defined(AZ_MQTT_TEST_WRAP_PSA) && MBEDTLS_VERSION_MAJOR >= 4
+/* From TF-PSA-Crypto 1.1, mbedtls_pk_wrap_psa() exports the public key; a key that refuses (the
+ * ESP32 DS peripheral's) is wrapped again with the client certificate's public key. */
+static void a_psa_key_refusing_public_key_export_uses_the_certificates(void** state)
+{
+  (void)state;
+  test_server_options o = _mutual();
+  fixture f;
+  _setup(&f, &o);
+  az_mqtt_tls_options t = az_mqtt_tls_options_default();
+  t.ca_cert_pem = _pem(f.ca);
+  t.client_cert_pem = _pem(f.cert);
+  mbedtls_svc_key_id_t const id = _import_client_key(&f);
+  t.client_key_psa_id = (uint32_t)id;
+  _refuse_public_key_export(id, 0);
+  az_result const connected = _connect(&f, &t);
+  _skip_unless_export_was_refused(&f, id);
+  assert_int_equal(connected, AZ_OK);
+  assert_int_equal(s_wrap_calls, 2);
+  assert_int_not_equal(s_first_wrap_result, 0);
+  assert_true(_exchange(&f));
+  assert_true(test_server_saw_client_cert(f.server));
+  _refuse_public_key_export(MBEDTLS_SVC_KEY_ID_INIT, 0);
+  (void)psa_destroy_key(id);
+  _teardown(&f);
+}
+
+/* A retry that fails too reports the first wrap's error, not the retry's. */
+static void a_failed_retry_reports_the_first_wrap_error(void** state)
+{
+  (void)state;
+  test_server_options o = _mutual();
+  fixture f;
+  _setup(&f, &o);
+  az_mqtt_tls_options t = az_mqtt_tls_options_default();
+  t.ca_cert_pem = _pem(f.ca);
+  t.client_cert_pem = _pem(f.cert);
+  mbedtls_svc_key_id_t const id = _import_client_key(&f);
+  t.client_key_psa_id = (uint32_t)id;
+  test_native_errors n;
+  test_native_errors_clear(&n);
+  az_mqtt_transport_set_error_callback(f.transport, test_native_errors_record, &n);
+  _refuse_public_key_export(id, MBEDTLS_ERR_PK_BAD_INPUT_DATA);
+  az_result const connected = _connect(&f, &t);
+  _skip_unless_export_was_refused(&f, id);
+  assert_int_equal(connected, AZ_MQTT_ERROR_TRANSPORT);
+  assert_int_equal(s_wrap_calls, 2);
+  assert_int_not_equal(s_first_wrap_result, 0);
+  assert_int_not_equal(s_first_wrap_result, MBEDTLS_ERR_PK_BAD_INPUT_DATA);
+  assert_int_equal(n.count, 1);
+  assert_int_equal(n.errors[0].source, AZ_MQTT_NATIVE_ERROR_TLS);
+  assert_int_equal(n.errors[0].code, s_first_wrap_result);
+  assert_int_equal(test_server_accepted(f.server), 0);
+  _refuse_public_key_export(MBEDTLS_SVC_KEY_ID_INIT, 0);
+  (void)psa_destroy_key(id);
+  _teardown(&f);
+}
+#endif
 
 int main(void)
 {
@@ -471,6 +617,10 @@ int main(void)
     cmocka_unit_test(a_configure_hook_turning_verification_off_is_caught),
     cmocka_unit_test(a_key_uri_is_used_or_refused),
     cmocka_unit_test(a_psa_key_is_used_or_refused),
+#if defined(AZ_MQTT_TEST_WRAP_PSA) && MBEDTLS_VERSION_MAJOR >= 4
+    cmocka_unit_test(a_psa_key_refusing_public_key_export_uses_the_certificates),
+    cmocka_unit_test(a_failed_retry_reports_the_first_wrap_error),
+#endif
   };
   return cmocka_run_group_tests_name("transport_credentials", tests, NULL, NULL);
 }
